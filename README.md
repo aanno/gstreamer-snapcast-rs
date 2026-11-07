@@ -21,10 +21,28 @@ All `snapsink` elements in one process share a single embedded server; each
 element feeds one stream. Standard Snapcast clients (C++ `snapclient`,
 Snapdroid, ...) can connect to it, provided you use the PCM or FLAC codec.
 
-> **Status: early skeleton.** Both elements register, negotiate caps and
-> expose their properties. `snapsink` currently drops buffers and `snapsrc`
-> fails on start with "not implemented". The first milestone is a
-> `snapsink ! (Snapcast) ! snapsrc` PCM loopback.
+> **Status: first working loopback.** `snapsink → embedded server → snapsrc`
+> works for PCM, end to end within a few ms of the configured buffer. A stock C++
+> `snapclient` (0.31) plays streams from `snapsink` with both `pcm` and `flac`.
+> Limitations: one stream per server port (snapcast-rs cannot add streams at
+> runtime yet), S16LE/S32LE input only, no mDNS, no volume/control handling.
+
+### Element properties
+
+| Element    | Property      | Default     | Meaning |
+|------------|---------------|-------------|---------|
+| `snapsink` | `stream`      | `default`   | Snapcast stream name |
+|            | `port`        | `1704`      | Server port, shared by all snapsinks using it (`0` = ephemeral) |
+|            | `codec`       | `pcm`       | `pcm` or `flac` |
+|            | `buffer-ms`   | `1000`      | End-to-end buffer announced to clients |
+|            | `bound-port`  | (read-only) | Port actually listened on |
+| `snapsrc`  | `host`/`port` | `127.0.0.1`/`1704` | Server to connect to |
+|            | `client-name` | `gst-snapsrc` | Name shown in Snapcast controllers |
+|            | `instance`    | `1`         | Distinguishes several clients on one host |
+|            | `latency-ms`  | `0`         | Extra local output latency to compensate |
+
+`snapsrc` outputs F32LE and provides a clock (monotonic, the Snapcast time
+base), so the audio sink slaves to the Snapcast timeline.
 
 Background and design discussion:
 [docs/gstreamer-plugins/](docs/gstreamer-plugins/) (see `dlna-rs-gstreamer-2.md`
@@ -93,7 +111,12 @@ Try the elements from the command line:
 ```sh
 export GST_PLUGIN_PATH=$PWD/target/debug     # already set in the devcontainer
 gst-inspect-1.0 snapsink
-GST_DEBUG=snapsink:6 gst-launch-1.0 audiotestsrc num-buffers=100 ! snapsink
+
+# terminal 1: sender
+gst-launch-1.0 audiotestsrc is-live=true ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
+    ! snapsink buffer-ms=500
+# terminal 2: receiver (or any Snapcast client, e.g. `snapclient -h 127.0.0.1`)
+gst-launch-1.0 snapsrc ! audioconvert ! audioresample ! autoaudiosink
 ```
 
 ### Debugging

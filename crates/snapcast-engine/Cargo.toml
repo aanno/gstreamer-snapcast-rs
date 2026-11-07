@@ -19,7 +19,10 @@ client = ["dep:snapcast-client"]
 [dependencies]
 snapcast-server = { workspace = true, optional = true }
 snapcast-client = { workspace = true, optional = true }
+snapcast-proto = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

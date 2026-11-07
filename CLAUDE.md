@@ -15,9 +15,12 @@ built on the embeddable engines of the `snapcast-rs` submodule:
 The design rationale is in `docs/gstreamer-plugins/dlna-rs-gstreamer-2.md`.
 `-1.md` is broader DLNA/UPnP background; read it only when needed.
 
-Current status: skeleton. Elements register and negotiate caps; `snapsink::render`
-drops buffers; `snapsrc::start` returns NotImplemented. Next milestone: PCM
-loopback `snapsink → embedded server → snapsrc`.
+Current status: PCM loopback works (`crates/gst-plugin-snapsrc/tests/loopback.rs`), and
+interop with the C++ `snapclient` was verified manually for pcm and flac. Timing design:
+module docs of `snapsink/imp.rs`, `snapsrc/imp.rs` and `snapcast-engine/src/client.rs`.
+Known snapcast-rs gaps we work around: fixed stream set after `serve()`; the client's
+internal player `Stream` is never drained (we clear it); `TimeSyncComplete` takes 5 s
+(we schedule after 500 ms).
 
 ## Commands
 
@@ -82,7 +85,8 @@ Run `make check` before declaring work done.
   Elements from gst-plugins-base/good (`audiotestsrc`, `audioconvert`, `fakesink`)
   are available in the devcontainer.
 - Bound every pipeline wait with a timeout (`bus.timed_pop_filtered`).
-- Network tests should bind ephemeral ports (port 0, or pick a free one) so they can run in parallel.
+- Network tests should bind ephemeral ports so they can run in parallel: `snapsink port=0`,
+  then read `bound-port`.
 
 ## Environment
 

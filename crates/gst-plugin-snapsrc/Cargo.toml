@@ -21,6 +21,12 @@ gst = { workspace = true }
 gst-base = { workspace = true }
 gst-audio = { workspace = true }
 snapcast-engine = { workspace = true, features = ["client"] }
+tokio = { workspace = true }
+
+[dev-dependencies]
+# Loopback tests: snapsink -> embedded server -> snapsrc
+gst-plugin-snapsink = { path = "../gst-plugin-snapsink" }
+gst-app = { workspace = true }
 
 [build-dependencies]
 gst-plugin-version-helper = { workspace = true }

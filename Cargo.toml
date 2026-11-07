@@ -33,12 +33,14 @@ snapcast-proto = { path = "snapcast-rs/crates/snapcast-proto", version = "0.18.0
 gst = { package = "gstreamer", version = "0.25" }
 gst-base = { package = "gstreamer-base", version = "0.25" }
 gst-audio = { package = "gstreamer-audio", version = "0.25" }
+gst-app = { package = "gstreamer-app", version = "0.25" }
 gst-plugin-version-helper = "0.8"
 
 # Async runtime (snapcast-rs is tokio based)
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "macros"] }
 
 anyhow = "1"
+tracing = "0.1"
 thiserror = "2"
 
 [workspace.lints.rust]

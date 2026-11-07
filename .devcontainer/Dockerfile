@@ -13,9 +13,8 @@ RUN apt-get update \
         gstreamer1.0-tools \
         gstreamer1.0-plugins-base \
         gstreamer1.0-plugins-good \
-        # snapcast-rs: optional opus codec, ALSA/PulseAudio backends of snapclient-rs
+        # snapcast-rs: optional opus codec; ALSA for snapclient-rs (cpal)
         libopus-dev \
         libasound2-dev \
-        libpulse-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
