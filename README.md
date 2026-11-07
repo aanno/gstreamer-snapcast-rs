@@ -26,6 +26,10 @@ Snapdroid, ...) can connect to it, provided you use the PCM or FLAC codec.
 > `snapclient` (0.31) plays streams from `snapsink` with both `pcm` and `flac`.
 > Limitations: one stream per server port (snapcast-rs cannot add streams at
 > runtime yet), S16LE/S32LE input only, no mDNS, no volume/control handling.
+> The current state, decisions, all known limitations and the plan are in
+> [docs/claude/memory.md](docs/claude/memory.md). Next up: timing robustness, then
+> multiple streams per server. Android is a near-term target for the sender
+> (`snapsink`).
 
 ### Element properties
 
@@ -58,15 +62,18 @@ first).
 │   ├── gst-plugin-snapsink/   # -> libgstsnapsink.so  (element: snapsink)
 │   └── gst-plugin-snapsrc/    # -> libgstsnapsrc.so   (element: snapsrc)
 ├── snapcast-rs/               # git submodule (fork of metaneutrons/snapcast-rs), own Cargo workspace
-├── docs/                      # design notes
+├── docs/
+│   ├── gstreamer-plugins/     # design discussion (background)
+│   └── claude/memory.md       # current state, decisions, limitations, plan
 └── .devcontainer/             # VS Code devcontainer (Rust + GStreamer dev packages)
 ```
 
 `snapcast-rs` stays a separate project. We depend on its library crates
 (`snapcast-server`, `snapcast-client`, `snapcast-proto`) through path
 dependencies declared once in the root `Cargo.toml`. Changes to snapcast-rs
-are committed in the submodule (and ideally upstreamed), never mixed into
-commits of this repository.
+are committed in the submodule, never mixed into commits of this repository,
+and are meant to be upstreamed to
+[metaneutrons/snapcast-rs](https://github.com/metaneutrons/snapcast-rs).
 
 ## Getting started
 
@@ -79,7 +86,9 @@ commits of this repository.
 
 The container provides the Rust toolchain (pinned to stable via
 `rust-toolchain.toml`), the GStreamer 1.26 development packages, `gst-launch-1.0`
-and `gst-inspect-1.0`, rust-analyzer (checking with clippy) and CodeLLDB.
+and `gst-inspect-1.0`, rust-analyzer (checking with clippy) and CodeLLDB. It also
+installs the reference C++ `snapserver`/`snapclient` (Debian's 0.31.0; upstream is at
+0.34.0), for interop testing only.
 `GST_PLUGIN_PATH` points to `target/debug`, so freshly built plugins are found
 automatically.
 

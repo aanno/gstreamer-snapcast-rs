@@ -10,17 +10,18 @@ built on the embeddable engines of the `snapcast-rs` submodule:
 - `snapsink` (`crates/gst-plugin-snapsink`, `GstBaseSink`): PCM in, embedded Snapcast **server** stream out.
 - `snapsrc` (`crates/gst-plugin-snapsrc`, live `GstPushSrc`): embedded Snapcast **client** in, timestamped PCM out.
 - `snapcast-engine` (`crates/snapcast-engine`): GStreamer-free glue (tokio runtime,
-  shared server singleton, client lifecycle). Features `server` / `client`.
+  servers shared per port, client lifecycle). Features `server` / `client`.
 
 The design rationale is in `docs/gstreamer-plugins/dlna-rs-gstreamer-2.md`.
 `-1.md` is broader DLNA/UPnP background; read it only when needed.
 
-Current status: PCM loopback works (`crates/gst-plugin-snapsrc/tests/loopback.rs`), and
-interop with the C++ `snapclient` was verified manually for pcm and flac. Timing design:
-module docs of `snapsink/imp.rs`, `snapsrc/imp.rs` and `snapcast-engine/src/client.rs`.
-Known snapcast-rs gaps we work around: fixed stream set after `serve()`; the client's
-internal player `Stream` is never drained (we clear it); `TimeSyncComplete` takes 5 s
-(we schedule after 500 ms).
+**Read `docs/claude/memory.md` first.** It holds the current state, the decisions, the
+known limitations (L1–L10) and the plan. Keep it up to date: update State and Plan when
+a step is done, and record new decisions with a date.
+
+Short version: the PCM loopback works (`crates/gst-plugin-snapsrc/tests/loopback.rs`), and
+interop with the C++ `snapclient` was verified by hand. Current priority: timing
+robustness, then multiple streams per server.
 
 ## Commands
 
@@ -36,9 +37,14 @@ Run `make check` before declaring work done.
 ## Architecture rules
 
 - **`snapcast-engine` must never depend on GStreamer.** Plugin crates only translate
-  buffers/caps/events to engine calls. This keeps the engine reusable (e.g. Android).
-- **One shared embedded `SnapServer` per process**, owned by `snapcast-engine`; each
-  `snapsink` feeds one named stream (`stream` property). Do not create a server per element.
+  buffers/caps/events to engine calls.
+- **Android is a near-term target for the sender** (`snapsink` and the engine's `server`
+  feature). Keep that path portable: no Linux-only APIs and no extra system C libraries.
+  The receiver (`snapsrc`, `client` feature) is desktop-only. Android already has a
+  websocket-based Snapcast client app.
+- **One shared embedded `SnapServer` per port**, owned by `snapcast-engine`
+  (`server::acquire_stream`). Each `snapsink` feeds one named stream (`stream` property).
+  Do not create servers anywhere else.
 - Async work runs on `snapcast_engine::runtime()`. Never block a GStreamer streaming
   thread on async code without a bound or timeout, and never create ad-hoc runtimes.
 - **Timing:** `snapsrc` must derive PTS from Snapcast server time, never from network
@@ -53,10 +59,11 @@ Run `make check` before declaring work done.
   `metaneutrons/snapcast-rs`) with **its own Cargo workspace**, excluded from ours.
   Its crates are wired in via path deps in the root `Cargo.toml` `[workspace.dependencies]`.
   Add new uses there, not in individual crates.
-- Modifying snapcast-rs is allowed, but keep the changes upstreamable: follow its
-  conventions (its own `make check`, conventional commits, its git hooks) and commit
-  inside the submodule separately. Afterwards commit the updated submodule pointer in
-  this repo as its own commit.
+- **snapcast-rs changes are meant to go upstream to `metaneutrons/snapcast-rs`.** Each one
+  is a small, self-contained PR candidate with tests and docs. Follow its conventions (its
+  own `make check`, conventional commits, its git hooks), and keep project-specific hacks
+  out of it. Develop in the fork (submodule) and commit there separately. Afterwards,
+  commit the updated submodule pointer in this repo as its own commit.
 - Prefer working around a limitation in `snapcast-engine` if that stays clean. Change
   snapcast-rs when the right fix belongs in the library (e.g. runtime `add_stream`/`remove_stream`).
 - Keep the `version` of the path deps in sync with `snapcast-rs/Cargo.toml`.
@@ -87,10 +94,14 @@ Run `make check` before declaring work done.
 - Bound every pipeline wait with a timeout (`bus.timed_pop_filtered`).
 - Network tests should bind ephemeral ports so they can run in parallel: `snapsink port=0`,
   then read `bound-port`.
+- The C++ reference `snapserver`/`snapclient` (Debian 0.31; upstream is 0.34) are installed
+  in the devcontainer for interop testing only. Never link against them. Tests that need
+  them must be `#[ignore]`d or env-gated, so `make check` works without them.
 
 ## Environment
 
-- Devcontainer: `.devcontainer/Dockerfile` (Debian trixie, GStreamer 1.26 dev packages).
+- Devcontainer: `.devcontainer/Dockerfile` (Debian trixie, GStreamer 1.26 dev packages,
+  C++ snapserver/snapclient 0.31 as interop peers).
   `GST_PLUGIN_PATH=${workspaceFolder}/target/debug` is set.
 - VS Code tasks, CodeLLDB launch configs and rust-analyzer settings are in
   `gstreamer-snapcast-rs.code-workspace` (`.vscode/` is git-ignored).

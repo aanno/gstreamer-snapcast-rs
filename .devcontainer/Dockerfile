@@ -16,5 +16,9 @@ RUN apt-get update \
         # snapcast-rs: optional opus codec; ALSA for snapclient-rs (cpal)
         libopus-dev \
         libasound2-dev \
+        # Reference C++ Snapcast (interop testing only, never linked). Debian
+        # trixie ships 0.31.0; upstream (github.com/snapcast/snapcast) is at 0.34.0.
+        snapserver \
+        snapclient \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
