@@ -1,0 +1,3 @@
+[submodule "snapcast-rs"]
+	path = snapcast-rs
+	url = git@github.com:aanno/snapcast-rs.git
