@@ -1,0 +1,29 @@
+[package]
+name = "gst-plugin-snapsrc"
+description = "GStreamer source delivering PCM received by an embedded Snapcast client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+# Produces libgstsnapsrc.so; GStreamer derives the plugin name "snapsrc"
+# from the file name and looks up `gst_plugin_snapsrc_get_desc`.
+name = "gstsnapsrc"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+gst = { workspace = true }
+gst-base = { workspace = true }
+gst-audio = { workspace = true }
+snapcast-engine = { workspace = true, features = ["client"] }
+
+[build-dependencies]
+gst-plugin-version-helper = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,25 @@
+[package]
+name = "snapcast-engine"
+description = "GStreamer-agnostic glue around snapcast-rs: runtime, lifecycle and shared server/client instances"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[features]
+default = []
+# Embedded Snapcast server (used by snapsink)
+server = ["dep:snapcast-server"]
+# Embedded Snapcast client (used by snapsrc)
+client = ["dep:snapcast-client"]
+
+[dependencies]
+snapcast-server = { workspace = true, optional = true }
+snapcast-client = { workspace = true, optional = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

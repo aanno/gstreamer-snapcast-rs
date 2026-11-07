@@ -1,0 +1,29 @@
+[package]
+name = "gst-plugin-snapsink"
+description = "GStreamer sink feeding PCM into an embedded Snapcast server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+# Produces libgstsnapsink.so; GStreamer derives the plugin name "snapsink"
+# from the file name and looks up `gst_plugin_snapsink_get_desc`.
+name = "gstsnapsink"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+gst = { workspace = true }
+gst-base = { workspace = true }
+gst-audio = { workspace = true }
+snapcast-engine = { workspace = true, features = ["server"] }
+
+[build-dependencies]
+gst-plugin-version-helper = { workspace = true }
+
+[lints]
+workspace = true

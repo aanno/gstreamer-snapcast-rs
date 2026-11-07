@@ -4,5 +4,135 @@
 			"path": "."
 		}
 	],
-	"settings": {}
+	"settings": {
+		"rust-analyzer.check.command": "clippy",
+		"rust-analyzer.check.allTargets": true,
+		// Our workspace plus the snapcast-rs submodule (its own Cargo workspace),
+		// so that editing snapcast-rs gets full IDE support as well.
+		"rust-analyzer.linkedProjects": [
+			"Cargo.toml",
+			"snapcast-rs/Cargo.toml"
+		],
+		"[rust]": {
+			"editor.formatOnSave": true,
+			"editor.defaultFormatter": "rust-lang.rust-analyzer"
+		},
+		"files.watcherExclude": {
+			"**/target/**": true
+		},
+		"search.exclude": {
+			"**/target": true,
+			"**/Cargo.lock": true
+		}
+	},
+	"tasks": {
+		"version": "2.0.0",
+		"tasks": [
+			{
+				"label": "cargo build",
+				"type": "cargo",
+				"command": "build",
+				"args": ["--workspace"],
+				"problemMatcher": ["$rustc"],
+				"group": { "kind": "build", "isDefault": true }
+			},
+			{
+				"label": "cargo test",
+				"type": "cargo",
+				"command": "test",
+				"args": ["--workspace"],
+				"problemMatcher": ["$rustc"],
+				"group": { "kind": "test", "isDefault": true }
+			},
+			{
+				"label": "cargo clippy",
+				"type": "cargo",
+				"command": "clippy",
+				"args": ["--workspace", "--all-targets", "--", "-D", "warnings"],
+				"problemMatcher": ["$rustc"]
+			},
+			{
+				"label": "cargo doc (open)",
+				"type": "cargo",
+				"command": "doc",
+				"args": ["--workspace", "--no-deps", "--open"],
+				"problemMatcher": ["$rustc"]
+			}
+		]
+	},
+	"launch": {
+		"version": "0.2.0",
+		"configurations": [
+			{
+				// Debug the dynamically loaded plugin inside gst-launch-1.0.
+				"name": "Debug snapsink (gst-launch-1.0)",
+				"type": "lldb",
+				"request": "launch",
+				"program": "/usr/bin/gst-launch-1.0",
+				"args": [
+					"audiotestsrc", "num-buffers=500", "!",
+					"audio/x-raw,format=S16LE,rate=48000,channels=2", "!",
+					"snapsink", "stream=default"
+				],
+				"env": {
+					"GST_PLUGIN_PATH": "${workspaceFolder}/target/debug",
+					"GST_DEBUG": "snapsink:6",
+					// Scan plugins in-process (no gst-plugin-scanner child), so breakpoints
+					// in plugin_init are hit as well.
+					"GST_REGISTRY_FORK": "no"
+				},
+				"preLaunchTask": "cargo build",
+				"sourceLanguages": ["rust"]
+			},
+			{
+				"name": "Debug snapsrc (gst-launch-1.0)",
+				"type": "lldb",
+				"request": "launch",
+				"program": "/usr/bin/gst-launch-1.0",
+				"args": [
+					"snapsrc", "host=127.0.0.1", "port=1704", "!",
+					"audioconvert", "!", "fakesink", "sync=true"
+				],
+				"env": {
+					"GST_PLUGIN_PATH": "${workspaceFolder}/target/debug",
+					"GST_DEBUG": "snapsrc:6",
+					"GST_REGISTRY_FORK": "no"
+				},
+				"preLaunchTask": "cargo build",
+				"sourceLanguages": ["rust"]
+			},
+			{
+				"name": "Debug snapsink integration tests",
+				"type": "lldb",
+				"request": "launch",
+				"cargo": {
+					"args": ["test", "--no-run", "-p", "gst-plugin-snapsink", "--test", "snapsink"],
+					"filter": { "kind": "test" }
+				},
+				"args": [],
+				"env": { "GST_DEBUG": "snapsink:6" },
+				"sourceLanguages": ["rust"]
+			},
+			{
+				"name": "Debug snapsrc integration tests",
+				"type": "lldb",
+				"request": "launch",
+				"cargo": {
+					"args": ["test", "--no-run", "-p", "gst-plugin-snapsrc", "--test", "snapsrc"],
+					"filter": { "kind": "test" }
+				},
+				"args": [],
+				"env": { "GST_DEBUG": "snapsrc:6" },
+				"sourceLanguages": ["rust"]
+			}
+		]
+	},
+	"extensions": {
+		"recommendations": [
+			"vadimcn.vscode-lldb",
+			"rust-lang.rust-analyzer",
+			"tamasfe.even-better-toml",
+			"fill-labs.dependi"
+		]
+	}
 }

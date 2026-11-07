@@ -1,0 +1,56 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/snapcast-engine",
+    "crates/gst-plugin-snapsink",
+    "crates/gst-plugin-snapsrc",
+]
+# snapcast-rs is a git submodule with its own Cargo workspace. We consume its
+# crates via path dependencies (see [workspace.dependencies]) but never make
+# them members of this workspace.
+exclude = ["snapcast-rs"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Must be >= the MSRV of snapcast-rs (see snapcast-rs/Cargo.toml).
+rust-version = "1.94.1"
+license = "GPL-3.0-only"
+repository = "https://github.com/aanno/gstreamer-snapcast-rs"
+authors = ["aanno"]
+
+[workspace.dependencies]
+# Internal
+snapcast-engine = { path = "crates/snapcast-engine" }
+
+# snapcast-rs (git submodule). Keep `version` in sync with the submodule so we
+# could switch to crates.io releases by simply dropping `path`.
+snapcast-server = { path = "snapcast-rs/crates/snapcast-server", version = "0.18.0" }
+snapcast-client = { path = "snapcast-rs/crates/snapcast-client", version = "0.18.0", default-features = false }
+snapcast-proto = { path = "snapcast-rs/crates/snapcast-proto", version = "0.18.0" }
+
+# GStreamer bindings (https://gitlab.freedesktop.org/gstreamer/gstreamer-rs)
+gst = { package = "gstreamer", version = "0.25" }
+gst-base = { package = "gstreamer-base", version = "0.25" }
+gst-audio = { package = "gstreamer-audio", version = "0.25" }
+gst-plugin-version-helper = "0.8"
+
+# Async runtime (snapcast-rs is tokio based)
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "macros"] }
+
+anyhow = "1"
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
