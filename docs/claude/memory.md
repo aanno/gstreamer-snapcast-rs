@@ -5,6 +5,24 @@ update **State** and **Plan** when a step is finished, and add decisions with a 
 
 Last updated: 2026-11-10 (plan revised: feasibility prototype; P1 test tooling mostly done).
 
+## Resume here (2026-11-10, before a devcontainer rebuild)
+
+- **Uncommitted work** (the user commits): P1 test tooling, meaning the Makefile targets,
+  `scripts/doctor.sh`, `scripts/listen.sh` and `crates/*/tests/interop_cpp.rs`, plus
+  `devcontainer.json` (`--device=/dev/snd`) and the Dockerfile (`gstreamer1.0-alsa`,
+  `alsa-utils`). The docs are updated. `make check` and `make test-interop` were green before
+  the rebuild.
+- **First, after the rebuild:**
+  1. Run `make doctor`. Expect `/dev/snd` to be accessible, the `Loopback` card, `alsasink`/
+     `alsasrc`, and `snapserver` + `snapclient` 0.31. If `/dev/snd` is not accessible, look
+     at Podman ACLs/groups (maybe `--group-add keep-groups`).
+  2. Run `make check` and `make test-interop` again.
+  3. Ask the user for the host results (`make install`, `make doctor`, `make listen-all`).
+     Watch for two things there: `SRC=desktop` relies on the PipeWire property
+     `stream.capture.sink`, and a newer `snapclient` may want `tcp://host:port` instead of
+     `-h/-p`.
+- **Then:** write `make test-aloop` (P1, open item). After that, stop and discuss before P2.
+
 ## State
 
 - **Workspace:** `snapcast-engine` (no GStreamer dependency), `gst-plugin-snapsink`
