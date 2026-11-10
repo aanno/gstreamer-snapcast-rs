@@ -20,8 +20,9 @@ known limitations (L1–L10) and the plan. Keep it up to date: update State and 
 a step is done, and record new decisions with a date.
 
 Short version: the PCM loopback works (`crates/gst-plugin-snapsrc/tests/loopback.rs`), and
-interop with the C++ `snapclient` was verified by hand. Current priority: timing
-robustness, then multiple streams per server.
+interop with the C++ `snapclient` was verified by hand. Current goal (2026-11-10): a
+**feasibility prototype** with minimal snapcast-rs changes (test infrastructure, control
+plane in the engine, timing checks). Multiple streams per server are postponed.
 
 ## Commands
 
@@ -29,6 +30,9 @@ robustness, then multiple streams per server.
 make check                         # fmt + clippy (-D warnings) + tests + rustdoc (-D warnings)
 cargo test -p gst-plugin-snapsink  # single crate
 make inspect                       # gst-inspect-1.0 the built plugins
+make test-interop                  # #[ignore]d tests against the C++ snapclient/snapserver
+make doctor                        # what this machine has (tools, elements, sound devices)
+make install / make listen-all     # per-user install; listening tests (scripts/listen.sh)
 GST_PLUGIN_PATH=$PWD/target/debug GST_DEBUG=snapsink:6 gst-launch-1.0 audiotestsrc num-buffers=50 ! snapsink
 ```
 
@@ -97,11 +101,20 @@ Run `make check` before declaring work done.
 - The C++ reference `snapserver`/`snapclient` (Debian 0.31; upstream is 0.34) are installed
   in the devcontainer for interop testing only. Never link against them. Tests that need
   them must be `#[ignore]`d or env-gated, so `make check` works without them.
+  Name the binaries via `SNAPCLIENT`/`SNAPSERVER` (default: `PATH`), and add them to
+  `make test-interop`.
+- Makefile targets and `scripts/` must also work on the user's Fedora host (outside the
+  container, without `GST_PLUGIN_PATH`). Don't assume Debian paths; use
+  `pkg-config --variable=pluginsdir gstreamer-1.0`.
+- The tool shell does not get the devcontainer's `containerEnv`, so set `GST_PLUGIN_PATH`
+  explicitly when running `gst-launch-1.0` by hand.
 
 ## Environment
 
 - Devcontainer: `.devcontainer/Dockerfile` (Debian trixie, GStreamer 1.26 dev packages,
-  C++ snapserver/snapclient 0.31 as interop peers).
+  ALSA elements/tools, C++ snapserver/snapclient 0.31 as interop peers). Host: Fedora 45,
+  rootless Podman with SELinux (`--userns=keep-id`, the container runs as `spc_t`), and
+  `--device=/dev/snd` for the host's `snd-aloop` card.
   `GST_PLUGIN_PATH=${workspaceFolder}/target/debug` is set.
 - VS Code tasks, CodeLLDB launch configs and rust-analyzer settings are in
   `gstreamer-snapcast-rs.code-workspace` (`.vscode/` is git-ignored).

@@ -22,14 +22,15 @@ element feeds one stream. Standard Snapcast clients (C++ `snapclient`,
 Snapdroid, ...) can connect to it, provided you use the PCM or FLAC codec.
 
 > **Status: first working loopback.** `snapsink → embedded server → snapsrc`
-> works for PCM, end to end within a few ms of the configured buffer. A stock C++
-> `snapclient` (0.31) plays streams from `snapsink` with both `pcm` and `flac`.
+> works for PCM, end to end within a few ms of the configured buffer. It interoperates
+> with the C++ Snapcast in both directions (`snapsink` → `snapclient`,
+> `snapserver` → `snapsrc`), with `pcm` and `flac` (`make test-interop`).
 > Limitations: one stream per server port (snapcast-rs cannot add streams at
 > runtime yet), S16LE/S32LE input only, no mDNS, no volume/control handling.
 > The current state, decisions, all known limitations and the plan are in
-> [docs/claude/memory.md](docs/claude/memory.md). Next up: timing robustness, then
-> multiple streams per server. Android is a near-term target for the sender
-> (`snapsink`).
+> [docs/claude/memory.md](docs/claude/memory.md). Next up: a feasibility
+> prototype (install/test tooling, control plane, timing checks with a loopback sound
+> device).
 
 ### Element properties
 
@@ -57,6 +58,7 @@ first).
 ```text
 .
 ├── Cargo.toml                 # Cargo workspace (excludes snapcast-rs/)
+├── scripts/                   # doctor.sh, listen.sh (used by the Makefile)
 ├── crates/
 │   ├── snapcast-engine/       # GStreamer-free glue: tokio runtime, shared server/client lifecycle
 │   ├── gst-plugin-snapsink/   # -> libgstsnapsink.so  (element: snapsink)
@@ -92,16 +94,40 @@ installs the reference C++ `snapserver`/`snapclient` (Debian's 0.31.0; upstream 
 `GST_PLUGIN_PATH` points to `target/debug`, so freshly built plugins are found
 automatically.
 
-### Without the devcontainer
+The container gets the host's sound devices (`--device=/dev/snd`), in particular the
+`snd-aloop` loopback card for timing tests. Load it on the host first
+(`sudo modprobe snd-aloop`). On a host without `/dev/snd`, remove that line from
+`.devcontainer/devcontainer.json`.
+
+### Without the devcontainer (e.g. on a Fedora desktop)
 
 You need a Rust toolchain (>= 1.94.1) and the GStreamer development packages.
-On Debian/Ubuntu:
 
 ```sh
+# Fedora
+sudo dnf install pkg-config gstreamer1-devel gstreamer1-plugins-base-devel \
+    gstreamer1-plugins-good pipewire-gstreamer alsa-utils
+# Debian/Ubuntu
 sudo apt install pkg-config libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-    gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+    gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-alsa
 git submodule update --init --recursive
+make doctor    # reports anything that is still missing
 ```
+
+The C++ `snapserver`/`snapclient` are optional. They're used by `make test-interop`
+and by some listening tests; set `SNAPCLIENT=`/`SNAPSERVER=` to use self-compiled binaries.
+
+### Install
+
+```sh
+make install            # release build into ~/.local/share/gstreamer-1.0/plugins (no root)
+make uninstall
+make release && sudo make install-system    # or system-wide (GStreamer's own plugins dir)
+sudo make uninstall-system
+```
+
+`make doctor` shows which `snapsink`/`snapsrc` files GStreamer actually loads. Note that
+`GST_PLUGIN_PATH` (set in the devcontainer) takes precedence over installed copies.
 
 ## Development
 
@@ -113,7 +139,28 @@ make fmt       # rustfmt check (make fmt-fix to apply)
 make doc       # rustdoc, warnings are errors (cargo doc --open to browse)
 make check     # all of the above (except build)
 make inspect   # gst-inspect-1.0 the freshly built plugins
+make test-interop  # against the C++ snapclient/snapserver (not part of make check)
+make doctor    # tools, elements, plugins and sound devices on this machine
 ```
+
+### Listening tests
+
+`make listen-*` runs [scripts/listen.sh](scripts/listen.sh), with the installed plugins
+(or `LOCAL=1` for a fresh release build of this tree):
+
+```sh
+make listen-all                   # sender + snapsrc + C++ snapclient on this machine
+make listen-send SRC=desktop      # send what the desktop plays (PipeWire); stop local playback first
+make listen-recv HOST=192.168.1.10    # on another machine
+make listen-cpp-client HOST=...   # same, with the C++ snapclient
+make listen-pair HOST=...         # both receivers at once
+make listen-cpp-server            # C++ snapserver as sender; then listen-recv
+```
+
+The default source is `SRC=ticks`, a click every second. With two receivers on the same
+speakers, in sync sounds like a single click and out of sync like a double click.
+Other sources: `sine`, `desktop`, `mic` and `file:/path/to/audio`. Further settings:
+`PORT`, `STREAM`, `CODEC=pcm|flac`, `BUFFER_MS`, `LATENCY_MS`, `SINK`.
 
 Try the elements from the command line:
 

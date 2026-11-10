@@ -13,6 +13,9 @@ RUN apt-get update \
         gstreamer1.0-tools \
         gstreamer1.0-plugins-base \
         gstreamer1.0-plugins-good \
+        # alsasrc/alsasink and aplay/arecord/amixer for the snd-aloop timing tests
+        gstreamer1.0-alsa \
+        alsa-utils \
         # snapcast-rs: optional opus codec; ALSA for snapclient-rs (cpal)
         libopus-dev \
         libasound2-dev \

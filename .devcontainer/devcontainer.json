@@ -6,10 +6,15 @@
 		"dockerfile": "Dockerfile"
 	},
 	// Needed for lldb/gdb (ptrace) inside the container.
+	// --device=/dev/snd: host sound devices, in particular the snd-aloop loopback card
+	// for timing tests (`sudo modprobe snd-aloop` on the host first). The container does
+	// not start on a host without /dev/snd: remove the line there. With rootless Podman
+	// and --userns=keep-id, the host user's ACLs on /dev/snd/* apply inside the container.
 	"runArgs": [
 		"--cap-add=SYS_PTRACE",
 		"--security-opt",
-		"seccomp=unconfined"
+		"seccomp=unconfined",
+		"--device=/dev/snd"
 	],
 
 	"containerEnv": {
