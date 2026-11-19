@@ -103,6 +103,51 @@ make listen-pair SINK="alsasink device=plughw:1,0" SOUNDCARD=plughw:1,0
 Only one program can use a `hw:` device at a time, so for two receivers on one card use
 `dmix` (like `.devcontainer/asoundrc`), or put them on different cards.
 
+### `alsasink` examples
+
+`alsasink` is GStreamer's ALSA output. Its `device` property takes any ALSA PCM name; it
+defaults to `default`, which on Fedora is PipeWire's ALSA layer.
+
+```sh
+aplay -l                                            # cards and devices: "card 1: ... device 0"
+aplay -L | grep -E '^(default|plughw|hw|pipewire)'  # PCM names alsasink accepts
+
+# receiver through PipeWire's ALSA layer (works next to everything else that plays)
+make listen-recv SINK=alsasink
+make listen-recv SINK="alsasink device=pipewire"    # the same, explicitly
+
+# receiver directly on card 1 device 0, past PipeWire (pause PipeWire first, see above)
+make listen-recv SINK="alsasink device=plughw:1,0"  # with format/rate conversion
+make listen-recv SINK="alsasink device=hw:1,0"      # no conversion: only what the hardware takes
+
+# C++ snapclient on the same paths
+make listen-cpp-client SOUNDCARD=default            # via PipeWire (the default)
+make listen-cpp-client SOUNDCARD=plughw:1,0         # directly on ALSA
+
+# test the device on its own, without Snapcast
+gst-launch-1.0 audiotestsrc num-buffers=200 ! audioconvert ! alsasink device=plughw:1,0
+```
+
+`alsasink` properties that matter here:
+
+| Property | Default | Effect |
+|---|---|---|
+| `device` | `default` | ALSA PCM name (`default`, `pipewire`, `hw:C,D`, `plughw:C,D`, a name from `~/.asoundrc`) |
+| `buffer-time` | 200000 µs | size of the ring buffer; a direct `hw:` device may round it |
+| `latency-time` | 10000 µs | period size, i.e. how often data is handed over |
+| `slave-method` | `skew` | how it follows the pipeline clock (`snapsrc`'s): `skew` jumps after `drift-tolerance`, `resample` adjusts the rate. Relevant for L12 |
+| `drift-tolerance` | 40000 µs | how much drift `skew` accepts before it jumps |
+
+Example with all of them, for experiments with L12:
+
+```sh
+make listen-recv SINK="alsasink device=plughw:1,0 buffer-time=100000 latency-time=10000 slave-method=skew drift-tolerance=5000"
+```
+
+`pulsesink` has the same four properties with the same defaults (checked with
+`gst-inspect-1.0`, GStreamer 1.26), so the same experiments work there. `pipewiresink` is
+different: it has only its own `slave-method` (default `none`) and none of the others.
+
 ### Music through snapsink → snapsrc
 
 The quickest way to hear how well the plugins work with real music:
@@ -111,21 +156,24 @@ The quickest way to hear how well the plugins work with real music:
    ```sh
    make install
    ```
-2. **Terminal 1, the sender.** It plays a music file into `snapsink`; you hear nothing yet,
-   because `snapsink` only serves the stream. Without an argument, `host-play.sh` uses the
-   CC0 jazz loop in [assets/audio](../assets/audio/README.md) (38 s, 44.1 kHz):
+2. **Terminal 1, the receiver, first.** `snapsrc` plays through PipeWire to your speakers:
+   ```sh
+   make listen-recv
+   ```
+   It waits for the server and keeps retrying the connection, so it can start before the
+   sender. **Start it first:** the sender plays the file in real time from second 0, whether
+   a receiver listens or not, so a receiver started later misses the beginning (with the
+   38 s test file, a large part of it).
+3. **Terminal 2, the sender.** It plays a music file into `snapsink`. Without an argument,
+   `host-play.sh` uses the CC0 jazz loop in [assets/audio](../assets/audio/README.md)
+   (38 s, 44.1 kHz):
    ```sh
    scripts/host-play.sh                              # or: scripts/host-play.sh ~/Music/song.flac
    make listen-send SRC=file:$HOME/Music/song.flac   # the same, by hand
    ```
    FLAC, Ogg and MP3 work with the standard Fedora GStreamer packages. AAC/M4A needs
-   extra plugins (e.g. `gstreamer1-plugin-libav`).
-3. **Terminal 2, the receiver.** `snapsrc` plays through PipeWire to your speakers:
-   ```sh
-   make listen-recv
-   ```
-   After about a second (`BUFFER_MS=1000`) you should hear the music. This is the pure
-   snapsink → snapsrc path.
+   extra plugins (e.g. `gstreamer1-plugin-libav`). About a second after the sender starts
+   (`BUFFER_MS=1000`) you hear the music: the pure snapsink → snapsrc path.
 4. **Listen for:** dropouts or crackles, changes of pitch or speed, and whether it stays
    clean over several minutes.
 5. **Stop** with Ctrl+C in both terminals. The sender also stops by itself when the file
@@ -133,11 +181,12 @@ The quickest way to hear how well the plugins work with real music:
 
 Variations:
 
-- `CODEC=flac` in terminal 1 sends FLAC instead of PCM. The receiver detects the codec by
+- `CODEC=flac` in terminal 2 sends FLAC instead of PCM. The receiver detects the codec by
   itself.
-- `make listen-cpp-client` in terminal 2 (instead of `listen-recv`) plays the same stream
+- Another output path for snapsrc, e.g. ALSA: see the next section.
+- `make listen-cpp-client` in terminal 1 (instead of `listen-recv`) plays the same stream
   through the reference C++ client: an A/B comparison of the sound.
-- `make listen-pair` in terminal 2 plays both receivers at once. Because of the ~62 ms
+- `make listen-pair` in terminal 1 plays both receivers at once. Because of the ~62 ms
   offset between `snapsrc` and the C++ client (L13 in `docs/claude/memory.md`), expect an
   **audible echo or flanging**. With `SRC=ticks`, the same shows as a mixture of single
   and double clicks.
