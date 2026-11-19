@@ -17,14 +17,25 @@
 		"--device=/dev/snd"
 	],
 
+	// Claude Code's config (plugins, settings, MCP servers, file-based memory, sessions)
+	// survives container rebuilds on a named Podman volume, one per devcontainer.
+	// CLAUDE_CONFIG_DIR moves ~/.claude.json into that directory too.
+	// Remove the volume with `podman volume rm claude-code-config-<id>`.
+	"mounts": [
+		"source=claude-code-config-${devcontainerId},target=/home/vscode/.claude,type=volume"
+	],
+
 	"containerEnv": {
 		// Lets gst-launch-1.0 / gst-inspect-1.0 find the freshly built plugins.
 		"GST_PLUGIN_PATH": "${containerWorkspaceFolder}/target/debug",
-		"RUST_BACKTRACE": "1"
+		"RUST_BACKTRACE": "1",
+		"CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
 	},
 
-	// Fetch the snapcast-rs submodule and install the toolchain from rust-toolchain.toml.
-	"postCreateCommand": "git submodule update --init --recursive && rustup show active-toolchain",
+	// Fetch the snapcast-rs submodule, install the toolchain from rust-toolchain.toml, and
+	// make ALSA's default device a dmix on the snd-aloop card (no audio server in here;
+	// see .devcontainer/asoundrc and docs/testing-devcontainer.md).
+	"postCreateCommand": "git submodule update --init --recursive && rustup show active-toolchain && install -m 0644 .devcontainer/asoundrc ~/.asoundrc",
 
 	// Configure tool-specific properties.
 	"customizations": {

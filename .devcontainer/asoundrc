@@ -1,0 +1,37 @@
+# ALSA config for the devcontainer (installed as ~/.asoundrc by postCreateCommand).
+#
+# The container has no speakers and no audio server; its only sound card is the host's
+# snd-aloop card. This makes ALSA's `default` device a dmix on loopback subdevice 2, so
+# several players (snapsrc via alsasink/autoaudiosink, C++ snapclient) can play at the
+# same time without PipeWire. What they play can be recorded back from the capture side:
+#
+#   arecord -D hw:Loopback,1,2 -f S16_LE -r 48000 -c 2 out.wav
+#
+# Subdevice 0 is reserved for `make test-aloop`. Debian's pipewire-alsa package points
+# `default` at PipeWire (/etc/alsa/conf.d/99-pipewire-default.conf); this file is read
+# later and overrides it. Not meant for the host: there, PipeWire is the right default.
+
+pcm.!default {
+    type plug
+    slave.pcm "devcontainer_dmix"
+    hint.description "snd-aloop subdevice 2 (dmix, devcontainer)"
+}
+
+pcm.devcontainer_dmix {
+    type dmix
+    ipc_key 47110002
+    ipc_perm 0600
+    slave {
+        pcm "hw:Loopback,0,2"
+        format S16_LE
+        rate 48000
+        channels 2
+        period_size 480
+        buffer_size 3840
+    }
+}
+
+ctl.!default {
+    type hw
+    card Loopback
+}

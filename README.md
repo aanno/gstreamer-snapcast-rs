@@ -65,6 +65,7 @@ first).
 │   └── gst-plugin-snapsrc/    # -> libgstsnapsrc.so   (element: snapsrc)
 ├── snapcast-rs/               # git submodule (fork of metaneutrons/snapcast-rs), own Cargo workspace
 ├── docs/
+│   ├── testing*.md            # tests, host and devcontainer setup, gotchas
 │   ├── gstreamer-plugins/     # design discussion (background)
 │   └── claude/memory.md       # current state, decisions, limitations, plan
 └── .devcontainer/             # VS Code devcontainer (Rust + GStreamer dev packages)
@@ -94,28 +95,17 @@ installs the reference C++ `snapserver`/`snapclient` (Debian's 0.31.0; upstream 
 `GST_PLUGIN_PATH` points to `target/debug`, so freshly built plugins are found
 automatically.
 
-The container gets the host's sound devices (`--device=/dev/snd`), in particular the
-`snd-aloop` loopback card for timing tests. Load it on the host first
-(`sudo modprobe snd-aloop`). On a host without `/dev/snd`, remove that line from
-`.devcontainer/devcontainer.json`.
+The container has no speakers. It gets the host's `snd-aloop` loopback card for the
+timing tests (`sudo modprobe snd-aloop` on the host first), and ALSA's default device
+plays into it. Claude Code's configuration lives on a named volume, so it survives
+rebuilds. Details and gotchas: [docs/testing-devcontainer.md](docs/testing-devcontainer.md).
 
 ### Without the devcontainer (e.g. on a Fedora desktop)
 
-You need a Rust toolchain (>= 1.94.1) and the GStreamer development packages.
-
-```sh
-# Fedora
-sudo dnf install pkg-config gstreamer1-devel gstreamer1-plugins-base-devel \
-    gstreamer1-plugins-good pipewire-gstreamer alsa-utils
-# Debian/Ubuntu
-sudo apt install pkg-config libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-    gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-alsa
-git submodule update --init --recursive
-make doctor    # reports anything that is still missing
-```
-
-The C++ `snapserver`/`snapclient` are optional. They're used by `make test-interop`
-and by some listening tests; set `SNAPCLIENT=`/`SNAPSERVER=` to use self-compiled binaries.
+You need a Rust toolchain (>= 1.94.1) and the GStreamer development packages; the
+package lists, the optional C++ Snapcast peers and `snd-aloop` are in
+[docs/testing-host.md](docs/testing-host.md#setup). `make doctor` reports anything that
+is still missing.
 
 ### Install
 
@@ -140,29 +130,19 @@ make doc       # rustdoc, warnings are errors (cargo doc --open to browse)
 make check     # all of the above (except build)
 make inspect   # gst-inspect-1.0 the freshly built plugins
 make test-interop  # against the C++ snapclient/snapserver (not part of make check)
+make test-aloop    # timing on the snd-aloop card: receiver offset, drift (not part of make check)
 make doctor    # tools, elements, plugins and sound devices on this machine
 ```
 
-### Listening tests
+### Testing
 
-`make listen-*` runs [scripts/listen.sh](scripts/listen.sh), with the installed plugins
-(or `LOCAL=1` for a fresh release build of this tree):
+[docs/testing.md](docs/testing.md) describes all tests, what they need and how to read the
+results. Setup, listening tests (`make listen-*`) and gotchas with their solutions:
+[on the host](docs/testing-host.md) and [in the devcontainer](docs/testing-devcontainer.md).
 
-```sh
-make listen-all                   # sender + snapsrc + C++ snapclient on this machine
-make listen-send SRC=desktop      # send what the desktop plays (PipeWire); stop local playback first
-make listen-recv HOST=192.168.1.10    # on another machine
-make listen-cpp-client HOST=...   # same, with the C++ snapclient
-make listen-pair HOST=...         # both receivers at once
-make listen-cpp-server            # C++ snapserver as sender; then listen-recv
-```
+### Trying the elements
 
-The default source is `SRC=ticks`, a click every second. With two receivers on the same
-speakers, in sync sounds like a single click and out of sync like a double click.
-Other sources: `sine`, `desktop`, `mic` and `file:/path/to/audio`. Further settings:
-`PORT`, `STREAM`, `CODEC=pcm|flac`, `BUFFER_MS`, `LATENCY_MS`, `SINK`.
-
-Try the elements from the command line:
+From the command line:
 
 ```sh
 export GST_PLUGIN_PATH=$PWD/target/debug     # already set in the devcontainer

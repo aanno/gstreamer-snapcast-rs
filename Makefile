@@ -1,5 +1,5 @@
 .PHONY: check fmt fmt-fix clippy test doc build release inspect submodule \
-	install uninstall install-system uninstall-system test-interop doctor \
+	install uninstall install-system uninstall-system test-interop test-aloop doctor \
 	listen-send listen-recv listen-cpp-client listen-cpp-server listen-pair listen-all
 
 PLUGIN_PATH := $(CURDIR)/target/debug
@@ -69,6 +69,12 @@ uninstall-system:
 test-interop:
 	cargo test -p gst-plugin-snapsink --test interop_cpp -- --ignored
 	cargo test -p gst-plugin-snapsrc --test interop_cpp -- --ignored
+
+## Timing tests on the snd-aloop loopback card (F2): two receivers, offset and drift.
+## Needs snd-aloop, amixer and (for the C++ cases) snapclient. One test at a time:
+## they share loopback subdevice 0. See docs/testing.md.
+test-aloop:
+	cargo test -p gst-plugin-snapsrc --test aloop -- --ignored --test-threads=1 --nocapture
 
 ## Report tools, elements and sound devices needed for building and testing
 doctor:

@@ -3,25 +3,19 @@
 Working memory for agents and humans continuing this project. Keep it current:
 update **State** and **Plan** when a step is finished, and add decisions with a date.
 
-Last updated: 2026-11-10 (plan revised: feasibility prototype; P1 test tooling mostly done).
+Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; devcontainer audio).
 
-## Resume here (2026-11-10, before a devcontainer rebuild)
+## Resume here (2026-11-19)
 
-- **Uncommitted work** (the user commits): P1 test tooling, meaning the Makefile targets,
-  `scripts/doctor.sh`, `scripts/listen.sh` and `crates/*/tests/interop_cpp.rs`, plus
-  `devcontainer.json` (`--device=/dev/snd`) and the Dockerfile (`gstreamer1.0-alsa`,
-  `alsa-utils`). The docs are updated. `make check` and `make test-interop` were green before
-  the rebuild.
-- **First, after the rebuild:**
-  1. Run `make doctor`. Expect `/dev/snd` to be accessible, the `Loopback` card, `alsasink`/
-     `alsasrc`, and `snapserver` + `snapclient` 0.31. If `/dev/snd` is not accessible, look
-     at Podman ACLs/groups (maybe `--group-add keep-groups`).
-  2. Run `make check` and `make test-interop` again.
-  3. Ask the user for the host results (`make install`, `make doctor`, `make listen-all`).
-     Watch for two things there: `SRC=desktop` relies on the PipeWire property
-     `stream.capture.sink`, and a newer `snapclient` may want `tcp://host:port` instead of
-     `-h/-p`.
-- **Then:** write `make test-aloop` (P1, open item). After that, stop and discuss before P2.
+- **Uncommitted work** (the user commits): `make test-aloop`
+  (`crates/gst-plugin-snapsrc/tests/aloop.rs`), the `scripts/listen.sh` fixes, devcontainer
+  audio (`.devcontainer/asoundrc`, `postCreateCommand`), the Claude Code config volume
+  (`devcontainer.json` `mounts`, Dockerfile), `rust-analyzer` in `rust-toolchain.toml`, and
+  the testing docs (`docs/testing*.md`; README trimmed). `make check` is green.
+- **P1 is done.** As planned, **stop and discuss** before P2. The F2 findings below suggest
+  doing part of P3 first: discuss that order with the user.
+- Open from 2026-11-10: the host results (`make install`, `make doctor`, `make listen-all`);
+  `SRC=desktop` relies on `stream.capture.sink`; a newer `snapclient` may want `tcp://host:port`.
 
 ## State
 
@@ -46,9 +40,23 @@ Last updated: 2026-11-10 (plan revised: feasibility prototype; P1 test tooling m
 - **Test tooling** (P1): `make install`/`uninstall` (per user), `install-system`/
   `uninstall-system` (root, `pkg-config` plugins dir), `doctor` (`scripts/doctor.sh`) and
   `listen-*` (`scripts/listen.sh`: send, recv, cpp-client, cpp-server, pair, all; `LOCAL=1`
-  uses the tree's release build). Smoke-tested in the devcontainer with file/fake sinks only.
-  The real listening runs happen on the user's Fedora host. With `snapsrc`, gst-launch picks
-  the clock `snapsrc` provides ("New clock: systemclock0").
+  uses the tree's release build), and `test-aloop` (see below). The real listening runs
+  happen on the user's Fedora host. With `snapsrc`, gst-launch picks the clock `snapsrc`
+  provides ("New clock: systemclock0"). `listen.sh` stops all parts as soon as one exits,
+  and warns when there is no audio output. In the devcontainer, `~/.asoundrc` makes ALSA
+  `default` a dmix on loopback subdevice 2, so `listen-*` runs there (inaudibly).
+- **F2 measurements** (`make test-aloop`, 2026-11-19, devcontainer, C++ snapclient 0.31).
+  The method: both receivers go into one dmix on loopback subdevice 0, one per channel, and
+  the onsets are compared in a single capture, so the offset is sample-exact. Drift comes
+  from `PCM Rate Shift` on *both* cable ends; the card rate is fitted against `CLOCK_MONOTONIC`.
+  1. Two `snapsrc` (same process): offset constant within a run, but 0…+0.85 ms between
+     runs (once > 1 ms). This is the start-up alignment of each `alsasink`, never corrected.
+  2. `snapsrc` vs C++ `snapclient`: **constant −60.6 ms** (snapclient earlier). Which one is
+     right is not known yet: the test has no absolute reference (planned: compare with
+     the server timestamps).
+  3. Card at −300 ppm: **`snapsrc` → `alsasink` follows the card, not the server** (rate error
+     +300 ppm); the C++ snapclient follows the server (−1.9 ppm). The cause: `alsasink` default
+     `slave-method=skew` with `drift-tolerance` 40 ms resyncs only after 40 ms of drift.
 - **Timing design** (details in the module docs of `snapsink/imp.rs`, `snapsrc/imp.rs` and
   `snapcast-engine/src/client.rs`). All engine times are µs of `CLOCK_MONOTONIC`
   (`snapcast_engine::now_usec`).
@@ -109,6 +117,12 @@ Last updated: 2026-11-10 (plan revised: feasibility prototype; P1 test tooling m
     snapserver/snapclient, possibly self-compiled from the latest source.
   - A per-user plugin install is the default; a root/system install is fine too.
 
+- 2026-11-19: devcontainer audio is **plain ALSA** (dmix on the loopback card via
+  `~/.asoundrc`), not PipeWire. PipeWire works in the container only by hand: no udev, so
+  the card has to be added manually, and `pipewiresink` deadlocks on stop with PipeWire 1.4.2.
+- 2026-11-19: Claude Code's config in the devcontainer lives on a named volume
+  (`claude-code-config-${devcontainerId}`, `CLAUDE_CONFIG_DIR`).
+
 ## Known limitations
 
 | # | Limitation | Where | Current workaround | Fix |
@@ -124,6 +138,8 @@ Last updated: 2026-11-10 (plan revised: feasibility prototype; P1 test tooling m
 | L9 | snapcast-rs `tracing` output is not visible in GStreamer logs | engine | — | Bridge `tracing` to the GStreamer debug log |
 | L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | Prototype: copy it into `snapcast-engine`. Later, upstream a control library crate |
 | L11 | snapcast-rs cannot serve **audio** over WebSocket (C++ snapserver: `/stream` on port 1780, used by Snapweb's player). Its WebSocket endpoint carries only JSON-RPC | snapcast-rs server | — | Only if a WebSocket audio client must work with `snapsink` (open question) |
+| L12 | `snapsrc` → `alsasink` (default `slave-method=skew`, `drift-tolerance` 40 ms) does not follow the server timeline when the sound card drifts; it jumps back only after 40 ms | `snapsrc` + audio sink | — | P3 (b) |
+| L13 | `snapsrc` and the C++ `snapclient` play 60.6 ms apart (constant) on the same card | `snapsrc` or engine timing | — | P3 (a): find out which one is off |
 
 ## Plan (2026-11-10, agreed)
 
@@ -141,7 +157,7 @@ updated. Steps P1–P3 are mostly independent; P4 is the actual go/no-go.
 - F5 (lifecycle): PLAYING→PAUSED→PLAYING, stop/restart and a server restart (reconnect)
   all behave sanely.
 
-**P1. Test infrastructure** (done, except the snd-aloop tests)
+**P1. Test infrastructure** (done 2026-11-19)
 - Done: Makefile `install`/`uninstall` (release build into the per-user plugin dir
   `~/.local/share/gstreamer-1.0/plugins`, overridable via `PLUGIN_DIR`), `test` (no devices,
   as today), `test-interop` (C++ peers, `#[ignore]`d tests), `test-aloop` (snd-aloop tests),
@@ -149,12 +165,10 @@ updated. Steps P1–P3 are mostly independent; P4 is the actual go/no-go.
   host as well as in the devcontainer.
 - Done: listening scripts (`scripts/listen.sh`, called by `make listen-*`) for sender,
   receiver and combos with the C++ `snapclient`/`snapserver`.
-- Prepared: `--device=/dev/snd` in `devcontainer.json`, plus `gstreamer1.0-alsa` and
-  `alsa-utils` in the Dockerfile. This takes effect after a container rebuild; not verified yet.
-- Open: `make test-aloop`, an `#[ignore]`d test that plays two receivers into loopback
-  subdevices, records them back and measures their offset (F2). It also uses
-  `PCM Rate Shift` to emulate clock drift between "sound cards". It needs the rebuilt
-  container (or the host).
+- Done: `--device=/dev/snd` and the ALSA packages, verified after the rebuild.
+- Done: `make test-aloop` (4 tests: snapsrc+snapsrc and snapsrc+C++ snapclient, each with
+  and without card drift). Limitation: both receivers share one card, so it emulates "card
+  drifts against the server", not two cards against each other.
 
 **P2. Control plane** in `snapcast-engine` (feature `control`), copied and trimmed from
 `snapserver-rs`:
@@ -164,8 +178,13 @@ as stream metadata; `Stream.Control` becomes a bus message for the application. 
 property `control-port` (`0` = off); optional `snapweb-dir` for Snapweb's static files. No
 auth, no persistence, no mDNS, no `Stream.AddStream` (L1).
 
-**P3. Timing robustness for the prototype:** the aloop drift tests (F2) and smoothing for
-`diff_to_server` (L5) if the measurements call for it, plus reconnect in `snapsrc` (F5).
+**P3. Timing robustness for the prototype:** make the aloop tests pass. That means
+(a) understanding the −60.6 ms offset to the C++ snapclient (add an absolute reference
+to the test first); (b) letting `snapsrc` playback follow the server against a drifting
+card: try `alsasink slave-method=resample` / a small `drift-tolerance`, or have `snapsrc`
+make the sink slave properly; document what users must set; (c) the start-up alignment
+(< 1 ms, but varying). Also smoothing for `diff_to_server` (L5) if the measurements
+call for it, plus reconnect in `snapsrc` (F5).
 L2/L3 stay engine workarounds, and L4 stays "pcm default".
 
 **P4. Evaluation:** listening tests on the host, endurance run, write-up, and the decision.

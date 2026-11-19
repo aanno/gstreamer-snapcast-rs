@@ -28,3 +28,8 @@ RUN apt-get update \
         snapclient \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Mount point of the Claude Code config volume (see devcontainer.json "mounts"). It must
+# exist and belong to vscode, so that Podman copies this ownership into the new, empty
+# named volume; otherwise the volume would be owned by root.
+RUN mkdir -p /home/vscode/.claude && chown vscode:vscode /home/vscode/.claude

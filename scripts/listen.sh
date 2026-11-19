@@ -17,6 +17,7 @@
 #              speakers, in sync sounds like one click, out of sync like a double click.
 #              desktop: whatever the desktop plays (PipeWire default sink monitor).
 #   SINK       GStreamer sink for `recv` (default: autoaudiosink)
+#   SOUNDCARD  ALSA PCM for the C++ snapclient (default: default), e.g. hw:Loopback,0,1
 #   HOST       server for receivers (default 127.0.0.1)
 #   PORT       stream port (default 1704)
 #   STREAM     stream name (default: default)
@@ -34,6 +35,7 @@ STREAM=${STREAM:-default}
 CODEC=${CODEC:-pcm}
 BUFFER_MS=${BUFFER_MS:-1000}
 LATENCY_MS=${LATENCY_MS:-0}
+SOUNDCARD=${SOUNDCARD:-default}
 SNAPCLIENT=${SNAPCLIENT:-snapclient}
 SNAPSERVER=${SNAPSERVER:-snapserver}
 CAPS="audio/x-raw,format=S16LE,rate=48000,channels=2"
@@ -50,6 +52,7 @@ source_pipeline() {
 }
 
 pids=()
+labels=()
 cleanup() {
     for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
     wait 2>/dev/null || true
@@ -63,6 +66,37 @@ bg() {
     local label=$1; shift
     ( "$@" ) > >(sed -u "s/^/[$label] /") 2>&1 &
     pids+=($!)
+    labels+=("$label")
+}
+
+# Waits until the first background part exits, reports it and exits with its status
+# (the EXIT trap then stops the others). Without this, `all` would keep running with a
+# dead receiver, which looks like a hang.
+wait_any() {
+    local who status=0 i
+    wait -n -p who "${pids[@]}" || status=$?
+    for i in "${!pids[@]}"; do
+        if [ "${pids[$i]}" = "$who" ]; then
+            echo "listen.sh: '${labels[$i]}' exited (status $status), stopping the others" >&2
+        fi
+    done
+    exit "$status"
+}
+
+# Warns if neither a PipeWire/PulseAudio server nor ALSA's `default` device is usable:
+# autoaudiosink and the C++ snapclient (SOUNDCARD=default) then have nowhere to play.
+# Typical in the devcontainer without its ~/.asoundrc (docs/testing-devcontainer.md).
+check_audio_output() {
+    local rt=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+    if [ -S "$rt/pipewire-0" ] || [ -S "$rt/pulse/native" ] || [ -n "${PULSE_SERVER:-}" ]; then
+        return
+    fi
+    if timeout 5 aplay -q -D "$SOUNDCARD" -f S16_LE -r 48000 -c 2 -s 480 /dev/zero 2>/dev/null; then
+        return
+    fi
+    echo "listen.sh: warning: no PipeWire/PulseAudio server, and ALSA '$SOUNDCARD' cannot be opened." >&2
+    echo "  Receivers will fail or play nowhere. Set SINK=... and SOUNDCARD=..., or see" >&2
+    echo "  docs/testing-devcontainer.md (inside the devcontainer) / docs/testing-host.md." >&2
 }
 
 send() {
@@ -77,21 +111,22 @@ recv() {
 }
 
 cpp_client() {
-    exec "$SNAPCLIENT" -h "$HOST" -p "$PORT" --latency "$LATENCY_MS" --hostID "listen-cpp-client"
+    exec "$SNAPCLIENT" -h "$HOST" -p "$PORT" --latency "$LATENCY_MS" --soundcard "$SOUNDCARD" \
+        --hostID "listen-cpp-client"
 }
 
 cpp_server() {
-    local dir fifo
+    # Global, not local: the EXIT trap below still needs it after wait_any exits.
     dir=$(mktemp -d)
-    fifo="$dir/fifo"
+    local fifo="$dir/fifo"
     bg snapserver "$SNAPSERVER" --config "$dir/none.conf" --server.datadir="$dir" \
         --stream.port="$PORT" --stream.codec="$CODEC" --stream.buffer="$BUFFER_MS" \
         --stream.source="pipe://$fifo?name=$STREAM&sampleformat=48000:16:2" --logging.sink=stdout
     for _ in $(seq 100); do [ -p "$fifo" ] && break; sleep 0.05; done
     # shellcheck disable=SC2046
     bg feeder eval exec gst-launch-1.0 -e $(source_pipeline) ! "$CAPS" ! filesink location="$fifo" sync=false
-    wait
-    rm -rf "$dir"
+    trap 'rm -rf "$dir"; cleanup' EXIT
+    wait_any
 }
 
 if [ "$SRC" = desktop ] && [ "${1:-}" = all ]; then
@@ -101,11 +136,15 @@ if [ "$SRC" = desktop ] && [ "${1:-}" = all ]; then
 fi
 
 case "${1:-}" in
+    recv|cpp-client|pair|all) check_audio_output ;;
+esac
+
+case "${1:-}" in
     send)       send ;;
     recv)       recv ;;
     cpp-client) cpp_client ;;
     cpp-server) cpp_server ;;
-    pair)       bg snapsrc recv; bg snapclient cpp_client; wait ;;
-    all)        bg snapsink send; sleep 1; bg snapsrc recv; bg snapclient cpp_client; wait ;;
+    pair)       bg snapsrc recv; bg snapclient cpp_client; wait_any ;;
+    all)        bg snapsink send; sleep 1; bg snapsrc recv; bg snapclient cpp_client; wait_any ;;
     *)          sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac

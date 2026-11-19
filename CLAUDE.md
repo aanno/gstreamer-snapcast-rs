@@ -31,6 +31,7 @@ make check                         # fmt + clippy (-D warnings) + tests + rustdo
 cargo test -p gst-plugin-snapsink  # single crate
 make inspect                       # gst-inspect-1.0 the built plugins
 make test-interop                  # #[ignore]d tests against the C++ snapclient/snapserver
+make test-aloop                    # #[ignore]d timing tests on the snd-aloop card (offset, drift)
 make doctor                        # what this machine has (tools, elements, sound devices)
 make install / make listen-all     # per-user install; listening tests (scripts/listen.sh)
 GST_PLUGIN_PATH=$PWD/target/debug GST_DEBUG=snapsink:6 gst-launch-1.0 audiotestsrc num-buffers=50 ! snapsink
@@ -91,6 +92,10 @@ Run `make check` before declaring work done.
 
 ## Tests
 
+All tests, their requirements, how to read the aloop results, and gotchas with solutions:
+`docs/testing.md`, `docs/testing-host.md`, `docs/testing-devcontainer.md`. When you find a
+new problem with the test setup and its fix, add it to the gotchas there.
+
 - Integration tests live in `crates/<plugin>/tests/`. They call `gst::init()` once, then
   `<lib>::plugin_register_static()`, and then build pipelines with `gst::parse::launch`.
   Elements from gst-plugins-base/good (`audiotestsrc`, `audioconvert`, `fakesink`)
@@ -103,6 +108,9 @@ Run `make check` before declaring work done.
   them must be `#[ignore]`d or env-gated, so `make check` works without them.
   Name the binaries via `SNAPCLIENT`/`SNAPSERVER` (default: `PATH`), and add them to
   `make test-interop`.
+- Tests that need sound devices use the `snd-aloop` card, are `#[ignore]`d, and run via
+  `make test-aloop` (one at a time). Loopback subdevice 0 belongs to those tests; 2 is the
+  devcontainer's ALSA `default`.
 - Makefile targets and `scripts/` must also work on the user's Fedora host (outside the
   container, without `GST_PLUGIN_PATH`). Don't assume Debian paths; use
   `pkg-config --variable=pluginsdir gstreamer-1.0`.
@@ -116,6 +124,9 @@ Run `make check` before declaring work done.
   rootless Podman with SELinux (`--userns=keep-id`, the container runs as `spc_t`), and
   `--device=/dev/snd` for the host's `snd-aloop` card.
   `GST_PLUGIN_PATH=${workspaceFolder}/target/debug` is set.
+- The devcontainer has no audio server: `~/.asoundrc` (from `.devcontainer/asoundrc`) makes
+  ALSA `default` a dmix on the loopback card. Don't use `pipewiresink` (it deadlocks on stop
+  with PipeWire 1.4.2). Claude Code's config is on a named volume (`CLAUDE_CONFIG_DIR=~/.claude`).
 - VS Code tasks, CodeLLDB launch configs and rust-analyzer settings are in
   `gstreamer-snapcast-rs.code-workspace` (`.vscode/` is git-ignored).
 - `Cargo.lock` is committed (the plugins are shipped artifacts).
