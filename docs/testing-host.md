@@ -253,6 +253,7 @@ General ones are in [testing.md](testing.md#gotchas-both-environments).
 
 | Symptom | Cause | Solution |
 |---|---|---|
+| `gst-launch-1.0 snapsrc host="" ! …` connects to a strange host, or `mdns-name=""` gives `erroneous pipeline` | The shell removes the quotes, and gst-launch joins its arguments into one string: `host= !` makes the next word the value | Quote the quotes: `'host=""'`, `'mdns-name=""'` (`listen.sh` does this for `HOST=`) |
 | A receiver on another machine cannot connect | firewalld blocks the stream port | `sudo firewall-cmd --add-port=1704/tcp` (add `--permanent` to keep it), or use another `PORT` |
 | `snapclient` 0.35: `Options '--host' and '--port' are deprecated` | Newer versions want the server URI as last argument (`tcp://HOST:PORT`); 0.31 (devcontainer) only knows `-h`/`-p` | Harmless: 0.35 still accepts them, so `listen.sh` and the tests keep `-h`/`-p` for both versions |
 | `snapserver` 0.35: `Exception: cannot open file: '…/none.conf'` | 0.35 refuses a missing `--config` file; 0.31 used built-in defaults for it | Fixed 2026-11-19: the tests and `listen.sh cpp-server` pass an empty config file (verified with 0.31 and 0.35). If snapserver fails to start in `make test-interop`, the test prints its output |

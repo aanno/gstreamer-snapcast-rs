@@ -163,6 +163,45 @@ gst-launch-1.0 audiotestsrc is-live=true ! audio/x-raw,format=S16LE,rate=48000,c
 gst-launch-1.0 snapsrc ! audioconvert ! audioresample ! autoaudiosink
 ```
 
+### Sender and receivers on different machines
+
+That's the normal multiroom setup, and it works as is: `snapsink`'s server listens on all
+interfaces (`0.0.0.0`, port `1704` by default). Install the plugins on each machine
+(`make install`), then:
+
+```sh
+# sender machine, e.g. 192.168.1.10: play something into snapsink
+gst-launch-1.0 audiotestsrc is-live=true ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
+    ! snapsink
+
+# each receiver machine: name the sender ...
+gst-launch-1.0 snapsrc host=192.168.1.10 ! audioconvert ! audioresample ! autoaudiosink
+# ... or let mDNS find it (empty host; add mdns-name=... if there are several servers).
+# The quotes must reach gst-launch, hence the single quotes around them.
+gst-launch-1.0 snapsrc 'host=""' ! audioconvert ! audioresample ! autoaudiosink
+# ... or use any Snapcast client, e.g. the C++ one
+snapclient -h 192.168.1.10
+```
+
+With the listening scripts: `make listen-send` on the sender, `make listen-recv HOST=192.168.1.10`
+(or `HOST=` for mDNS) on each receiver.
+
+Things to know:
+
+- **Firewall on the sender:** open the stream port for TCP, and mDNS if receivers should find
+  it by themselves. Fedora: `sudo firewall-cmd --add-port=1704/tcp --add-service=mdns`
+  (add `--permanent` to keep it).
+- **Synchronization** works across machines: every receiver plays each chunk at the sender's
+  server time + `buffer-ms`, using Snapcast's own time sync. No NTP or PTP setup is needed.
+- **`buffer-ms`** (on `snapsink`, default 1000) must cover the network: over Wi-Fi keep
+  ~1000 ms or more, on a wired LAN a few hundred ms are usually enough.
+- **Several receivers on one machine** (e.g. line-out and a Bluetooth speaker) are fine:
+  each `snapsrc` gets its own instance number automatically.
+- **`latency-ms`** on `snapsrc` compensates an output device's own delay (e.g. a Bluetooth
+  speaker), so that it stays in sync with the others.
+
+More in [docs/testing-host.md](docs/testing-host.md) (mDNS, several receivers, gotchas).
+
 ### Debugging
 
 `gstreamer-snapcast-rs.code-workspace` contains CodeLLDB launch
