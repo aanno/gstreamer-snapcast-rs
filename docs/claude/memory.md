@@ -5,18 +5,19 @@ update **State** and **Plan** when a step is finished, and add decisions with a 
 
 Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; devcontainer audio).
 
-## Resume here (2026-11-19, evening)
+## Resume here (2026-11-19, night)
 
-- P1 done; P3 (a) L13, (b) L12 and (c) start-up alignment are fixed and committed. The
-  user asked to work through the limitations **L2, L3, L4, L5, L7, L8** next (agent's
-  order, one commit each; snapcast-rs changes in the submodule fork with its own
-  conventions, then the pointer commit here). P2 (control plane) comes after that.
-- Host: everything green on Fedora 45 (`scripts/test-host.sh`); listening with
-  `scripts/host-play.sh` + `make listen-recv` (start the receiver first) is clean since the
-  frame-loss fix. Run `make install` again after plugin changes.
-
-- **Limitations done in this round:** L4, L5, L3, L2, L7, and L8 except mDNS (2026-11-19). The fork commits are local:
-  push `aanno/snapcast-rs` before others can build the new submodule pointer.
+- **Limitations round done** (one commit each): L4 FLAC timestamps, L5 (resolved by
+  measurement), L3 `TimeSyncUsable`, L2 `player_stream`, L7 snapsink pacing, L8 reconnect +
+  client id (automatic `instance`) + server volume/mute. Earlier the same day: L12, L13,
+  start-up alignment. **L8 mDNS is postponed** (Avahi packages, see the table).
+- **snapcast-rs fork commits are local only** (FLAC timestamps, `TimeSyncUsable`,
+  `player_stream`, client instance ids): push `aanno/snapcast-rs` before anyone else
+  builds this repo's submodule pointer; each is an upstream PR candidate.
+- The last full `make test-aloop` run after the volume change was interrupted (by the
+  user); the single timing tests after it passed. Run the suite once before relying on it.
+- Next per plan: P2 (control plane in `snapcast-engine`), then P4 (evaluation on the host:
+  `make install`, `scripts/test-host.sh`, listening with `scripts/host-play.sh`).
 
 ### Still open (2026-11-19)
 
@@ -209,7 +210,7 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 | L5 | ~~Time-sync updates shift PTS; no smoothing~~ | `snapsrc` | — | **Resolved 2026-11-19**: snapcast-rs already takes the median of 200 syncs (like C++); `align.rs` turns remaining steps into gradual frame corrections. Measured: 0 corrections in 3 drift runs, error stable at about −110 µs |
 | L6 | Sink input is only S16LE/S32LE; no S24_32LE | `snapsink` | `audioconvert` upstream | Plan step 3 |
 | L7 | ~~`sync=false` with a non-live source floods clients~~ | `snapsink` | — | **Fixed 2026-11-19**: snapsink paces itself, sending a chunk at most 200 ms ahead of its server timestamp (interruptible wait). Test `paces_a_non_live_source_without_sync` (before: 1.07 s of audio in 3 ms) |
-| L8 | No mDNS discovery in `snapsrc` | `snapsrc` | — | Open: snapcast-rs's mDNS needs `astro-dnssd` (Avahi/Bonjour, a system C library); it doesn't build in the devcontainer (no Avahi dev files), so it is untested here. **Done 2026-11-19:** reconnect (verified, test `snapsrc_resumes_after_a_server_restart`); client id (`host-id`, automatic `instance`, server appends `#instance`); **server volume/mute** applied as linear gain (ramped) with read-only `volume`/`mute` properties (test `snapsrc_applies_the_servers_volume_and_mute`; note: a C++ snapserver sends no audio to muted clients) |
+| L8 | No mDNS discovery in `snapsrc` | `snapsrc` | — | **Postponed (user, 2026-11-19)**: snapcast-rs's mDNS uses `astro-dnssd`, which needs the Avahi/Bonjour dev files; probably just a missing package (Debian e.g. `libavahi-compat-libdnssd-dev`, Fedora `avahi-compat-libdns_sd-devel`; to be checked). **Done 2026-11-19:** reconnect (test `snapsrc_resumes_after_a_server_restart`), client id (`host-id`, automatic `instance`, server appends `#instance`), server volume/mute (linear gain, ramped, read-only `volume`/`mute`; test `snapsrc_applies_the_servers_volume_and_mute`; a C++ snapserver sends no audio to muted clients) |
 | L9 | snapcast-rs `tracing` output is not visible in GStreamer logs | engine | — | Bridge `tracing` to the GStreamer debug log |
 | L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | Prototype: copy it into `snapcast-engine`. Later, upstream a control library crate |
 | L11 | snapcast-rs cannot serve **audio** over WebSocket (C++ snapserver: `/stream` on port 1780, used by Snapweb's player). Its WebSocket endpoint carries only JSON-RPC | snapcast-rs server | — | Only if a WebSocket audio client must work with `snapsink` (open question) |
