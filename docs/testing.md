@@ -79,7 +79,7 @@ means that receiver plays at the card's rate instead of the server's.
 | two `snapsrc`, card −300 ppm | **fails**: both have a rate error of +300 ppm, i.e. they follow the card, not the server |
 | `snapsrc` + C++ `snapclient`, card −300 ppm | **fails**: snapclient −1.9 ppm (follows the server), snapsrc +296 ppm, offset −62…−67 ms and growing |
 | snapsrc behind a high-latency sink (added later the same day) | **passes** since the fix: 0 gaps (before: 104 gaps of 96 ms) |
-| snapsrc against the server timeline (added later the same day) | **fails**: **+62 ms late**, constant; its pipeline latency is 65 ms |
+| snapsrc against the server timeline (added later the same day) | failed with +62 ms (pipeline latency 65 ms); **passes since fix 2** (L13): −3…+1 ms |
 | C++ snapclient against the server timeline | **passes**: +0.9…+2.1 ms |
 
 **On the host** (Fedora 45, GStreamer 1.28.9, C++ snapclient 0.35.0, same day) the results are
@@ -88,8 +88,10 @@ the same: snapsrc+snapsrc passes (offset 0 / −625 µs), snapsrc vs snapclient 
 server (+5…+18 ppm, less exact than 0.31's −1.9 ppm). In `make listen-all` on the host
 you hear the ticks, as a **mixture of single and double clicks**.
 
-The absolute reference settles the −62 ms between snapsrc and snapclient: **snapsrc
-plays late by its pipeline latency**, and the C++ client is on time.
+The absolute reference settled the −62 ms between snapsrc and snapclient: snapsrc played
+late by its pipeline latency, while the C++ client was on time. Since the fix (L13), snapsrc
++ C++ snapclient **pass** (+0.4 ms apart). Still failing: the two drift tests (L12), and
+sometimes two snapsrc (start-up alignment, up to ~4 ms).
 
 These are findings about the plugins, not test problems. See `docs/claude/memory.md`
 (State and Plan, P3) for their analysis.

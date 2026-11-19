@@ -66,7 +66,15 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 - **Absolute reference** (2026-11-19): every aloop test now also reports each receiver's
   offset against the server timeline (`CLOCK_MONOTONIC`, the server's clock). Result:
   snapsrc **+62 ms late** (pipeline latency 65 ms), C++ snapclient **+1 ms**. That confirms
-  hypothesis 2 (L13, P3 (a)); nothing was changed in snapsrc yet.
+  hypothesis 2 (L13, P3 (a)).
+- **Fixed 2026-11-19 (L13): snapsrc subtracts the pipeline latency from the PTS**, so the
+  sink (which renders at PTS + latency) outputs at the play-out time. A latency change
+  marks the next buffer DISCONT; the late check is `playout < now` again, now correct since
+  render time = play-out. Results: snapsrc against the server timeline −3…+1 ms (was +62),
+  **snapsrc + C++ snapclient in sync, +0.4 ms (passes; was −61 ms)**, still 0 gaps behind
+  a high-latency sink. Remaining: (c) start-up alignment. snapsrc lands at about +0.5…+0.9
+  *or* about −3 ms per run (constant within a run), so two snapsrc can be ~4 ms apart; the
+  step is close to the 5 ms dmix period. And (b) drift (L12).
 - **Fixed 2026-11-19: snapsrc lost frames behind `pulsesink`.** Music from a file "wobbled
   with short pauses" on the host. The cause: `create()` dropped frames with `playout < now`,
   but downstream sets the pace (a sink blocks until its ring buffer has room) and renders at
@@ -165,7 +173,7 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 | L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | Prototype: copy it into `snapcast-engine`. Later, upstream a control library crate |
 | L11 | snapcast-rs cannot serve **audio** over WebSocket (C++ snapserver: `/stream` on port 1780, used by Snapweb's player). Its WebSocket endpoint carries only JSON-RPC | snapcast-rs server | — | Only if a WebSocket audio client must work with `snapsink` (open question) |
 | L12 | `snapsrc` → `alsasink` (default `slave-method=skew`, `drift-tolerance` 40 ms) does not follow the server timeline when the sound card drifts; it jumps back only after 40 ms | `snapsrc` + audio sink | — | P3 (b) |
-| L13 | `snapsrc` plays **late by its pipeline latency** (aloop: +62 ms with 65 ms latency; the C++ snapclient is at +1 ms). That's the ~62 ms between them | `snapsrc` PTS | — | P3 (a): PTS = playout − pipeline latency |
+| L13 | ~~`snapsrc` plays late by its pipeline latency~~ (+62 ms with 65 ms latency) | `snapsrc` PTS | — | **Fixed 2026-11-19**: `pts = playout − pipeline latency`; now −3…+1 ms, in sync with the C++ snapclient (+0.4 ms) |
 
 ## Plan (2026-11-10, agreed)
 
@@ -205,16 +213,12 @@ property `control-port` (`0` = off); optional `snapweb-dir` for Snapweb's static
 auth, no persistence, no mDNS, no `Stream.AddStream` (L1).
 
 **P3. Timing robustness for the prototype:** make the aloop tests pass. That means
-(a) snapsrc's absolute offset. **Measured 2026-11-19** with the new absolute reference
-(`aloop_*_plays_on_the_server_timeline`): snapsrc is +62 ms late with 65 ms pipeline
-latency, and the C++ snapclient +0.9…+2.1 ms, which also validates the method. So the PTS
-must map play-out onto the *output* time: `pts = … − pipeline latency`. Only one latency
-can apply per pipeline, but it can change (Latency event), so the PTS must follow it.
-Check with both absolute tests and the offset test (snapsrc + snapclient within 1 ms).
+(a) ~~snapsrc's absolute offset~~: **done 2026-11-19** (L13, see State).
 (b) letting `snapsrc` playback follow the server against a drifting
 card: try `alsasink slave-method=resample` / a small `drift-tolerance`, or have `snapsrc`
 make the sink slave properly; document what users must set; (c) the start-up alignment
-(< 1 ms, but varying). Also smoothing for `diff_to_server` (L5) if the measurements
+(per run about +0.5…+0.9 ms or about −3 ms, so two snapsrc up to ~4 ms apart; look at
+`alsasink`'s ring buffer start and the period size first). Also smoothing for `diff_to_server` (L5) if the measurements
 call for it, plus reconnect in `snapsrc` (F5).
 L2/L3 stay engine workarounds, and L4 stays "pcm default".
 

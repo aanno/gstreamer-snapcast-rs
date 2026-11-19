@@ -4,15 +4,23 @@
 //!
 //! `snapcast-engine` hands out frames with a *local play-out time* in the
 //! monotonic Snapcast clock domain (server timestamp corrected by Snapcast's
-//! time sync plus the configured buffer). We turn that into a PTS by sampling
-//! the pipeline clock:
+//! time sync plus the configured buffer): the moment the sound must come out of
+//! the speaker. A sink renders a buffer at `PTS + pipeline latency` (and audio
+//! sinks compensate their device delay within that latency). So we stamp each
+//! buffer one pipeline latency *before* its play-out time, sampling the pipeline
+//! clock:
 //!
 //! ```text
-//! pts = clock.time() + (playout_usec - now_usec()) - base_time
+//! pts = clock.time() + (playout_usec - now_usec()) - base_time - latency
 //! ```
 //!
-//! so the audio sink, synchronizing on the pipeline clock, plays each sample
-//! at the right moment. Network arrival time is never used.
+//! Network arrival time is never used. The pipeline announces its latency with a
+//! LATENCY event, which sinks forward upstream; it arrives after the first
+//! buffers and may change, so a change marks the next buffer DISCONT.
+//!
+//! Without the `- latency` term, the sound came out one pipeline latency late:
+//! +62 ms behind `alsasink` (65 ms latency), while the C++ snapclient was on time
+//! (L13; `aloop_*_plays_on_the_server_timeline`, 2026-11-19).
 //!
 //! The element provides a monotonic system clock (the Snapcast clock domain)
 //! so that audio sinks slave their device clock to it, rather than the source
@@ -23,17 +31,14 @@
 //!
 //! Downstream decides when `create()` runs: an audio sink blocks the streaming
 //! thread until its ring buffer has room, so a frame may leave the client queue
-//! only shortly before (or even after) its play-out time. That is fine: a sink
-//! renders a buffer at `PTS + pipeline latency`, and the pipeline announces that
-//! latency with a LATENCY event, which sinks forward upstream. A frame is
-//! therefore only dropped (and the next buffer marked DISCONT) when
-//! `playout + latency < now`, e.g. frames queued while PAUSED.
+//! only shortly before its render time. A frame is late only once that render
+//! time (`PTS + latency`, i.e. its play-out time) has passed; it is then dropped
+//! and the next buffer marked DISCONT, e.g. frames queued while PAUSED.
 //!
-//! Checking `playout < now` alone dropped about every fourth 96 ms block behind
-//! `pulsesink` (130 ms latency, small ring buffer): audible gaps (2026-11-19).
-//!
-//! Open question (L13 in `docs/claude/memory.md`): the PTS maps play-out onto
-//! the sink's *sync point*, so the sound may come out one pipeline latency late.
+//! An earlier version stamped `pts = playout` but still checked `playout < now`:
+//! behind `pulsesink` (130 ms latency, small ring buffer) about every fourth
+//! 96 ms block was dropped as "late" although the sink could still render it
+//! (audible gaps, 2026-11-19; `aloop_snapsrc_loses_no_frames_behind_a_high_latency_sink`).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -89,6 +94,8 @@ struct Active {
     client: ClientHandle,
     info: Option<gst_audio::AudioInfo>,
     discont: bool,
+    /// The pipeline latency the last PTS was computed with.
+    latency_usec: i64,
 }
 
 pub struct SnapSrc {
@@ -266,6 +273,7 @@ impl BaseSrcImpl for SnapSrc {
             client,
             info: None,
             discont: true,
+            latency_usec: 0,
         });
         Ok(())
     }
@@ -338,25 +346,38 @@ impl PushSrcImpl for SnapSrc {
             };
 
             let now = now_usec();
-            // A frame is late only once the sink can no longer render it: it renders
-            // at PTS + pipeline latency (see "Late frames" in the module docs).
-            let latency_usec = (self.pipeline_latency_ns.load(Ordering::Relaxed) / 1000) as i64;
-            if frame.playout_usec + latency_usec < now {
+            // The sink renders at PTS + latency = play-out time (see "Timing" and
+            // "Late frames" in the module docs): late only once that has passed.
+            if frame.playout_usec < now {
                 gst::debug!(
                     CAT,
                     imp = self,
-                    "Dropping frame {} µs too late (pipeline latency {latency_usec} µs)",
+                    "Dropping frame {} µs too late",
                     now - frame.playout_usec
                 );
                 active.discont = true;
                 continue;
             }
+            let latency_usec = (self.pipeline_latency_ns.load(Ordering::Relaxed) / 1000) as i64;
+            if latency_usec != active.latency_usec {
+                // The PTS jumps by the difference: tell downstream.
+                gst::debug!(
+                    CAT,
+                    imp = self,
+                    "Pipeline latency {} -> {latency_usec} µs, play-out compensated",
+                    active.latency_usec
+                );
+                active.latency_usec = latency_usec;
+                active.discont = true;
+            }
             let (Some(clock), Some(base_time)) = (obj.clock(), obj.base_time()) else {
                 gst::element_imp_error!(self, gst::CoreError::Clock, ["No clock"]);
                 return Err(gst::FlowError::Error);
             };
-            // Signed: within the latency window, play-out may already be (just) past.
-            let pts_ns = clock.time().nseconds() as i64 + (frame.playout_usec - now) * 1000
+            // Signed: the PTS lies one latency before play-out, which may be before the
+            // pipeline started.
+            let pts_ns = clock.time().nseconds() as i64
+                + (frame.playout_usec - latency_usec - now) * 1000
                 - base_time.nseconds() as i64;
             let Ok(pts_ns) = u64::try_from(pts_ns) else {
                 continue; // before pipeline start
