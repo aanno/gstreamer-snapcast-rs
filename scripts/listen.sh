@@ -119,7 +119,9 @@ cpp_server() {
     # Global, not local: the EXIT trap below still needs it after wait_any exits.
     dir=$(mktemp -d)
     local fifo="$dir/fifo"
-    bg snapserver "$SNAPSERVER" --config "$dir/none.conf" --server.datadir="$dir" \
+    # Empty config: built-in defaults (0.35 refuses a missing file, 0.31 accepts both).
+    : > "$dir/snapserver.conf"
+    bg snapserver "$SNAPSERVER" --config "$dir/snapserver.conf" --server.datadir="$dir" \
         --stream.port="$PORT" --stream.codec="$CODEC" --stream.buffer="$BUFFER_MS" \
         --stream.source="pipe://$fifo?name=$STREAM&sampleformat=48000:16:2" --logging.sink=stdout
     for _ in $(seq 100); do [ -p "$fifo" ] && break; sleep 0.05; done

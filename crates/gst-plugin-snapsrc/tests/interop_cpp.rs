@@ -54,9 +54,13 @@ impl CppServer {
         // The server's own output goes to a file, so that a failing start can be diagnosed
         // (option names differ between snapserver versions).
         let log = std::fs::File::create(dir.join("snapserver.log")).unwrap();
+        // An empty config file: built-in defaults, everything else on the command line.
+        // A missing file works with 0.31, but 0.35 refuses to start without it.
+        let config = dir.join("snapserver.conf");
+        std::fs::write(&config, "").unwrap();
         let child = Command::new(&bin)
             .arg("--config")
-            .arg(dir.join("none.conf")) // does not exist: built-in defaults
+            .arg(&config)
             .arg(format!("--server.datadir={}", dir.display()))
             .args([
                 "--tcp.enabled=0",
