@@ -65,6 +65,12 @@ means that receiver plays at the card's rate instead of the server's.
 | two `snapsrc`, card −300 ppm | **fails**: both have a rate error of +300 ppm, i.e. they follow the card, not the server |
 | `snapsrc` + C++ `snapclient`, card −300 ppm | **fails**: snapclient −1.9 ppm (follows the server), snapsrc +296 ppm, offset −62…−67 ms and growing |
 
+**On the host** (Fedora 45, GStreamer 1.28.9, C++ snapclient 0.35.0, same day) the results are
+the same: snapsrc+snapsrc passes (offset 0 / −625 µs), snapsrc vs snapclient −61.8…−63.7 ms
+(constant), snapsrc follows the drifting card (+300 ppm), and snapclient 0.35 follows the
+server (+5…+18 ppm, less exact than 0.31's −1.9 ppm). In `make listen-all` on the host
+you hear the ticks, as a **mixture of single and double clicks**.
+
 These are findings about the plugins, not test problems. See `docs/claude/memory.md`
 (State and Plan, P3) for their analysis.
 

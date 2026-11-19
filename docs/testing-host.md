@@ -41,6 +41,9 @@ sudo make uninstall-system
 
 `make doctor` shows which `snapsink`/`snapsrc` files GStreamer actually loads.
 
+`scripts/test-host.sh` runs all of the following (install, doctor, check, interop, aloop,
+listen-all) and writes `*-host.log` files into the repo folder (git-ignored).
+
 ## Listening tests
 
 `make listen-*` runs [scripts/listen.sh](../scripts/listen.sh) with the installed plugins,
@@ -80,7 +83,10 @@ General ones are in [testing.md](testing.md#gotchas-both-environments).
 | Symptom | Cause | Solution |
 |---|---|---|
 | A receiver on another machine cannot connect | firewalld blocks the stream port | `sudo firewall-cmd --add-port=1704/tcp` (add `--permanent` to keep it), or use another `PORT` |
-| A newer C++ `snapclient` (0.34+) ignores the server or complains about `-h`/`-p` | Newer versions also take a URL | `SNAPCLIENT` with a wrapper, or run `snapclient tcp://HOST:PORT` by hand (not yet in `listen.sh`) |
+| `snapclient` 0.35: `Options '--host' and '--port' are deprecated` | Newer versions want the server URI as last argument (`tcp://HOST:PORT`); 0.31 (devcontainer) only knows `-h`/`-p` | Harmless: 0.35 still accepts them, so `listen.sh` and the tests keep `-h`/`-p` for both versions |
+| `make test-interop`: snapsrc tests fail with snapserver 0.35 (`timed out waiting for snapserver…`, 2026-11-19) | Not known yet; probably option names changed after 0.31 (`--stream.port`, `--tcp.enabled`, `--stream.source`, …) | The test now prints snapserver's own output when it doesn't start: run it again and look there. `listen-cpp-server` uses the same options |
+| `make check` stops after `cargo fmt --all -- --check` | Fedora's `cargo` package ships neither rustfmt nor clippy (likely; `make doctor` now checks both) | `sudo dnf install rustfmt clippy`, or use rustup |
+| A log written with `make … \| tee file` lacks the errors | cargo, the tests and gst-launch write to stderr | `make … 2>&1 \| tee file` (as in `scripts/test-host.sh`) |
 | `SRC=desktop` records silence or the microphone | It relies on the PipeWire property `stream.capture.sink=true`, i.e. on capturing the default sink's monitor | Check in `pw-top`/`qpwgraph` what `pipewiresrc` is linked to. `SRC=desktop` together with `listen-all` is refused (feedback loop) |
 | Echo with `SRC=desktop` | The desktop plays the source locally *and* the receivers play it again | Mute local playback, or play the receivers on another machine/output |
 | `test-aloop` (or the devcontainer) gets `Device or resource busy` on `hw:Loopback,…` | PipeWire/WirePlumber treats the loopback card as a normal sound card and may hold it open (e.g. if it became the default output) | Don't pick "Loopback" as output. To hide it from PipeWire completely, see the snippet below (not yet verified on the user's host) |

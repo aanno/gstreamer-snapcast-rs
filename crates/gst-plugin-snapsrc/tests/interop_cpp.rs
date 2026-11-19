@@ -10,7 +10,7 @@
 //! control ports are disabled, and its state goes to a temporary directory.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
 use gst::prelude::*;
@@ -51,11 +51,18 @@ impl CppServer {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let fifo = dir.join("fifo");
+        // The server's own output goes to a file, so that a failing start can be diagnosed
+        // (option names differ between snapserver versions).
+        let log = std::fs::File::create(dir.join("snapserver.log")).unwrap();
         let child = Command::new(&bin)
             .arg("--config")
             .arg(dir.join("none.conf")) // does not exist: built-in defaults
             .arg(format!("--server.datadir={}", dir.display()))
-            .args(["--tcp.enabled=0", "--http.enabled=0", "--logging.sink=null"])
+            .args([
+                "--tcp.enabled=0",
+                "--http.enabled=0",
+                "--logging.sink=stdout",
+            ])
             .arg(format!("--stream.port={port}"))
             .arg("--stream.bind_to_address=127.0.0.1")
             .arg(format!("--stream.codec={codec}"))
@@ -64,15 +71,39 @@ impl CppServer {
                 "--stream.source=pipe://{}?name=default&sampleformat=48000:16:2",
                 fifo.display()
             ))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
             .spawn()
             .unwrap_or_else(|e| panic!("cannot start '{bin}': {e}"));
-        let server = Self { child, dir };
-        wait_until("snapserver to create its pipe and listen", || {
-            fifo.exists() && std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
-        });
+        let mut server = Self { child, dir };
+        server.wait_ready(&bin, &fifo, port);
         server
+    }
+
+    /// Waits until the server created its pipe and listens, or panics with its log.
+    fn wait_ready(&mut self, bin: &str, fifo: &Path, port: u16) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let has_fifo = fifo.exists();
+            let listens = std::net::TcpStream::connect(("127.0.0.1", port)).is_ok();
+            if has_fifo && listens {
+                return;
+            }
+            let exited = self.child.try_wait().ok().flatten();
+            if exited.is_some() || Instant::now() >= deadline {
+                let log =
+                    std::fs::read_to_string(self.dir.join("snapserver.log")).unwrap_or_default();
+                let state = match exited {
+                    Some(status) => format!("exited with {status}"),
+                    None => "timed out".into(),
+                };
+                panic!(
+                    "'{bin}' {state} (pipe created: {has_fifo}, listening on {port}: {listens}).\n\
+                     Its output:\n{log}"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn fifo(&self) -> PathBuf {
@@ -85,14 +116,6 @@ impl Drop for CppServer {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !cond() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(20));
     }
 }
 

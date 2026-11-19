@@ -57,6 +57,15 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
   3. Card at −300 ppm: **`snapsrc` → `alsasink` follows the card, not the server** (rate error
      +300 ppm); the C++ snapclient follows the server (−1.9 ppm). The cause: `alsasink` default
      `slave-method=skew` with `drift-tolerance` 40 ms resyncs only after 40 ms of drift.
+  4. **Host** (2026-11-19, Fedora 45, GStreamer 1.28.9, C++ 0.35.0): same results. Offset
+     to snapclient −61.8…−63.7 ms, snapsrc follows the card, snapclient 0.35 +5…+18 ppm.
+- **First listening run on the host (F1)** (`make listen-all`, PipeWire): the ticks are
+  audible, as a **mixture of single and double clicks**. The constant ~62 ms from the aloop
+  test would sound like a steady double click, so via PipeWire the offset seems to
+  move (L12: snapsrc follows the real card's clock and resyncs). Not measured yet.
+- **Host interop:** `snapsink` → C++ snapclient 0.35 passes (pcm, flac). C++ snapserver
+  0.35 → `snapsrc` fails: snapserver doesn't come up with our options (0.31 syntax). The test
+  now prints the server's output; waiting for the next host run.
 - **Timing design** (details in the module docs of `snapsink/imp.rs`, `snapsrc/imp.rs` and
   `snapcast-engine/src/client.rs`). All engine times are µs of `CLOCK_MONOTONIC`
   (`snapcast_engine::now_usec`).

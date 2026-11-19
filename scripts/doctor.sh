@@ -6,15 +6,24 @@
 # Usage: scripts/doctor.sh [PLUGIN_DIR]
 set -u
 
-ok()   { printf '  \033[32mok\033[0m    %s\n' "$*"; }
-warn() { printf '  \033[33mwarn\033[0m  %s\n' "$*"; }
-miss() { printf '  \033[31mmiss\033[0m  %s\n' "$*"; }
+# Colors only on a terminal, so that `make doctor | tee file` gives plain text (NO_COLOR=1 to disable).
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    GREEN=$'\033[32m' YELLOW=$'\033[33m' RED=$'\033[31m' RESET=$'\033[0m'
+else
+    GREEN='' YELLOW='' RED='' RESET=''
+fi
+ok()   { printf '  %sok%s    %s\n' "$GREEN" "$RESET" "$*"; }
+warn() { printf '  %swarn%s  %s\n' "$YELLOW" "$RESET" "$*"; }
+miss() { printf '  %smiss%s  %s\n' "$RED" "$RESET" "$*"; }
 section() { printf '\n%s\n' "$*"; }
 
 plugin_dir=${1:-}
 
 section "Build tools"
 if command -v cargo >/dev/null; then ok "$(cargo --version)"; else miss "cargo (rustup or 'dnf install rust cargo')"; fi
+# make check needs both; Fedora's cargo package ships neither.
+if cargo fmt --version >/dev/null 2>&1; then ok "$(cargo fmt --version)"; else miss "rustfmt for make check (rustup component add rustfmt, or 'dnf install rustfmt')"; fi
+if cargo clippy --version >/dev/null 2>&1; then ok "$(cargo clippy --version)"; else miss "clippy for make check (rustup component add clippy, or 'dnf install clippy')"; fi
 if command -v pkg-config >/dev/null && pkg-config --exists gstreamer-1.0 gstreamer-audio-1.0; then
     ok "GStreamer dev files $(pkg-config --modversion gstreamer-1.0) (plugins dir: $(pkg-config --variable=pluginsdir gstreamer-1.0))"
 else
