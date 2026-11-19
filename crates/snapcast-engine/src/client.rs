@@ -12,21 +12,17 @@
 //! matching the C++ snapclient. `diff_to_server` comes from Snapcast's own
 //! time sync, so drift between the sender's and receiver's clocks is absorbed
 //! into the timestamps. Frames are withheld until the server settings have
-//! been received and time sync has had [`MIN_SYNC_TIME`] to collect samples
-//! (snapcast-client only reports completion after 50 quick syncs, i.e. 5 s;
-//! its median estimate keeps improving while we already play).
+//! been received and snapcast-client reports `TimeSyncUsable` (after
+//! `TIME_SYNC_USABLE_REPLIES` time-sync replies, about 0.5 s; its median
+//! estimate keeps improving while we already play). Until 2026-11-19 the engine
+//! guessed that point with a fixed 500 ms after connecting (L3).
 
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use snapcast_client::{ClientCommand, ClientConfig, ClientEvent, SnapClient};
 use tokio::sync::mpsc;
 
 use crate::{EngineError, runtime};
-
-/// Time sync runs every 100 ms during the first seconds after connecting;
-/// after this long, enough samples exist for a usable median.
-pub const MIN_SYNC_TIME: Duration = Duration::from_millis(500);
 
 /// Client options.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,8 +68,8 @@ pub struct PlayoutFrame {
 struct Status {
     /// Effective buffer: server buffer minus server and client latency.
     buffer_ms: Option<i32>,
+    /// snapcast-client reported a usable clock difference on this connection.
     time_synced: bool,
-    connected_at: Option<Instant>,
     last_error: Option<String>,
 }
 
@@ -132,11 +128,11 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
                 ClientEvent::ServerSettings {
                     buffer_ms, latency, ..
                 } => status.buffer_ms = Some((buffer_ms - latency - client_latency).max(0)),
-                ClientEvent::Connected { .. } => status.connected_at = Some(Instant::now()),
-                ClientEvent::TimeSyncComplete { .. } => status.time_synced = true,
+                ClientEvent::TimeSyncUsable { .. } | ClientEvent::TimeSyncComplete { .. } => {
+                    status.time_synced = true;
+                }
                 ClientEvent::Disconnected { reason } => {
                     status.time_synced = false;
-                    status.connected_at = None;
                     status.last_error = Some(reason);
                 }
                 _ => {}
@@ -173,11 +169,7 @@ impl ClientHandle {
 
             let (buffer_ms, synced) = {
                 let status = self.status.lock().unwrap();
-                let synced = status.time_synced
-                    || status
-                        .connected_at
-                        .is_some_and(|t| t.elapsed() >= MIN_SYNC_TIME);
-                (status.buffer_ms, synced)
+                (status.buffer_ms, status.time_synced)
             };
             let Some(buffer_ms) = buffer_ms.filter(|_| synced) else {
                 continue; // not yet schedulable
