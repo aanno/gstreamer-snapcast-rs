@@ -46,6 +46,7 @@ Snapdroid, ...) can connect to it, provided you use the PCM or FLAC codec.
 |            | `instance`    | `0` (auto)  | Tells several clients on one host apart (the server sees `<host-id>#<instance>`); `0` picks the lowest number no other snapsrc on this host uses |
 |            | `latency-ms`  | `0`         | Extra local output latency to compensate |
 |            | `host-id`     | (MAC address) | Unique client id towards the server, like snapclient's `--hostID` |
+|            | `volume`/`mute` | (read-only) | The server's volume (0–100) and mute for this client, applied to the audio |
 |            | `adjust-sink` | `true`      | Set `slave-method=resample` on the downstream audio sink (if at `skew`) |
 
 `snapsrc` outputs F32LE, timestamped so that the sound leaves the speaker at the

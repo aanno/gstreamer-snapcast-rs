@@ -20,7 +20,7 @@
 use std::sync::{Arc, Mutex};
 
 use snapcast_client::{ClientCommand, ClientConfig, ClientEvent, SnapClient};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::{EngineError, runtime};
 
@@ -71,6 +71,28 @@ pub struct PlayoutFrame {
     pub channels: u16,
     /// Local monotonic time in µs at which the first sample must be played.
     pub playout_usec: i64,
+    /// The server's volume for this client in percent (0–100) when the frame was
+    /// handed out; 100 until the first server settings arrive.
+    pub volume: u16,
+    /// Muted by the server.
+    pub muted: bool,
+}
+
+impl PlayoutFrame {
+    /// The linear gain to apply, see [`gain`].
+    pub fn gain(&self) -> f32 {
+        gain(self.volume, self.muted)
+    }
+}
+
+/// Linear gain for a Snapcast volume in percent, like snapclient-rs's software
+/// mixer: `percent / 100`, 0 when muted.
+pub fn gain(volume: u16, muted: bool) -> f32 {
+    if muted {
+        0.0
+    } else {
+        f32::from(volume.min(100)) / 100.0
+    }
 }
 
 #[derive(Debug, Default)]
@@ -90,6 +112,8 @@ pub struct ClientHandle {
     time_provider: Arc<Mutex<snapcast_client::time_provider::TimeProvider>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     instance: u32,
+    /// The server's volume (percent) and mute state for this client.
+    volume: watch::Receiver<(u16, bool)>,
     /// Keeps the instance number claimed while the client lives.
     _instance_lock: Option<instance::InstanceLock>,
 }
@@ -161,6 +185,9 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
     let cmd_tx = client.command_sender();
     let time_provider = Arc::clone(&client.time_provider);
     let status = Arc::new(Mutex::new(Status::default()));
+    // Full volume until the server says otherwise. Not part of `status`: it must reach
+    // consumers even without audio (a C++ snapserver sends none to muted clients).
+    let (volume_tx, volume_rx) = watch::channel((100u16, false));
 
     let rt = runtime();
     let run_status = Arc::clone(&status);
@@ -178,8 +205,17 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
             let mut status = event_status.lock().unwrap();
             match event {
                 ClientEvent::ServerSettings {
-                    buffer_ms, latency, ..
-                } => status.buffer_ms = Some((buffer_ms - latency - client_latency).max(0)),
+                    buffer_ms,
+                    latency,
+                    volume,
+                    muted,
+                } => {
+                    status.buffer_ms = Some((buffer_ms - latency - client_latency).max(0));
+                    volume_tx.send_replace((volume, muted));
+                }
+                ClientEvent::VolumeChanged { volume, muted } => {
+                    volume_tx.send_replace((volume, muted));
+                }
                 ClientEvent::TimeSyncUsable { .. } | ClientEvent::TimeSyncComplete { .. } => {
                     status.time_synced = true;
                 }
@@ -199,6 +235,7 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
         time_provider,
         tasks: vec![run_task, event_task],
         instance,
+        volume: volume_rx,
         _instance_lock: instance_lock,
     })
 }
@@ -211,6 +248,7 @@ impl ClientHandle {
         loop {
             let frame = self.audio_rx.recv().await?;
 
+            let (volume, muted) = *self.volume.borrow();
             let (buffer_ms, synced) = {
                 let status = self.status.lock().unwrap();
                 (status.buffer_ms, status.time_synced)
@@ -228,8 +266,16 @@ impl ClientHandle {
                 samples: frame.samples,
                 rate: frame.sample_rate,
                 channels: frame.channels,
+                volume,
+                muted,
             });
         }
+    }
+
+    /// The server's volume (percent) and mute state for this client, updated as the
+    /// server changes them, also while no audio flows (e.g. when muted).
+    pub fn volume(&self) -> watch::Receiver<(u16, bool)> {
+        self.volume.clone()
     }
 
     /// The instance number this client uses (see [`ClientOptions::instance`]).
@@ -280,5 +326,14 @@ mod tests {
         // Empty host id: snapcast-client's default (the MAC address).
         assert_eq!(client_config(&ClientOptions::default(), 1).host_id, "");
         assert_eq!(ClientOptions::default().instance, 0, "automatic by default");
+    }
+
+    #[test]
+    fn gain_is_linear_and_zero_when_muted() {
+        assert_eq!(gain(100, false), 1.0);
+        assert_eq!(gain(50, false), 0.5);
+        assert_eq!(gain(0, false), 0.0);
+        assert_eq!(gain(80, true), 0.0);
+        assert_eq!(gain(150, false), 1.0, "clamped");
     }
 }

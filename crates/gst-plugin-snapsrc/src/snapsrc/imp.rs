@@ -51,6 +51,15 @@
 //! equivalent for the sink, but it made snapsrc the clock provider even when
 //! another element's clock would have been the better choice.
 
+//! # Volume
+//!
+//! The server's volume and mute for this client (set by a controller, e.g. on a
+//! C++ snapserver) are applied to the samples as a linear gain, like
+//! snapclient-rs's software mixer, and shown in the read-only `volume`/`mute`
+//! properties. A change is ramped across one buffer instead of jumping (no click).
+//! The properties follow the client's events, not the audio: a C++ snapserver
+//! sends no audio at all to a muted client, so snapsrc then produces no buffers.
+//!
 //! # Late frames
 //!
 //! Downstream decides when `create()` runs: an audio sink blocks the streaming
@@ -64,7 +73,7 @@
 //! 96 ms block was dropped as "late" although the sink could still render it
 //! (audible gaps, 2026-11-19; `aloop_snapsrc_loses_no_frames_behind_a_high_latency_sink`).
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use gst::glib;
@@ -132,6 +141,8 @@ struct Active {
     aligner: Aligner,
     /// Buffers pushed, for periodic diagnostics.
     buffers: u64,
+    /// The gain applied at the end of the last buffer (start of the next ramp).
+    gain: f32,
 }
 
 pub struct SnapSrc {
@@ -142,6 +153,10 @@ pub struct SnapSrc {
     /// Pipeline latency in ns, from the LATENCY event. Not in `state`: `create()`
     /// holds that lock while waiting for data, and events must not block on it.
     pipeline_latency_ns: AtomicU64,
+    /// The server's volume (percent) and mute, for the read-only properties.
+    /// Atomics for the same reason as `pipeline_latency_ns`.
+    volume: AtomicU32,
+    muted: AtomicBool,
 }
 
 impl Default for SnapSrc {
@@ -151,11 +166,61 @@ impl Default for SnapSrc {
             state: Mutex::default(),
             flushing: watch::Sender::new(false),
             pipeline_latency_ns: AtomicU64::new(0),
+            volume: AtomicU32::new(100),
+            muted: AtomicBool::new(false),
         }
     }
 }
 
 impl SnapSrc {
+    /// Applies the server's volume (see "Volume"), ramping from the previous gain.
+    fn apply_volume(
+        &self,
+        active: &mut Active,
+        frame: &client::PlayoutFrame,
+        samples: &mut [f32],
+        channels: usize,
+    ) {
+        let (from, to) = (active.gain, frame.gain());
+        active.gain = to;
+        if from == 1.0 && to == 1.0 {
+            return;
+        }
+        let n = (samples.len() / channels.max(1)).max(1) as f32;
+        for (i, f) in samples.chunks_mut(channels.max(1)).enumerate() {
+            let g = from + (to - from) * (i as f32 + 1.0) / n;
+            for s in f {
+                *s *= g;
+            }
+        }
+    }
+
+    /// Keeps the read-only `volume`/`mute` properties up to date, independent of the
+    /// audio: a C++ snapserver sends no audio to a muted client. The task ends with
+    /// the client (its sender is dropped) or the element.
+    fn watch_volume(&self, mut volume: watch::Receiver<(u16, bool)>) {
+        let element = self.obj().downgrade();
+        runtime().spawn(async move {
+            loop {
+                let (percent, muted) = *volume.borrow_and_update();
+                let Some(obj) = element.upgrade() else { break };
+                let imp = obj.imp();
+                if imp.volume.swap(u32::from(percent), Ordering::Relaxed) != u32::from(percent) {
+                    gst::info!(CAT, obj = obj, "Server volume {percent} %");
+                    obj.notify("volume");
+                }
+                if imp.muted.swap(muted, Ordering::Relaxed) != muted {
+                    gst::info!(CAT, obj = obj, "Server mute {muted}");
+                    obj.notify("mute");
+                }
+                drop(obj);
+                if volume.changed().await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
     /// The first audio sink downstream, following pads into and out of bins
     /// (e.g. the child of `autoaudiosink`).
     fn downstream_audio_sink(&self) -> Option<gst_audio::AudioBaseSink> {
@@ -275,6 +340,19 @@ impl ObjectImpl for SnapSrc {
                     .default_value(Some(""))
                     .mutable_ready()
                     .build(),
+                glib::ParamSpecUInt::builder("volume")
+                    .nick("Volume")
+                    .blurb("The server's volume for this client in percent (applied)")
+                    .maximum(100)
+                    .default_value(100)
+                    .read_only()
+                    .build(),
+                glib::ParamSpecBoolean::builder("mute")
+                    .nick("Mute")
+                    .blurb("Muted by the server (applied)")
+                    .default_value(false)
+                    .read_only()
+                    .build(),
                 glib::ParamSpecBoolean::builder("adjust-sink")
                     .nick("Adjust sink")
                     .blurb(
@@ -319,6 +397,8 @@ impl ObjectImpl for SnapSrc {
             "latency-ms" => settings.latency_ms.to_value(),
             "adjust-sink" => settings.adjust_sink.to_value(),
             "host-id" => settings.host_id.to_value(),
+            "volume" => self.volume.load(Ordering::Relaxed).to_value(),
+            "mute" => self.muted.load(Ordering::Relaxed).to_value(),
             _ => unimplemented!(),
         }
     }
@@ -383,6 +463,7 @@ impl BaseSrcImpl for SnapSrc {
         let client = client::connect(&options)
             .map_err(|e| gst::error_msg!(gst::ResourceError::OpenRead, ["{e}"]))?;
         gst::info!(CAT, imp = self, "Client instance {}", client.instance());
+        self.watch_volume(client.volume());
         // Downstream elements change state before us, so the sink (and the child of
         // an autoaudiosink) exists by now.
         if settings.adjust_sink {
@@ -396,6 +477,7 @@ impl BaseSrcImpl for SnapSrc {
             latency_usec: 0,
             aligner: Aligner::default(),
             buffers: 0,
+            gain: 1.0,
         });
         Ok(())
     }
@@ -555,7 +637,8 @@ impl PushSrcImpl for SnapSrc {
                     error_ns / 1000.0
                 );
             }
-            let samples = align::stretch(&frame.samples, channels, place.correction);
+            let mut samples = align::stretch(&frame.samples, channels, place.correction);
+            self.apply_volume(active, &frame, &mut samples, channels);
             let Ok(pts_ns) = u64::try_from(place.pts_ns) else {
                 continue; // before pipeline start
             };

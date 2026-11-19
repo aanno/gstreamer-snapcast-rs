@@ -51,8 +51,10 @@ impl CppServer {
     /// Like `start`, with the JSON-RPC control port enabled if `control` is set.
     fn start_with_control(codec: &str, port: u16, control: Option<u16>) -> Self {
         let bin = std::env::var("SNAPSERVER").unwrap_or_else(|_| "snapserver".into());
-        let dir =
-            std::env::temp_dir().join(format!("snapsrc-interop-{}-{codec}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "snapsrc-interop-{}-{codec}-{port}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let fifo = dir.join("fifo");
@@ -301,4 +303,109 @@ fn two_snapsrc_on_one_host_get_distinct_client_ids() {
     assert_eq!(ids.len(), 2, "client ids: {ids:?}");
     let host = |id: &str| id.split('#').next().unwrap_or_default().to_owned();
     assert_eq!(host(&ids[0]), host(&ids[1]), "client ids: {ids:?}");
+}
+
+/// RMS of the left channel over the next `buffers` buffers (F32LE stereo).
+fn rms_of_next(appsink: &gst_app::AppSink, buffers: usize) -> f32 {
+    let mut left = Vec::new();
+    for _ in 0..buffers {
+        let sample = appsink
+            .try_pull_sample(gst::ClockTime::from_seconds(5))
+            .expect("no audio received from snapsrc");
+        let map = sample.buffer().unwrap().map_readable().unwrap();
+        left.extend(
+            map.as_chunks::<8>()
+                .0
+                .iter()
+                .map(|f| f32::from_le_bytes([f[0], f[1], f[2], f[3]])),
+        );
+    }
+    (left.iter().map(|s| s * s).sum::<f32>() / left.len().max(1) as f32).sqrt()
+}
+
+/// L8: a controller's volume and mute for the client (here via the C++ snapserver's
+/// JSON-RPC) are applied to the audio and shown in the read-only properties.
+/// Note: a C++ snapserver stops sending audio to a muted client altogether.
+#[test]
+#[ignore = "needs the C++ snapserver (make test-interop)"]
+fn snapsrc_applies_the_servers_volume_and_mute() {
+    init();
+    let (port, control) = (free_port(), free_port());
+    let server = CppServer::start_with_control("pcm", port, Some(control));
+    let feeder = feed(&server.fifo());
+    let receiver = gst::parse::launch(&format!(
+        "snapsrc name=src port={port} host-id=volume-test ! appsink name=out sync=false"
+    ))
+    .unwrap()
+    .downcast::<gst::Pipeline>()
+    .unwrap();
+    let src = receiver.by_name("src").unwrap();
+    let appsink = receiver
+        .by_name("out")
+        .unwrap()
+        .downcast::<gst_app::AppSink>()
+        .unwrap();
+    receiver.set_state(gst::State::Playing).unwrap();
+
+    let full = rms_of_next(&appsink, 40);
+    // The id is volume-test (instance 1) or volume-test#N (parallel tests).
+    let id = client_ids_with(
+        &json_rpc(
+            control,
+            r#"{"id":1,"jsonrpc":"2.0","method":"Server.GetStatus"}"#,
+        ),
+        "volume-test",
+    );
+    let set = |percent: u32, muted: bool| {
+        json_rpc(
+            control,
+            &format!(
+                r#"{{"id":2,"jsonrpc":"2.0","method":"Client.SetVolume","params":{{"id":"{id}","volume":{{"percent":{percent},"muted":{muted}}}}}}}"#
+            ),
+        )
+    };
+
+    set(50, false);
+    rms_of_next(&appsink, 20); // the ramp, and frames received before the change
+    let half = rms_of_next(&appsink, 40);
+    let (volume, mute) = (src.property::<u32>("volume"), src.property::<bool>("mute"));
+
+    // A C++ snapserver sends no audio to a muted client: the property must follow
+    // anyway, and audio must come back at the old volume after unmuting.
+    set(50, true);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !src.property::<bool>("mute") && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let mute_shown = src.property::<bool>("mute");
+    set(50, false);
+    // Skip what was queued before the mute, the ramp, and the resync.
+    rms_of_next(&appsink, 40);
+    let unmuted = rms_of_next(&appsink, 40);
+    let unmute_shown = !src.property::<bool>("mute");
+
+    receiver.set_state(gst::State::Null).unwrap();
+    feeder.set_state(gst::State::Null).unwrap();
+    drop(server);
+
+    assert!((full - 0.566).abs() < 0.02, "full volume RMS {full}");
+    assert!((half - 0.283).abs() < 0.02, "50 % RMS {half} (full {full})");
+    assert_eq!((volume, mute), (50, false));
+    assert!(mute_shown, "mute property not set while muted");
+    assert!(unmute_shown, "mute property still set after unmuting");
+    assert!(
+        (unmuted - 0.283).abs() < 0.02,
+        "RMS after unmuting {unmuted}"
+    );
+}
+
+/// The client id in a `Server.GetStatus` reply that starts with `host_id`.
+fn client_ids_with(status: &str, host_id: &str) -> String {
+    status
+        .split("\"id\":\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .find(|id| id.split('#').next() == Some(host_id))
+        .unwrap_or_else(|| panic!("no client {host_id} in {status}"))
+        .to_owned()
 }
