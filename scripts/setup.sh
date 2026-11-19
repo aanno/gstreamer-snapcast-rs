@@ -27,6 +27,9 @@ find /home/vscode/ -iname claude
 mkdir -p /home/vscode/.local/bin
 ln -s /home/vscode/.vscode-server/extensions/anthropic.claude-code-2.1.327-linux-x64/resources/native-binary/claude ~/.local/bin
 
+# xerj _outside_ devcontainer
+claude mcp add --transport http xerj "http://host.docker.internal:9201/mcp"
+
 # install xerj
 curl -fsSL https://xerj.org/get | sh -s -- --with-model
 # only for test (maybe it is better to run xerj inside the devcontainer)
@@ -40,3 +43,8 @@ XERJ_ALLOW_INSECURE_NETWORK_BIND=true xerj --facts-model-dir /home/tpasch/.local
 
 # MCP seems different, see
 # https://github.com/xerj-org/xerj/blob/main/docs/MODEL_QUICKSTART.md
+#
+# _outside_ devcontainer
+# start a MCP stdio server: xerj mcp
+# start a proxy
+pnpx -y supergateway --stdio "xerj mcp" --outputTransport streamableHttp --port 9201 --host 0.0.0.0
