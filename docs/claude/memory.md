@@ -15,7 +15,7 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
   `scripts/host-play.sh` + `make listen-recv` (start the receiver first) is clean since the
   frame-loss fix. Run `make install` again after plugin changes.
 
-- **Limitations done in this round:** L4, L5, L3 (2026-11-19). The fork commits are local:
+- **Limitations done in this round:** L4, L5, L3, L2 (2026-11-19). The fork commits are local:
   push `aanno/snapcast-rs` before others can build the new submodule pointer.
 
 ### Still open (2026-11-19)
@@ -198,7 +198,7 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 | # | Limitation | Where | Current workaround | Fix |
 |---|---|---|---|---|
 | L1 | Streams are fixed once `SnapServer::serve()` runs. `ServerCommand::AddStream` exists, but it always answers with an error after `run()`; `RemoveStream` works | snapcast-rs server | One stream per port; a second stream name fails with `StreamsFixed` | Upstream: runtime `add_stream` (**postponed**, 2026-11-10) |
-| L2 | The client's internal player `Stream` is never drained when you don't use its cpal player, so it grows without bound | snapcast-rs client | `ClientHandle::recv` clears it after each frame | Upstream: make the player stream optional |
+| L2 | ~~The client's internal player `Stream` grows without bound~~ | snapcast-rs client | — | **Fixed 2026-11-19**: fork commit `feat(client): option to not fill the player stream` (`ClientConfig::player_stream`, upstream PR candidate); the engine sets it to `false`, and the clear-after-each-frame workaround is gone |
 | L3 | ~~`TimeSyncComplete` arrives only after 50 quick syncs (5 s)~~ | snapcast-rs client | — | **Fixed 2026-11-19**: fork commit `feat(client): emit TimeSyncUsable once enough time-sync replies arrived` (after 5 replies, ~0.5 s; upstream PR candidate). The engine schedules on it; `MIN_SYNC_TIME` is gone |
 | L4 | ~~FLAC chunks stamped with the newest input's time~~ (confirmed: +12 ms late, C++ +6…+22 ms) | snapcast-rs server | — | **Fixed 2026-11-19** in the fork (`fix(server): stamp encoded chunks with the time of their first sample`, upstream PR candidate): `Encoder::pending_frames`; FLAC now +0.5 ms (snapsrc) / +0.9 ms (C++). Tests: `aloop_*_plays_flac_on_the_server_timeline` |
 | L5 | ~~Time-sync updates shift PTS; no smoothing~~ | `snapsrc` | — | **Resolved 2026-11-19**: snapcast-rs already takes the median of 200 syncs (like C++); `align.rs` turns remaining steps into gradual frame corrections. Measured: 0 corrections in 3 drift runs, error stable at about −110 µs |

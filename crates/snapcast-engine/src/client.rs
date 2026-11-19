@@ -79,7 +79,6 @@ pub struct ClientHandle {
     cmd_tx: mpsc::Sender<ClientCommand>,
     status: Arc<Mutex<Status>>,
     time_provider: Arc<Mutex<snapcast_client::time_provider::TimeProvider>>,
-    player_stream: Arc<Mutex<snapcast_client::stream::Stream>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -102,12 +101,14 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
         client_name: options.client_name.clone(),
         instance: options.instance,
         latency: options.latency_ms,
+        // We schedule the AudioFrames ourselves; nothing would drain the player
+        // stream (it grew without bound before this option existed, L2).
+        player_stream: false,
         ..ClientConfig::default()
     };
     let (mut client, mut events, audio_rx) = SnapClient::new(config);
     let cmd_tx = client.command_sender();
     let time_provider = Arc::clone(&client.time_provider);
-    let player_stream = Arc::clone(&client.stream);
     let status = Arc::new(Mutex::new(Status::default()));
 
     let rt = runtime();
@@ -145,7 +146,6 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
         cmd_tx,
         status,
         time_provider,
-        player_stream,
         tasks: vec![run_task, event_task],
     })
 }
@@ -157,15 +157,6 @@ impl ClientHandle {
     pub async fn recv(&mut self) -> Option<PlayoutFrame> {
         loop {
             let frame = self.audio_rx.recv().await?;
-
-            // snapcast-client also queues every chunk into its shared player
-            // `Stream`, which only a cpal-style player drains. We schedule via
-            // GStreamer instead, so keep that queue from growing unbounded.
-            // TODO(snapcast-rs): make the player stream optional upstream.
-            self.player_stream
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clear();
 
             let (buffer_ms, synced) = {
                 let status = self.status.lock().unwrap();
