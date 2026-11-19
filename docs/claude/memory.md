@@ -3,23 +3,40 @@
 Working memory for agents and humans continuing this project. Keep it current:
 update **State** and **Plan** when a step is finished, and add decisions with a date.
 
-Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; devcontainer audio).
+Last updated: 2026-11-19, late (P1 and P3 done, limitations round done incl. mDNS; P2 next).
 
-## Resume here (2026-11-19, night)
+## Resume here (2026-11-19, end of session)
 
-- **Limitations round done** (one commit each): L4 FLAC timestamps, L5 (resolved by
-  measurement), L3 `TimeSyncUsable`, L2 `player_stream`, L7 snapsink pacing, L8 reconnect +
-  client id (automatic `instance`) + server volume/mute. Earlier the same day: L12, L13,
-  start-up alignment. L8 mDNS done after all (pure Rust; the Avahi dev package is only needed for snapcast-rs's own `snapserver-rs` build).
-- **snapcast-rs fork commits are local only** (FLAC timestamps, `TimeSyncUsable`,
-  `player_stream`, client instance ids): push `aanno/snapcast-rs` before anyone else
-  builds this repo's submodule pointer; each is an upstream PR candidate.
-- The last full `make test-aloop` run after the volume change was interrupted (by the
-  user); the single timing tests after it passed. Run the suite once before relying on it.
-- Next per plan: P2 (control plane in `snapcast-engine`), then P4 (evaluation on the host:
-  `make install`, `scripts/test-host.sh`, listening with `scripts/host-play.sh`).
+**Where we are:** P1 (test tooling) and P3 (timing) are done; the limitations round
+(L2, L3, L4, L5, L7, L8 incl. mDNS, L12, L13) is done, one commit each. The fork commits
+for snapcast-rs are **pushed** to `aanno/snapcast-rs` (user, 2026-11-19): FLAC timestamps
+(L4), `TimeSyncUsable` (L3), `player_stream` (L2), client instance ids (L8). Each is an
+upstream PR candidate for `metaneutrons/snapcast-rs`; no PR opened yet.
+
+**Pending results** (the user runs them):
+1. `make test-aloop` in the devcontainer: the first full run since the volume and mDNS
+   changes. Expected: all 11 tests pass (bounds in `docs/testing.md`).
+2. `scripts/test-host.sh` on the Fedora host (now with `make test-mdns`, and the
+   `*-host.log` files land in the repo folder). After `make install`: listen to
+   `make listen-pair` (should no longer echo since L13) and `HOST=` (mDNS) receivers.
+
+**Next, in this order:**
+1. Look at the pending results; fix what fails, record gotchas in `docs/testing*.md`.
+2. **P2, control plane** (see Plan). First step in the fork: extract the control code of
+   `snapserver-rs` into a **new control library crate** (decision 2026-11-19: no copying).
+   Clarify with the user first: the crate's name, and whether HTTP/WebSocket (axum) is
+   in it or behind a feature (server side = sender, so it must stay Android-portable).
+3. P4, evaluation: F3 endurance (hours, memory/latency), F5 lifecycle
+   (PLAYING→PAUSED→PLAYING, stop/restart; reconnect is done), F1 listening, write-up.
+
+**Housekeeping:** the xerj index (`ax-docs`, `ax-snapcast-rs-docs`) is a snapshot from
+before today's code changes; reindex on the host before relying on it
+(`docs/claude/mcp-xerj.md`). The memory MCP server holds the cross-project gotchas from
+today (tags `gstreamer`, `snapcast`).
 
 ### Still open (2026-11-19)
+
+Not blocking, left over from P3:
 
 - **snapsrc + C++ snapclient under drift.** The test failed at a 1 ms tolerance because
   the **C++ snapclient** itself is +1.7…+2.0 ms off the server timeline on a −300 ppm card,
@@ -242,6 +259,11 @@ updated. Steps P1–P3 are mostly independent; P4 is the actual go/no-go.
   to volume, mute and latency take effect in `snapsrc` and in the C++ client;
 - F5 (lifecycle): PLAYING→PAUSED→PLAYING, stop/restart and a server restart (reconnect)
   all behave sanely.
+
+**Status (2026-11-19):** F1 partly (music through snapsrc on the host is clean; `listen-pair`
+not re-listened since the L13 fix). F2 met in the aloop tests (≤ 1 ms; under drift ≤ 2.5 ms
+because of the C++ reference). F3 not started. F4 needs P2. F5: reconnect done
+(`snapsrc_resumes_after_a_server_restart`), the rest untested.
 
 **P1. Test infrastructure** (done 2026-11-19)
 - Done: Makefile `install`/`uninstall` (release build into the per-user plugin dir
