@@ -65,8 +65,8 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
   move (L12: snapsrc follows the real card's clock and resyncs). Not measured yet.
 - **Host interop:** `snapsink` → C++ snapclient 0.35 passes (pcm, flac). C++ snapserver
   0.35 → `snapsrc` failed because 0.35 refuses a missing `--config` file. That's fixed
-  (an empty file), verified with 0.31 in the container and still to be confirmed on the
-  host. Host `make check` needs `dnf install rustfmt clippy`.
+  (an empty file). **Host fully green** since 2026-11-19 10:36: `make check` and all four
+  `make test-interop` tests (with 0.35). Host `make check` needed `dnf install rustfmt clippy`.
 - **Timing design** (details in the module docs of `snapsink/imp.rs`, `snapsrc/imp.rs` and
   `snapcast-engine/src/client.rs`). All engine times are µs of `CLOCK_MONOTONIC`
   (`snapcast_engine::now_usec`).

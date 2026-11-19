@@ -65,6 +65,64 @@ Other sources: `sine`, `desktop`, `mic` and `file:/path/to/audio`. Further setti
 `snapsrc`), `SOUNDCARD` (ALSA device of the C++ `snapclient`). All targets run until
 Ctrl+C. If one part dies, the script stops the others and says which one died.
 
+### Which audio path does each test use?
+
+Only `make test-aloop` uses ALSA directly, on purpose: it plays and records on the
+`snd-aloop` card and bypasses PipeWire, so that it can measure exactly. Everything you
+*hear* goes through PipeWire:
+
+| Test | Audio path on the host |
+|---|---|
+| `make test`, `make check`, `make test-interop` | no sound device at all |
+| `make test-aloop` | ALSA directly: `alsasink`/`alsasrc` on `hw:Loopback` |
+| `make listen-*`, snapsrc | `autoaudiosink` → `pulsesink` → PipeWire (pipewire-pulse) → speakers |
+| `make listen-*`, C++ snapclient | ALSA `default` → PipeWire (pipewire-alsa) → speakers |
+
+### Music through snapsink → snapsrc
+
+The quickest way to hear how well the plugins work with real music:
+
+1. **Install the current build** (or put `LOCAL=1` in front of the commands below):
+   ```sh
+   make install
+   ```
+2. **Terminal 1, the sender.** It plays a music file into `snapsink`; you hear nothing yet,
+   because `snapsink` only serves the stream:
+   ```sh
+   make listen-send SRC=file:$HOME/Music/some-song.flac
+   ```
+   FLAC, Ogg and MP3 work with the standard Fedora GStreamer packages. AAC/M4A needs
+   extra plugins (e.g. `gstreamer1-plugin-libav`).
+3. **Terminal 2, the receiver.** `snapsrc` plays through PipeWire to your speakers:
+   ```sh
+   make listen-recv
+   ```
+   After about a second (`BUFFER_MS=1000`) you should hear the music. This is the pure
+   snapsink → snapsrc path.
+4. **Listen for:** dropouts or crackles, changes of pitch or speed, and whether it stays
+   clean over several minutes.
+5. **Stop** with Ctrl+C in both terminals. The sender also stops by itself when the file
+   ends; the receiver keeps waiting for more.
+
+Variations:
+
+- `CODEC=flac` in terminal 1 sends FLAC instead of PCM. The receiver detects the codec by
+  itself.
+- `make listen-cpp-client` in terminal 2 (instead of `listen-recv`) plays the same stream
+  through the reference C++ client: an A/B comparison of the sound.
+- `make listen-pair` in terminal 2 plays both receivers at once. Because of the ~62 ms
+  offset between `snapsrc` and the C++ client (L13 in `docs/claude/memory.md`), expect an
+  **audible echo or flanging**. With `SRC=ticks`, the same shows as a mixture of single
+  and double clicks.
+
+Don't:
+
+- Use `SRC=desktop` with a receiver **on the same machine**: `snapsrc` plays into the
+  desktop output that the sender captures, which is a feedback loop. Use it only with
+  the receiver on another machine or another output (`SINK=…`).
+- Use music with `listen-all` and expect clean sound: it's `listen-pair` plus the sender,
+  so it has the same echo.
+
 By hand:
 
 ```sh
@@ -84,7 +142,7 @@ General ones are in [testing.md](testing.md#gotchas-both-environments).
 |---|---|---|
 | A receiver on another machine cannot connect | firewalld blocks the stream port | `sudo firewall-cmd --add-port=1704/tcp` (add `--permanent` to keep it), or use another `PORT` |
 | `snapclient` 0.35: `Options '--host' and '--port' are deprecated` | Newer versions want the server URI as last argument (`tcp://HOST:PORT`); 0.31 (devcontainer) only knows `-h`/`-p` | Harmless: 0.35 still accepts them, so `listen.sh` and the tests keep `-h`/`-p` for both versions |
-| `snapserver` 0.35: `Exception: cannot open file: '…/none.conf'` | 0.35 refuses a missing `--config` file; 0.31 used built-in defaults for it | Fixed 2026-11-19: the tests and `listen.sh cpp-server` pass an empty config file. If snapserver fails to start in `make test-interop`, the test prints its output |
+| `snapserver` 0.35: `Exception: cannot open file: '…/none.conf'` | 0.35 refuses a missing `--config` file; 0.31 used built-in defaults for it | Fixed 2026-11-19: the tests and `listen.sh cpp-server` pass an empty config file (verified with 0.31 and 0.35). If snapserver fails to start in `make test-interop`, the test prints its output |
 | `make check`: `error: no such command: fmt` | Fedora's `cargo` package ships neither rustfmt nor clippy (`make doctor` reports both as `miss`) | `sudo dnf install rustfmt clippy`, or use rustup |
 | A log written with `make … \| tee file` lacks the errors | cargo, the tests and gst-launch write to stderr | `make … 2>&1 \| tee file` (as in `scripts/test-host.sh`) |
 | `SRC=desktop` records silence or the microphone | It relies on the PipeWire property `stream.capture.sink=true`, i.e. on capturing the default sink's monitor | Check in `pw-top`/`qpwgraph` what `pipewiresrc` is linked to. `SRC=desktop` together with `listen-all` is refused (feedback loop) |
