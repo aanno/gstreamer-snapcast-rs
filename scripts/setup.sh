@@ -1,7 +1,24 @@
-# add (devcontainer local) vscode mcp server
-claude mcp add --transport http vscode http://localhost:3000/mcp
+###
+# NOT FOR REAL USE, only notes/templates for devcontainer setup
+###
 
-# add memory
+# install claude
+curl -fsSL https://claude.ai/install.sh | bash
+
+# add (devcontainer local) vscode mcp server
+# for connection to vs code _outside_ devcontainer, you need a proxy (e.g. supergateway)
+claude mcp add --transport http vscode http://host.docker.internal:3001/mcp
+
+# _outside_ devcontainer
+pnpx -y supergateway --streamableHttp "http://localhost:3000/mcp" --host 0.0.0.0 --port 3001 --outputTransport streamableHttp
+## warning
+# No API key is set, so anyone who can reach port 3001 on this machine (the gateway listens on every network interface) 
+# can use the MCP server. Set --apiKey or SUPERGATEWAY_API_KEY to require a key, or --host 127.0.0.1
+# 
+## problem (on vscode extension JuehangQin.vscode-mcp-server)
+# [supergateway] StreamableHttp error: Error: Bad Request: Unsupported protocol version: 2026-07-28 (supported versions: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07)
+
+# add memory - also works for connection to doobidoo-mcp-memory-server.yml _outside_ devcontainer
 claude mcp add --transport http memory http://host.docker.internal:8765/mcp
 
 # find claude (vscode devcontainer install)
