@@ -26,6 +26,9 @@ RUN apt-get update \
         # trixie ships 0.31.0; upstream (github.com/snapcast/snapcast) is at 0.34.0.
         snapserver \
         snapclient \
+        # Avahi's dns_sd compat library: snapcast-rs's own snapserver-rs (astro-dnssd)
+        # needs it to build. Our plugins use the pure-Rust mdns-sd instead.
+        libavahi-compat-libdnssd-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
