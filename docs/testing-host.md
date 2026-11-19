@@ -78,6 +78,31 @@ Only `make test-aloop` uses ALSA directly, on purpose: it plays and records on t
 | `make listen-*`, snapsrc | `autoaudiosink` → `pulsesink` → PipeWire (pipewire-pulse) → speakers |
 | `make listen-*`, C++ snapclient | ALSA `default` → PipeWire (pipewire-alsa) → speakers |
 
+### Switching between PipeWire and ALSA
+
+`SINK` (GStreamer sink of `snapsrc`) and `SOUNDCARD` (ALSA device of the C++
+`snapclient`) choose the path; they work with every `listen-*` target and `host-play.sh`:
+
+| Path | snapsrc | C++ snapclient |
+|---|---|---|
+| PipeWire via its PulseAudio layer (default) | `SINK=autoaudiosink` (→ `pulsesink`) | — |
+| PipeWire via its ALSA layer | `SINK=alsasink` | `SOUNDCARD=default` (default) |
+| PipeWire natively | `SINK=pipewiresink` (hangs on stop, see gotchas) | — |
+| **ALSA directly, without PipeWire** | `SINK="alsasink device=hw:1,0"` | `SOUNDCARD=hw:1,0` |
+
+For ALSA directly, find the card with `aplay -l`. PipeWire must not hold it at the same
+time (`fuser -v /dev/snd/*`): pause it for the test (`systemctl --user stop pipewire.socket
+pipewire.service wireplumber.service`, then `start` again), or use a second sound card or
+USB headset. `hw:` devices accept only formats the hardware supports; `plughw:1,0`
+converts automatically. Example, both receivers directly on ALSA:
+
+```sh
+make listen-pair SINK="alsasink device=plughw:1,0" SOUNDCARD=plughw:1,0
+```
+
+Only one program can use a `hw:` device at a time, so for two receivers on one card use
+`dmix` (like `.devcontainer/asoundrc`), or put them on different cards.
+
 ### Music through snapsink → snapsrc
 
 The quickest way to hear how well the plugins work with real music:
@@ -87,9 +112,11 @@ The quickest way to hear how well the plugins work with real music:
    make install
    ```
 2. **Terminal 1, the sender.** It plays a music file into `snapsink`; you hear nothing yet,
-   because `snapsink` only serves the stream:
+   because `snapsink` only serves the stream. Without an argument, `host-play.sh` uses the
+   CC0 jazz loop in [assets/audio](../assets/audio/README.md) (38 s, 44.1 kHz):
    ```sh
-   make listen-send SRC=file:$HOME/Music/some-song.flac
+   scripts/host-play.sh                              # or: scripts/host-play.sh ~/Music/song.flac
+   make listen-send SRC=file:$HOME/Music/song.flac   # the same, by hand
    ```
    FLAC, Ogg and MP3 work with the standard Fedora GStreamer packages. AAC/M4A needs
    extra plugins (e.g. `gstreamer1-plugin-libav`).
@@ -148,6 +175,7 @@ General ones are in [testing.md](testing.md#gotchas-both-environments).
 | `SRC=desktop` records silence or the microphone | It relies on the PipeWire property `stream.capture.sink=true`, i.e. on capturing the default sink's monitor | Check in `pw-top`/`qpwgraph` what `pipewiresrc` is linked to. `SRC=desktop` together with `listen-all` is refused (feedback loop) |
 | Echo with `SRC=desktop` | The desktop plays the source locally *and* the receivers play it again | Mute local playback, or play the receivers on another machine/output |
 | `test-aloop` (or the devcontainer) gets `Device or resource busy` on `hw:Loopback,…` | PipeWire/WirePlumber treats the loopback card as a normal sound card and may hold it open (e.g. if it became the default output) | Don't pick "Loopback" as output. To hide it from PipeWire completely, see the snippet below (not yet verified on the user's host) |
+| Music (or ticks) through `snapsrc` → `pulsesink` "wobbles" with short pauses; `GST_DEBUG=snapsrc:5` shows `Dropping frame … too late` | Fixed 2026-11-19: snapsrc dropped frames as late without counting the pipeline latency (`pulsesink`: 130 ms). About every fourth 96 ms block was lost. Regression test: `aloop_snapsrc_loses_no_frames_behind_a_high_latency_sink` | `make install` again. For an older build: `SINK="queue max-size-time=3000000000 max-size-buffers=0 max-size-bytes=0 ! pulsesink"` |
 | `pipewiresink` hangs when the pipeline stops (`Setting pipeline to NULL ...`) | Deadlock in GStreamer's PipeWire plugin (seen with PipeWire 1.4.2, also with `audiotestsrc`, so not ours) | Use `autoaudiosink` (→ `pulsesink` via pipewire-pulse) or `alsasink`. The default `SINK=autoaudiosink` is fine |
 | Plugin changes don't show up | `GST_PLUGIN_PATH` points at a build that takes precedence over the installed copy, or vice versa | `make doctor`; `make install` after changes, or `LOCAL=1` |
 

@@ -170,8 +170,13 @@ impl Drop for Running {
 }
 
 fn start_sender() -> (Running, u32) {
+    start_sender_with("audiotestsrc is-live=true wave=ticks freq=1000 volume=0.8")
+}
+
+/// Starts `source ! S16LE 48 kHz stereo ! snapsink` and returns its port.
+fn start_sender_with(source: &str) -> (Running, u32) {
     let sender = Running::start(&format!(
-        "audiotestsrc is-live=true wave=ticks freq=1000 volume=0.8 \
+        "{source} \
          ! audio/x-raw,format=S16LE,rate={RATE},channels=2 \
          ! snapsink name=sink port=0 buffer-ms={BUFFER_MS}"
     ));
@@ -517,4 +522,80 @@ fn aloop_two_snapsrc_follow_a_drifting_card() {
 #[ignore = "needs snd-aloop and the C++ snapclient (make test-aloop)"]
 fn aloop_snapsrc_and_cpp_snapclient_follow_a_drifting_card() {
     run(Kind::Snapsrc, Kind::CppSnapclient, Some(DRIFT));
+}
+
+/// Silent gaps (at least 2 ms below 1 % full scale) in a continuous signal, after its
+/// first loud sample: `(start frame, length in frames)`.
+fn silent_gaps(channel: &[i16]) -> Vec<(usize, usize)> {
+    const QUIET: u16 = 328;
+    const MIN_FRAMES: usize = RATE as usize / 500;
+    let Some(start) = channel
+        .iter()
+        .position(|v| v.unsigned_abs() > THRESHOLD as u16)
+    else {
+        return vec![(0, channel.len())];
+    };
+    let mut gaps = Vec::new();
+    let mut run = 0;
+    for (i, v) in channel.iter().enumerate().skip(start) {
+        if v.unsigned_abs() < QUIET {
+            run += 1;
+            continue;
+        }
+        if run >= MIN_FRAMES {
+            gaps.push((i - run, run));
+        }
+        run = 0;
+    }
+    gaps
+}
+
+/// Regression test for frames that snapsrc dropped as "late" although the sink could
+/// still render them (2026-11-19, audible gaps behind `pulsesink` on PipeWire).
+///
+/// The bug needs a pipeline latency larger than the sink's buffer: the sink then lets
+/// `create()` run only after a frame's play-out time, but renders it at PTS + latency.
+/// `pulsesink` behaves like that (130 ms latency); here it is forced with
+/// `set_latency(150 ms)` and a 40 ms `alsasink` buffer. The sender uses 96 ms buffers,
+/// like a decoded FLAC file. A continuous sine must arrive without silent gaps.
+#[test]
+#[ignore = "needs snd-aloop (make test-aloop)"]
+fn aloop_snapsrc_loses_no_frames_behind_a_high_latency_sink() {
+    init();
+    let card = card();
+    let seconds: u64 = env_or("ALOOP_SECONDS", 20);
+
+    let (_sender, port) =
+        start_sender_with("audiotestsrc is-live=true freq=440 volume=0.8 samplesperbuffer=4608");
+    let receiver = pipeline(&format!(
+        "snapsrc port={port} client-name=aloop-latency \
+         ! audioconvert ! audioresample \
+         ! alsasink device={} buffer-time=40000 latency-time=10000",
+        Side::Left.pcm()
+    ));
+    receiver.set_latency(gst::ClockTime::from_mseconds(150));
+    play(&receiver);
+    let mut receiver = Receiver::Snapsrc(Running(receiver));
+    let cap = capture(&card, seconds, &mut [("snapsrc", &mut receiver)]);
+    drop(receiver);
+
+    let gaps = silent_gaps(&cap.left);
+    let total_ms: usize = gaps.iter().map(|(_, n)| n * 1000 / RATE as usize).sum();
+    eprintln!(
+        "aloop: high-latency sink: {} silent gaps ({total_ms} ms) in {seconds} s{}",
+        gaps.len(),
+        gaps.iter()
+            .take(5)
+            .map(|(at, n)| format!(
+                ", {:.2} s: {} ms",
+                *at as f64 / f64::from(RATE),
+                n * 1000 / RATE as usize
+            ))
+            .collect::<String>()
+    );
+    assert!(
+        gaps.is_empty(),
+        "snapsrc lost audio: {} silent gaps ({total_ms} ms)",
+        gaps.len()
+    );
 }

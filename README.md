@@ -58,7 +58,8 @@ first).
 ```text
 .
 ├── Cargo.toml                 # Cargo workspace (excludes snapcast-rs/)
-├── scripts/                   # doctor.sh, listen.sh (used by the Makefile)
+├── scripts/                   # doctor.sh, listen.sh (used by the Makefile), host test/play helpers
+├── assets/audio/              # CC0 music for listening tests (see its README)
 ├── crates/
 │   ├── snapcast-engine/       # GStreamer-free glue: tokio runtime, shared server/client lifecycle
 │   ├── gst-plugin-snapsink/   # -> libgstsnapsink.so  (element: snapsink)

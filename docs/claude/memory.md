@@ -63,6 +63,15 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
   audible, as a **mixture of single and double clicks**. The constant ~62 ms from the aloop
   test would sound like a steady double click, so via PipeWire the offset seems to
   move (L12: snapsrc follows the real card's clock and resyncs). Not measured yet.
+- **Fixed 2026-11-19: snapsrc lost frames behind `pulsesink`.** Music from a file "wobbled
+  with short pauses" on the host. The cause: `create()` dropped frames with `playout < now`,
+  but downstream sets the pace (a sink blocks until its ring buffer has room) and renders at
+  PTS + pipeline latency (`pulsesink`: 130 ms). So about every fourth 96 ms block was dropped.
+  Now snapsrc stores the latency from the LATENCY event and drops only when
+  `playout + latency < now`; the PTS is computed signed. Regression test:
+  `aloop_snapsrc_loses_no_frames_behind_a_high_latency_sink` (104 gaps before, 0 after).
+- **Test audio:** `assets/audio/freejazz_medley.flac` (CC0, OpenGameArt, 38 s, 44.1 kHz) for
+  listening tests, used by `scripts/host-play.sh`.
 - **Host interop:** `snapsink` → C++ snapclient 0.35 passes (pcm, flac). C++ snapserver
   0.35 → `snapsrc` failed because 0.35 refuses a missing `--config` file. That's fixed
   (an empty file). **Host fully green** since 2026-11-19 10:36: `make check` and all four
@@ -192,8 +201,11 @@ property `control-port` (`0` = off); optional `snapweb-dir` for Snapweb's static
 auth, no persistence, no mDNS, no `Stream.AddStream` (L1).
 
 **P3. Timing robustness for the prototype:** make the aloop tests pass. That means
-(a) understanding the −60.6 ms offset to the C++ snapclient (add an absolute reference
-to the test first); (b) letting `snapsrc` playback follow the server against a drifting
+(a) understanding the −60.6 ms offset to the C++ snapclient. Hypothesis (2026-11-19):
+snapsrc's PTS ignores the pipeline latency, so its sound comes out one pipeline latency
+late. Doubt: `alsasink` reports 110 ms but the offset is ~62 ms, so snapclient may be off
+too. Before changing anything, add an absolute reference to the test (each receiver
+against the server timeline); (b) letting `snapsrc` playback follow the server against a drifting
 card: try `alsasink slave-method=resample` / a small `drift-tolerance`, or have `snapsrc`
 make the sink slave properly; document what users must set; (c) the start-up alignment
 (< 1 ms, but varying). Also smoothing for `diff_to_server` (L5) if the measurements

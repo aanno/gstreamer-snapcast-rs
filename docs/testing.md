@@ -41,6 +41,11 @@ audiotestsrc wave=ticks ! snapsink (embedded server)
   that follows the Snapcast timeline must still produce one tick per second of
   `CLOCK_MONOTONIC`. The test measures the card's real rate by a linear fit and reports
   each receiver's **rate error** in ppm.
+- **Lost frames:** `aloop_snapsrc_loses_no_frames_behind_a_high_latency_sink` sends a
+  continuous sine in 96 ms buffers (like a decoded FLAC file) to one snapsrc whose
+  pipeline latency (150 ms) is larger than its `alsasink` buffer (40 ms), like `pulsesink`,
+  and checks the recording for silent gaps. Before the 2026-11-19 fix it found 104 gaps of
+  96 ms in 20 s.
 - The tests run one at a time (`--test-threads=1`) because they share subdevice 0. Each takes about 25 s.
 - Settings: `ALOOP_CARD` (default `Loopback`), `ALOOP_SECONDS` (20), `ALOOP_TOLERANCE_US`
   (1000), `ALOOP_TOLERANCE_PPM` (100), `SNAPCLIENT`.
@@ -64,6 +69,7 @@ means that receiver plays at the card's rate instead of the server's.
 | `snapsrc` + C++ `snapclient`, no drift | **fails**: constant −60.6 ms (snapclient plays earlier) |
 | two `snapsrc`, card −300 ppm | **fails**: both have a rate error of +300 ppm, i.e. they follow the card, not the server |
 | `snapsrc` + C++ `snapclient`, card −300 ppm | **fails**: snapclient −1.9 ppm (follows the server), snapsrc +296 ppm, offset −62…−67 ms and growing |
+| snapsrc behind a high-latency sink (added later the same day) | **passes** since the fix: 0 gaps (before: 104 gaps of 96 ms) |
 
 **On the host** (Fedora 45, GStreamer 1.28.9, C++ snapclient 0.35.0, same day) the results are
 the same: snapsrc+snapsrc passes (offset 0 / −625 µs), snapsrc vs snapclient −61.8…−63.7 ms

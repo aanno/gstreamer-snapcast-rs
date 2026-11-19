@@ -17,9 +17,25 @@
 //! The element provides a monotonic system clock (the Snapcast clock domain)
 //! so that audio sinks slave their device clock to it, rather than the source
 //! drifting against an audio device clock. Buffers arrive roughly `buffer-ms`
-//! ahead of their PTS; frames whose play-out time already passed (e.g. queued
-//! while PAUSED) are dropped.
+//! ahead of their PTS.
+//!
+//! # Late frames
+//!
+//! Downstream decides when `create()` runs: an audio sink blocks the streaming
+//! thread until its ring buffer has room, so a frame may leave the client queue
+//! only shortly before (or even after) its play-out time. That is fine: a sink
+//! renders a buffer at `PTS + pipeline latency`, and the pipeline announces that
+//! latency with a LATENCY event, which sinks forward upstream. A frame is
+//! therefore only dropped (and the next buffer marked DISCONT) when
+//! `playout + latency < now`, e.g. frames queued while PAUSED.
+//!
+//! Checking `playout < now` alone dropped about every fourth 96 ms block behind
+//! `pulsesink` (130 ms latency, small ring buffer): audible gaps (2026-11-19).
+//!
+//! Open question (L13 in `docs/claude/memory.md`): the PTS maps play-out onto
+//! the sink's *sync point*, so the sound may come out one pipeline latency late.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use gst::glib;
@@ -81,6 +97,9 @@ pub struct SnapSrc {
     /// Set by `unlock()` to interrupt a blocking `create()`.
     flushing: watch::Sender<bool>,
     clock: gst::Clock,
+    /// Pipeline latency in ns, from the LATENCY event. Not in `state`: `create()`
+    /// holds that lock while waiting for data, and events must not block on it.
+    pipeline_latency_ns: AtomicU64,
 }
 
 impl Default for SnapSrc {
@@ -94,6 +113,7 @@ impl Default for SnapSrc {
             state: Mutex::default(),
             flushing: watch::Sender::new(false),
             clock,
+            pipeline_latency_ns: AtomicU64::new(0),
         }
     }
 }
@@ -268,6 +288,15 @@ impl BaseSrcImpl for SnapSrc {
         BaseSrcImplExt::parent_query(self, query)
     }
 
+    fn event(&self, event: &gst::Event) -> bool {
+        if let gst::EventView::Latency(e) = event.view() {
+            gst::debug!(CAT, imp = self, "Pipeline latency {}", e.latency());
+            self.pipeline_latency_ns
+                .store(e.latency().nseconds(), Ordering::Relaxed);
+        }
+        self.parent_event(event)
+    }
+
     fn unlock(&self) -> Result<(), gst::ErrorMessage> {
         self.flushing.send_replace(true);
         Ok(())
@@ -309,11 +338,14 @@ impl PushSrcImpl for SnapSrc {
             };
 
             let now = now_usec();
-            if frame.playout_usec < now {
+            // A frame is late only once the sink can no longer render it: it renders
+            // at PTS + pipeline latency (see "Late frames" in the module docs).
+            let latency_usec = (self.pipeline_latency_ns.load(Ordering::Relaxed) / 1000) as i64;
+            if frame.playout_usec + latency_usec < now {
                 gst::debug!(
                     CAT,
                     imp = self,
-                    "Dropping frame {} µs too late",
+                    "Dropping frame {} µs too late (pipeline latency {latency_usec} µs)",
                     now - frame.playout_usec
                 );
                 active.discont = true;
@@ -323,10 +355,13 @@ impl PushSrcImpl for SnapSrc {
                 gst::element_imp_error!(self, gst::CoreError::Clock, ["No clock"]);
                 return Err(gst::FlowError::Error);
             };
-            let ahead = gst::ClockTime::from_useconds((frame.playout_usec - now) as u64);
-            let Some(pts) = (clock.time() + ahead).checked_sub(base_time) else {
+            // Signed: within the latency window, play-out may already be (just) past.
+            let pts_ns = clock.time().nseconds() as i64 + (frame.playout_usec - now) * 1000
+                - base_time.nseconds() as i64;
+            let Ok(pts_ns) = u64::try_from(pts_ns) else {
                 continue; // before pipeline start
             };
+            let pts = gst::ClockTime::from_nseconds(pts_ns);
 
             let info = gst_audio::AudioInfo::builder(
                 gst_audio::AudioFormat::F32le,
