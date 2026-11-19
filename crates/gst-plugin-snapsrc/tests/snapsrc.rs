@@ -19,4 +19,16 @@ fn element_has_default_properties() {
     assert_eq!(src.property::<String>("host"), "127.0.0.1");
     assert_eq!(src.property::<u32>("port"), 1704);
     assert!(src.downcast_ref::<gst_base::BaseSrc>().unwrap().is_live());
+    assert_eq!(src.property::<String>("host-id"), "");
+    assert!(src.property::<bool>("adjust-sink"));
+}
+
+#[test]
+fn host_id_is_settable() {
+    init();
+    let src = gst::ElementFactory::make("snapsrc")
+        .property("host-id", "kitchen-pi")
+        .build()
+        .unwrap();
+    assert_eq!(src.property::<String>("host-id"), "kitchen-pi");
 }

@@ -37,6 +37,9 @@ pub struct ClientOptions {
     pub instance: u32,
     /// Additional local latency in milliseconds (e.g. of the audio device).
     pub latency_ms: i32,
+    /// Unique host id sent to the server; empty means snapcast-client's default,
+    /// the MAC address. Like the C++ snapclient's `--hostID`.
+    pub host_id: String,
 }
 
 impl Default for ClientOptions {
@@ -47,6 +50,7 @@ impl Default for ClientOptions {
             client_name: "gst-snapsrc".to_owned(),
             instance: 1,
             latency_ms: 0,
+            host_id: String::new(),
         }
     }
 }
@@ -90,23 +94,28 @@ impl std::fmt::Debug for ClientHandle {
     }
 }
 
-/// Start a client connecting to `options.host:options.port`.
-pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
-    if options.host.is_empty() {
-        return Err(EngineError::InvalidConfig("host must not be empty".into()));
-    }
-    let config = ClientConfig {
+/// The snapcast-client configuration for `options`.
+fn client_config(options: &ClientOptions) -> ClientConfig {
+    ClientConfig {
         host: options.host.clone(),
         port: options.port,
         client_name: options.client_name.clone(),
         instance: options.instance,
         latency: options.latency_ms,
+        host_id: options.host_id.clone(),
         // We schedule the AudioFrames ourselves; nothing would drain the player
         // stream (it grew without bound before this option existed, L2).
         player_stream: false,
         ..ClientConfig::default()
-    };
-    let (mut client, mut events, audio_rx) = SnapClient::new(config);
+    }
+}
+
+/// Start a client connecting to `options.host:options.port`.
+pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
+    if options.host.is_empty() {
+        return Err(EngineError::InvalidConfig("host must not be empty".into()));
+    }
+    let (mut client, mut events, audio_rx) = SnapClient::new(client_config(options));
     let cmd_tx = client.command_sender();
     let time_provider = Arc::clone(&client.time_provider);
     let status = Arc::new(Mutex::new(Status::default()));
@@ -191,5 +200,35 @@ impl Drop for ClientHandle {
         for task in &self.tasks {
             task.abort();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn options_map_to_the_client_config() {
+        let options = ClientOptions {
+            host: "10.0.0.2".into(),
+            port: 1800,
+            client_name: "kitchen".into(),
+            instance: 3,
+            latency_ms: 40,
+            host_id: "kitchen-pi".into(),
+        };
+        let c = client_config(&options);
+        assert_eq!((c.host.as_str(), c.port), ("10.0.0.2", 1800));
+        assert_eq!(
+            (c.client_name.as_str(), c.instance, c.latency),
+            ("kitchen", 3, 40)
+        );
+        assert_eq!(c.host_id, "kitchen-pi");
+        assert!(
+            !c.player_stream,
+            "the engine never drains the player stream"
+        );
+        // Empty host id: snapcast-client's default (the MAC address).
+        assert_eq!(client_config(&ClientOptions::default()).host_id, "");
     }
 }

@@ -103,6 +103,7 @@ struct Settings {
     instance: u32,
     latency_ms: i32,
     adjust_sink: bool,
+    host_id: String,
 }
 
 impl Default for Settings {
@@ -114,6 +115,7 @@ impl Default for Settings {
             instance: DEFAULT_INSTANCE,
             latency_ms: DEFAULT_LATENCY_MS,
             adjust_sink: DEFAULT_ADJUST_SINK,
+            host_id: String::new(),
         }
     }
 }
@@ -259,6 +261,15 @@ impl ObjectImpl for SnapSrc {
                     .default_value(DEFAULT_LATENCY_MS)
                     .mutable_ready()
                     .build(),
+                glib::ParamSpecString::builder("host-id")
+                    .nick("Host id")
+                    .blurb(
+                        "Unique id of this client towards the server (empty: the MAC \
+                         address), like snapclient's --hostID",
+                    )
+                    .default_value(Some(""))
+                    .mutable_ready()
+                    .build(),
                 glib::ParamSpecBoolean::builder("adjust-sink")
                     .nick("Adjust sink")
                     .blurb(
@@ -288,6 +299,7 @@ impl ObjectImpl for SnapSrc {
             "instance" => settings.instance = value.get().expect("type checked upstream"),
             "latency-ms" => settings.latency_ms = value.get().expect("type checked upstream"),
             "adjust-sink" => settings.adjust_sink = value.get().expect("type checked upstream"),
+            "host-id" => settings.host_id = string_or(""),
             _ => unimplemented!(),
         }
     }
@@ -301,6 +313,7 @@ impl ObjectImpl for SnapSrc {
             "instance" => settings.instance.to_value(),
             "latency-ms" => settings.latency_ms.to_value(),
             "adjust-sink" => settings.adjust_sink.to_value(),
+            "host-id" => settings.host_id.to_value(),
             _ => unimplemented!(),
         }
     }
@@ -360,6 +373,7 @@ impl BaseSrcImpl for SnapSrc {
             client_name: settings.client_name,
             instance: settings.instance,
             latency_ms: settings.latency_ms,
+            host_id: settings.host_id,
         };
         let client = client::connect(&options)
             .map_err(|e| gst::error_msg!(gst::ResourceError::OpenRead, ["{e}"]))?;

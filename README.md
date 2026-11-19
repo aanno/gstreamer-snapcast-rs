@@ -45,6 +45,7 @@ Snapdroid, ...) can connect to it, provided you use the PCM or FLAC codec.
 |            | `client-name` | `gst-snapsrc` | Name shown in Snapcast controllers |
 |            | `instance`    | `1`         | Distinguishes several clients on one host |
 |            | `latency-ms`  | `0`         | Extra local output latency to compensate |
+|            | `host-id`     | (MAC address) | Unique client id towards the server, like snapclient's `--hostID` |
 |            | `adjust-sink` | `true`      | Set `slave-method=resample` on the downstream audio sink (if at `skew`) |
 
 `snapsrc` outputs F32LE, timestamped so that the sound leaves the speaker at the
