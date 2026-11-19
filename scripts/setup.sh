@@ -51,5 +51,5 @@ pnpx -y supergateway --stdio "xerj mcp" --outputTransport streamableHttp --port 
 
 # for xerj to actually index the source, you have to autoindex it, e.g.
 # _outside_ devcontainer
-cd gstreamer-snapcast-rs
+cd gstreamer-snapcast-r
 xerj autoindex .

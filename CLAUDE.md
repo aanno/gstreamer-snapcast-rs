@@ -137,3 +137,20 @@ caveats and known problems: `docs/claude/mcp-xerj.md`.
 - Never send xerj field reports or corpus feedback, and never use `rerank`, unless the
   user asks. Both send data off the machine.
 - If xerj is down (`xerj_status`), fall back to Grep. Indexing needs the host-side `xerj` CLI.
+
+## MCP: memory (persistent agent memory)
+
+The `memory` MCP server (doobidoo mcp-memory-service, on the host) stores memories that
+can be searched by meaning. The store is shared with other projects. Setup, tools and
+caveats: `docs/claude/mcp-memory.md`.
+
+- **Every memory you write must carry at least one of the tags `gstreamer` or `snapcast`.**
+  Add more specific tags as needed. Filter searches by these tags.
+- Use it for insights that should outlive a session but don't belong in a commit:
+  debugging findings, environment gotchas, approaches that failed and why. Search it at
+  the start of a task when past experience could help (e.g. timing, interop, Podman issues).
+- `docs/claude/memory.md` stays the source of truth for state, decisions and plan. Don't
+  duplicate it into the MCP store, and don't use the MCP store instead of updating it.
+- No secrets: the server allows anonymous access. Mark throwaway entries `temporary`
+  and delete them.
+- If storage calls fail, run `memory_health` first, then see the setup notes in the doc.
