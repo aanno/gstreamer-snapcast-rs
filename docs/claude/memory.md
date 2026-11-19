@@ -163,8 +163,9 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
   - **Multiple streams per server are postponed** until further notice (L1 stays).
   - **Android stays important but is not a prototype target.** Keep the portability rule;
     there is no Android build or CI in the prototype.
-  - **The control plane goes into `snapcast-engine`.** For the prototype, copying code from
-    `snapserver-rs` is fine; refactoring snapcast-rs (e.g. a library crate for control) comes later.
+  - **The control plane goes into `snapcast-engine`.** ~~For the prototype, copying code from
+    `snapserver-rs` is fine; refactoring snapcast-rs (e.g. a library crate for control) comes later.~~
+    Superseded on 2026-11-19: no copying, a control library crate in snapcast-rs instead (see below).
   - The prototype needs a sane way to test both plugins: Makefile targets for install,
     uninstall and tests that also work **outside the devcontainer** (Fedora 45 host), so the
     user can run real listening tests.
@@ -200,6 +201,11 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
   keeps the sender Android-portable and needs no daemon. Discovery runs once at
   `connect` (blocks up to 5 s); reconnects keep that address. Tests on fixed ports set
   `mdns-name=""` so they don't announce themselves on the user's network.
+- 2026-11-19 (user): **L10 / P2: we do not copy anything from `snapserver-rs`.** The JSON-RPC
+  control plane becomes a **control library crate in snapcast-rs** (developed in the fork,
+  meant for upstream, following snapcast-rs's conventions). `snapserver-rs` and
+  `snapcast-engine` both use it, so there is one implementation. This replaces the
+  2026-11-10 "copying is fine for the prototype".
 - 2026-11-19: Claude Code's config in the devcontainer lives on a named volume
   (`claude-code-config-${devcontainerId}`, `CLAUDE_CONFIG_DIR`).
 
@@ -216,7 +222,7 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 | L7 | ~~`sync=false` with a non-live source floods clients~~ | `snapsink` | — | **Fixed 2026-11-19**: snapsink paces itself, sending a chunk at most 200 ms ahead of its server timestamp (interruptible wait). Test `paces_a_non_live_source_without_sync` (before: 1.07 s of audio in 3 ms) |
 | L8 | ~~No reconnect handling, server volume/mute, mDNS or client id in `snapsrc`~~ | `snapsrc` | — | **Done 2026-11-19**: reconnect (verified), client id (`host-id`, automatic `instance`, server appends `#instance`), server volume/mute (linear gain, read-only properties), **mDNS** via the pure-Rust `mdns-sd`: snapsink announces (`mdns-name`, not for `port=0`), snapsrc with an empty `host` discovers (optional `mdns-name` filter, 5 s, skips IPv6 link-local). Tests: `make test-mdns` (devcontainer: passes; the C++ peers need `avahi-daemon`, host only) |
 | L9 | snapcast-rs `tracing` output is not visible in GStreamer logs | engine | — | Bridge `tracing` to the GStreamer debug log |
-| L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | Prototype: copy it into `snapcast-engine`. Later, upstream a control library crate |
+| L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | **Changed 2026-11-19 (user): nothing is copied.** Create a control library crate in snapcast-rs (fork first, upstream PR candidate) that both `snapserver-rs` and `snapcast-engine` use |
 | L11 | snapcast-rs cannot serve **audio** over WebSocket (C++ snapserver: `/stream` on port 1780, used by Snapweb's player). Its WebSocket endpoint carries only JSON-RPC | snapcast-rs server | — | Only if a WebSocket audio client must work with `snapsink` (open question) |
 | L12 | ~~`snapsrc` → `alsasink` (`skew`, 40 ms tolerance) follows a drifting card, not the server~~ | `snapsrc` + audio sink | — | **Fixed 2026-11-19**: snapsrc sets `slave-method=resample` on the downstream audio sink (`adjust-sink`); rate error −17…+4 ppm (was +300) on a −300 ppm card, ~1 ms from the server timeline |
 | L13 | ~~`snapsrc` plays late by its pipeline latency~~ (+62 ms with 65 ms latency) | `snapsrc` PTS | — | **Fixed 2026-11-19**: `pts = playout − pipeline latency`; now −3…+1 ms, in sync with the C++ snapclient (+0.4 ms) |
@@ -250,24 +256,27 @@ updated. Steps P1–P3 are mostly independent; P4 is the actual go/no-go.
   and without card drift). Limitation: both receivers share one card, so it emulates "card
   drifts against the server", not two cards against each other.
 
-**P2. Control plane** in `snapcast-engine` (feature `control`), copied and trimmed from
-`snapserver-rs`:
-JSON-RPC over TCP (1705) and WebSocket (1780 `/jsonrpc`), started with the server; `snapsrc`
-applies server volume/mute (and exposes them read-only); `snapsink` forwards GStreamer tags
-as stream metadata; `Stream.Control` becomes a bus message for the application. Port
-property `control-port` (`0` = off); optional `snapweb-dir` for Snapweb's static files. No
-auth, no persistence, no mDNS, no `Stream.AddStream` (L1).
+**P2. Control plane** in `snapcast-engine` (feature `control`), built on a **new control
+library crate in snapcast-rs** (2026-11-19: nothing is copied from `snapserver-rs`; the
+crate is extracted there, `snapserver-rs` uses it too, upstream PR candidate, L10):
+JSON-RPC over TCP (1705) and WebSocket (1780 `/jsonrpc`), started with the server; `snapsink`
+forwards GStreamer tags as stream metadata; `Stream.Control` becomes a bus message for the
+application. Port property `control-port` (`0` = off); optional `snapweb-dir` for Snapweb's
+static files. No auth, no persistence, no `Stream.AddStream` (L1). Already done
+before P2 (2026-11-19, L8): `snapsrc` applies the server's volume/mute (read-only
+`volume`/`mute`), and mDNS (snapsink announces the stream port; the control ports would
+need their own `_snapcast-jsonrpc._tcp` etc. records). Not started yet.
 
-**P3. Timing robustness for the prototype:** make the aloop tests pass. That means
-(a) ~~snapsrc's absolute offset~~: **done 2026-11-19** (L13, see State).
-(b) ~~drift (L12)~~ and (c) ~~start-up alignment~~: **done 2026-11-19** (see State).
-Open from it: snapsrc's occasional ±1.5 ms wander within a run; the drift pair test's
-1 ms tolerance versus the C++ client's own +2 ms under drift. Also smoothing for `diff_to_server` (L5) if the measurements
-call for it, plus reconnect in `snapsrc` (F5).
-L2/L3 stay engine workarounds, and L4 stays "pcm default".
+**P3. Timing robustness for the prototype:** **done 2026-11-19.** (a) absolute offset
+(L13), (b) drift (L12), (c) start-up alignment, plus L5 (resolved by measurement) and
+reconnect (verified, F5 part). All aloop tests pass with the bounds in `docs/testing.md`.
+Left open, not blocking: snapsrc's occasional tick-to-tick jitter (±0.7 ms in single runs,
+from the sink's `resample` slaving; could be smoothed via the sink clock's
+`window-size`/`timeout`); the drift tests use 2.5 ms because the C++ snapclient itself is
+~2 ms off there. L2, L3, L4 are fixed in the fork (no engine workarounds any more).
 
 **P4. Evaluation:** listening tests on the host, endurance run, write-up, and the decision.
 
 **After the prototype** (unchanged, not scheduled): multiple streams (L1), upstream PRs
-(L2, L3, a control crate, L4), finishing `snapsink` (L6, L7, Android build and CI), finishing
+(the fork commits for L2, L3, L4 and the client-instance fix; the control crate is part of P2 now), finishing `snapsink` (L6, L7, Android build and CI), finishing
 `snapsrc` (L8), infrastructure (CI, L9, packaging).
