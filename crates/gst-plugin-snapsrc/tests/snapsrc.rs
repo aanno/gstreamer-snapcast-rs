@@ -20,6 +20,7 @@ fn element_has_default_properties() {
     assert_eq!(src.property::<u32>("port"), 1704);
     assert!(src.downcast_ref::<gst_base::BaseSrc>().unwrap().is_live());
     assert_eq!(src.property::<String>("host-id"), "");
+    assert_eq!(src.property::<u32>("instance"), 0, "automatic");
     assert!(src.property::<bool>("adjust-sink"));
 }
 

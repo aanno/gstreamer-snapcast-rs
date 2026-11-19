@@ -190,6 +190,11 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 - 2026-11-19: **snapsrc adjusts the downstream audio sink** (`adjust-sink`, opt-out):
   `slave-method=resample`, because `autoaudiosink` cannot pass properties to its child and
   the default `skew` breaks sync (L12). snapsrc no longer provides a clock.
+- 2026-11-19 (user): **the MAC must not be the only client id**: several snapsrc on one
+  host are normal (synchronized line-out together with a Bluetooth speaker). So
+  `instance` defaults to automatic, coordinated host-wide by lock files (C++ snapclients
+  don't take part; give them `--instance` above the snapsrc numbers), and the snapcast-rs
+  server distinguishes instances like the C++ one.
 - 2026-11-19: Claude Code's config in the devcontainer lives on a named volume
   (`claude-code-config-${devcontainerId}`, `CLAUDE_CONFIG_DIR`).
 
@@ -204,7 +209,7 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 | L5 | ~~Time-sync updates shift PTS; no smoothing~~ | `snapsrc` | — | **Resolved 2026-11-19**: snapcast-rs already takes the median of 200 syncs (like C++); `align.rs` turns remaining steps into gradual frame corrections. Measured: 0 corrections in 3 drift runs, error stable at about −110 µs |
 | L6 | Sink input is only S16LE/S32LE; no S24_32LE | `snapsink` | `audioconvert` upstream | Plan step 3 |
 | L7 | ~~`sync=false` with a non-live source floods clients~~ | `snapsink` | — | **Fixed 2026-11-19**: snapsink paces itself, sending a chunk at most 200 ms ahead of its server timestamp (interruptible wait). Test `paces_a_non_live_source_without_sync` (before: 1.07 s of audio in 3 ms) |
-| L8 | No server volume/mute or mDNS in `snapsrc` (reconnect and client id: done) | `snapsrc` | — | 2026-11-19: **reconnect verified** (test `snapsrc_resumes_after_a_server_restart`). **Client id:** property `host-id` (like `--hostID`; verified: the C++ snapserver lists the client under that id) |
+| L8 | No server volume/mute or mDNS in `snapsrc` (reconnect and client id: done) | `snapsrc` | — | 2026-11-19: **reconnect verified** (test `snapsrc_resumes_after_a_server_restart`). **Client id:** `host-id` property; **`instance` is automatic** (0 = lowest free number on this host, lock files in `$XDG_RUNTIME_DIR/snapcast-engine`), so two snapsrc on one host (line-out + BT speaker) get `<mac>` and `<mac>#2`; and the snapcast-rs server now appends `#instance` like C++ (fork commit `fix(server): tell client instances on one host apart…`). Test `two_snapsrc_on_one_host_get_distinct_client_ids` |
 | L9 | snapcast-rs `tracing` output is not visible in GStreamer logs | engine | — | Bridge `tracing` to the GStreamer debug log |
 | L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | Prototype: copy it into `snapcast-engine`. Later, upstream a control library crate |
 | L11 | snapcast-rs cannot serve **audio** over WebSocket (C++ snapserver: `/stream` on port 1780, used by Snapweb's player). Its WebSocket endpoint carries only JSON-RPC | snapcast-rs server | — | Only if a WebSocket audio client must work with `snapsink` (open question) |

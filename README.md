@@ -43,7 +43,7 @@ Snapdroid, ...) can connect to it, provided you use the PCM or FLAC codec.
 |            | `bound-port`  | (read-only) | Port actually listened on |
 | `snapsrc`  | `host`/`port` | `127.0.0.1`/`1704` | Server to connect to |
 |            | `client-name` | `gst-snapsrc` | Name shown in Snapcast controllers |
-|            | `instance`    | `1`         | Distinguishes several clients on one host |
+|            | `instance`    | `0` (auto)  | Tells several clients on one host apart (the server sees `<host-id>#<instance>`); `0` picks the lowest number no other snapsrc on this host uses |
 |            | `latency-ms`  | `0`         | Extra local output latency to compensate |
 |            | `host-id`     | (MAC address) | Unique client id towards the server, like snapclient's `--hostID` |
 |            | `adjust-sink` | `true`      | Set `slave-method=resample` on the downstream audio sink (if at `skew`) |

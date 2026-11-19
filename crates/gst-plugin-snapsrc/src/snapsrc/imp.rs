@@ -91,7 +91,8 @@ const DEFAULT_HOST: &str = "127.0.0.1";
 // Snapcast's default stream port (snapcast_proto::DEFAULT_STREAM_PORT).
 const DEFAULT_PORT: u32 = 1704;
 const DEFAULT_CLIENT_NAME: &str = "gst-snapsrc";
-const DEFAULT_INSTANCE: u32 = 1;
+/// 0 = automatic: the lowest number no other snapsrc on this host uses.
+const DEFAULT_INSTANCE: u32 = 0;
 const DEFAULT_LATENCY_MS: i32 = 0;
 const DEFAULT_ADJUST_SINK: bool = true;
 
@@ -248,8 +249,12 @@ impl ObjectImpl for SnapSrc {
                     .build(),
                 glib::ParamSpecUInt::builder("instance")
                     .nick("Instance")
-                    .blurb("Instance id, to distinguish several clients on one host")
-                    .minimum(1)
+                    .blurb(
+                        "Instance number, to tell several clients on one host apart (the \
+                         server sees <host-id>#<instance>); 0 = the lowest number no \
+                         other snapsrc on this host uses",
+                    )
+                    .minimum(0)
                     .default_value(DEFAULT_INSTANCE)
                     .mutable_ready()
                     .build(),
@@ -377,6 +382,7 @@ impl BaseSrcImpl for SnapSrc {
         };
         let client = client::connect(&options)
             .map_err(|e| gst::error_msg!(gst::ResourceError::OpenRead, ["{e}"]))?;
+        gst::info!(CAT, imp = self, "Client instance {}", client.instance());
         // Downstream elements change state before us, so the sink (and the child of
         // an autoaudiosink) exists by now.
         if settings.adjust_sink {

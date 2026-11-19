@@ -45,6 +45,11 @@ struct CppServer {
 
 impl CppServer {
     fn start(codec: &str, port: u16) -> Self {
+        Self::start_with_control(codec, port, None)
+    }
+
+    /// Like `start`, with the JSON-RPC control port enabled if `control` is set.
+    fn start_with_control(codec: &str, port: u16, control: Option<u16>) -> Self {
         let bin = std::env::var("SNAPSERVER").unwrap_or_else(|_| "snapserver".into());
         let dir =
             std::env::temp_dir().join(format!("snapsrc-interop-{}-{codec}", std::process::id()));
@@ -62,11 +67,11 @@ impl CppServer {
             .arg("--config")
             .arg(&config)
             .arg(format!("--server.datadir={}", dir.display()))
-            .args([
-                "--tcp.enabled=0",
-                "--http.enabled=0",
-                "--logging.sink=stdout",
-            ])
+            .args(["--http.enabled=0", "--logging.sink=stdout"])
+            .args(match control {
+                Some(p) => vec!["--tcp.enabled=1".to_owned(), format!("--tcp.port={p}")],
+                None => vec!["--tcp.enabled=0".to_owned()],
+            })
             .arg(format!("--stream.port={port}"))
             .arg("--stream.bind_to_address=127.0.0.1")
             .arg(format!("--stream.codec={codec}"))
@@ -229,4 +234,71 @@ fn snapsrc_plays_cpp_snapserver_pcm() {
 #[ignore = "needs the C++ snapserver (make test-interop)"]
 fn snapsrc_plays_cpp_snapserver_flac() {
     receive_from_cpp_server("flac");
+}
+
+/// Sends one JSON-RPC request to a C++ snapserver's control port, returns the reply.
+fn json_rpc(control: u16, request: &str) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", control)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
+        .write_all(format!("{request}\r\n").as_bytes())
+        .unwrap();
+    let mut reply = String::new();
+    BufReader::new(stream).read_line(&mut reply).unwrap();
+    reply
+}
+
+/// Client ids in a `Server.GetStatus` reply (MAC-style ids contain ':').
+fn client_ids(status: &str) -> Vec<String> {
+    let mut ids: Vec<String> = status
+        .split("\"id\":\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .filter(|id| id.contains(':'))
+        .map(str::to_owned)
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// L8: two snapsrc on one host with default settings (e.g. line-out and a Bluetooth
+/// speaker) must not share a client id: automatic instances give e.g. `<mac>` and
+/// `<mac>#2`.
+#[test]
+#[ignore = "needs the C++ snapserver (make test-interop)"]
+fn two_snapsrc_on_one_host_get_distinct_client_ids() {
+    init();
+    let (port, control) = (free_port(), free_port());
+    let server = CppServer::start_with_control("pcm", port, Some(control));
+    let feeder = feed(&server.fifo());
+    let receivers = gst::parse::launch(&format!(
+        "snapsrc port={port} ! fakesink snapsrc port={port} ! fakesink"
+    ))
+    .unwrap()
+    .downcast::<gst::Pipeline>()
+    .unwrap();
+    receivers.set_state(gst::State::Playing).unwrap();
+
+    let mut ids = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while ids.len() < 2 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(200));
+        ids = client_ids(&json_rpc(
+            control,
+            r#"{"id":1,"jsonrpc":"2.0","method":"Server.GetStatus"}"#,
+        ));
+    }
+    receivers.set_state(gst::State::Null).unwrap();
+    feeder.set_state(gst::State::Null).unwrap();
+    drop(server);
+
+    // Two different ids on the same host part. Which instance numbers they get
+    // depends on other clients on this host (the parallel tests hold some).
+    assert_eq!(ids.len(), 2, "client ids: {ids:?}");
+    let host = |id: &str| id.split('#').next().unwrap_or_default().to_owned();
+    assert_eq!(host(&ids[0]), host(&ids[1]), "client ids: {ids:?}");
 }

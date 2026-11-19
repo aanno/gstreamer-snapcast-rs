@@ -150,6 +150,21 @@ gst-launch-1.0 snapsrc adjust-sink=false ! audioconvert ! alsasink slave-method=
 `gst-inspect-1.0`, GStreamer 1.26), so the same experiments work there. `pipewiresink` is
 different: it has only its own `slave-method` (default `none`) and none of the others.
 
+### Several receivers on one host
+
+Several `snapsrc` on one machine are fine, e.g. line-out and a Bluetooth speaker in sync.
+A server identifies a client as `<host-id>#<instance>` (`host-id` defaults to the MAC
+address), so each receiver needs its own instance number. snapsrc picks one
+automatically (`instance=0`, the default): the lowest number no other snapsrc on this host
+uses, coordinated through lock files in `$XDG_RUNTIME_DIR/snapcast-engine`. The C++
+snapclient doesn't take part; start it with `--instance` above the snapsrc numbers
+(e.g. `--instance 9`) next to them, or give each receiver its own `host-id`.
+
+```sh
+gst-launch-1.0 snapsrc ! audioconvert ! alsasink device=hw:0 \
+               snapsrc ! audioconvert ! pulsesink device=bluez_output.XX_XX_XX_XX_XX_XX.1
+```
+
 ### Music through snapsink → snapsrc
 
 The quickest way to hear how well the plugins work with real music:

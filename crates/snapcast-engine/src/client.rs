@@ -24,6 +24,8 @@ use tokio::sync::mpsc;
 
 use crate::{EngineError, runtime};
 
+mod instance;
+
 /// Client options.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientOptions {
@@ -33,7 +35,10 @@ pub struct ClientOptions {
     pub port: u16,
     /// Client name shown in Snapcast controllers.
     pub client_name: String,
-    /// Instance id, to run several clients on one host.
+    /// Instance number, to run several clients on one host: the server identifies
+    /// a client as `<host id>#<instance>`. `0` (the default) picks the lowest number
+    /// no other engine client on this host uses (see the `instance` module); an
+    /// explicit number is used as is, with a warning if another client holds it.
     pub instance: u32,
     /// Additional local latency in milliseconds (e.g. of the audio device).
     pub latency_ms: i32,
@@ -48,7 +53,7 @@ impl Default for ClientOptions {
             host: "127.0.0.1".to_owned(),
             port: snapcast_client::DEFAULT_STREAM_PORT,
             client_name: "gst-snapsrc".to_owned(),
-            instance: 1,
+            instance: 0,
             latency_ms: 0,
             host_id: String::new(),
         }
@@ -84,6 +89,9 @@ pub struct ClientHandle {
     status: Arc<Mutex<Status>>,
     time_provider: Arc<Mutex<snapcast_client::time_provider::TimeProvider>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
+    instance: u32,
+    /// Keeps the instance number claimed while the client lives.
+    _instance_lock: Option<instance::InstanceLock>,
 }
 
 impl std::fmt::Debug for ClientHandle {
@@ -95,12 +103,12 @@ impl std::fmt::Debug for ClientHandle {
 }
 
 /// The snapcast-client configuration for `options`.
-fn client_config(options: &ClientOptions) -> ClientConfig {
+fn client_config(options: &ClientOptions, instance: u32) -> ClientConfig {
     ClientConfig {
         host: options.host.clone(),
         port: options.port,
         client_name: options.client_name.clone(),
-        instance: options.instance,
+        instance,
         latency: options.latency_ms,
         host_id: options.host_id.clone(),
         // We schedule the AudioFrames ourselves; nothing would drain the player
@@ -110,12 +118,46 @@ fn client_config(options: &ClientOptions) -> ClientConfig {
     }
 }
 
+/// The instance number to use for `requested` (0 = automatic), and its lock.
+///
+/// Lock problems (e.g. no writable runtime dir) never stop the client: it then
+/// runs without coordination, as instance 1 if automatic.
+fn claim_instance(requested: u32) -> (u32, Option<instance::InstanceLock>) {
+    let dir = instance::lock_dir();
+    let result = if requested == 0 {
+        instance::claim_free(&dir).map(Some)
+    } else {
+        instance::claim(&dir, requested)
+    };
+    match result {
+        Ok(Some(lock)) => {
+            tracing::debug!(instance = lock.number, "Claimed client instance");
+            (lock.number, Some(lock))
+        }
+        Ok(None) => {
+            tracing::warn!(
+                instance = requested,
+                "Client instance is already used by another client on this host; \
+                 the server will mix them up (leave the instance at 0 for automatic)"
+            );
+            (requested, None)
+        }
+        Err(e) => {
+            let fallback = requested.max(1);
+            tracing::warn!(error = %e, dir = %dir.display(), instance = fallback,
+                "Cannot coordinate client instances on this host");
+            (fallback, None)
+        }
+    }
+}
+
 /// Start a client connecting to `options.host:options.port`.
 pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
     if options.host.is_empty() {
         return Err(EngineError::InvalidConfig("host must not be empty".into()));
     }
-    let (mut client, mut events, audio_rx) = SnapClient::new(client_config(options));
+    let (instance, instance_lock) = claim_instance(options.instance);
+    let (mut client, mut events, audio_rx) = SnapClient::new(client_config(options, instance));
     let cmd_tx = client.command_sender();
     let time_provider = Arc::clone(&client.time_provider);
     let status = Arc::new(Mutex::new(Status::default()));
@@ -156,6 +198,8 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
         status,
         time_provider,
         tasks: vec![run_task, event_task],
+        instance,
+        _instance_lock: instance_lock,
     })
 }
 
@@ -188,6 +232,11 @@ impl ClientHandle {
         }
     }
 
+    /// The instance number this client uses (see [`ClientOptions::instance`]).
+    pub fn instance(&self) -> u32 {
+        self.instance
+    }
+
     /// Last error reported by the client, if any.
     pub fn last_error(&self) -> Option<String> {
         self.status.lock().unwrap().last_error.clone()
@@ -217,7 +266,7 @@ mod tests {
             latency_ms: 40,
             host_id: "kitchen-pi".into(),
         };
-        let c = client_config(&options);
+        let c = client_config(&options, options.instance);
         assert_eq!((c.host.as_str(), c.port), ("10.0.0.2", 1800));
         assert_eq!(
             (c.client_name.as_str(), c.instance, c.latency),
@@ -229,6 +278,7 @@ mod tests {
             "the engine never drains the player stream"
         );
         // Empty host id: snapcast-client's default (the MAC address).
-        assert_eq!(client_config(&ClientOptions::default()).host_id, "");
+        assert_eq!(client_config(&ClientOptions::default(), 1).host_id, "");
+        assert_eq!(ClientOptions::default().instance, 0, "automatic by default");
     }
 }
