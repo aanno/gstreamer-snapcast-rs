@@ -89,9 +89,25 @@ server (+5…+18 ppm, less exact than 0.31's −1.9 ppm). In `make listen-all` o
 you hear the ticks, as a **mixture of single and double clicks**.
 
 The absolute reference settled the −62 ms between snapsrc and snapclient: snapsrc played
-late by its pipeline latency, while the C++ client was on time. Since the fix (L13), snapsrc
-+ C++ snapclient **pass** (+0.4 ms apart). Still failing: the two drift tests (L12), and
-sometimes two snapsrc (start-up alignment, up to ~4 ms).
+late by its pipeline latency (fixed, L13).
+
+**Since the L12 fix** (later on 2026-11-19: snapsrc sets `slave-method=resample` on the
+sink, and no longer provides its clock), in the devcontainer:
+
+| Test | Result |
+|---|---|
+| snapsrc / C++ snapclient against the server timeline | **pass**: +0.6…+1.1 ms / +0.9 ms |
+| two snapsrc, snapsrc + C++ snapclient, no drift | **pass**: 0.03 ms / 0.25 ms apart |
+| two snapsrc, card −300 ppm | **passes** (4/4 runs): rate error −17…+4 ppm (was +300), mostly < 0.1 ms apart |
+| snapsrc + C++ snapclient, card −300 ppm | **fails** with +0.9…+1.4 ms: the **C++ snapclient** is +1.7…+2.0 ms off the server under drift, while snapsrc is at +0.6…+0.9 ms |
+| no gaps behind a high-latency sink | **passes** |
+
+In some runs snapsrc wanders by ±1.5 ms within a run, probably while the sink's
+`resample` slaving converges.
+
+`ALOOP_SINK_PROPS` adds properties to the snapsrc receivers' `alsasink` for experiments,
+e.g. `slave-method=skew drift-tolerance=2000`. With `adjust-sink` on, snapsrc only changes
+`skew`.
 
 These are findings about the plugins, not test problems. See `docs/claude/memory.md`
 (State and Plan, P3) for their analysis.

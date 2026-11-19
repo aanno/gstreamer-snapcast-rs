@@ -41,8 +41,8 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
   `uninstall-system` (root, `pkg-config` plugins dir), `doctor` (`scripts/doctor.sh`) and
   `listen-*` (`scripts/listen.sh`: send, recv, cpp-client, cpp-server, pair, all; `LOCAL=1`
   uses the tree's release build), and `test-aloop` (see below). The real listening runs
-  happen on the user's Fedora host. With `snapsrc`, gst-launch picks the clock `snapsrc`
-  provides ("New clock: systemclock0"). `listen.sh` stops all parts as soon as one exits,
+  happen on the user's Fedora host. With `snapsrc`, gst-launch uses the system clock
+  ("New clock: GstSystemClock"; snapsrc no longer provides one since 2026-11-19). `listen.sh` stops all parts as soon as one exits,
   and warns when there is no audio output. In the devcontainer, `~/.asoundrc` makes ALSA
   `default` a dmix on loopback subdevice 2, so `listen-*` runs there (inaudibly).
 - **F2 measurements** (`make test-aloop`, 2026-11-19, devcontainer, C++ snapclient 0.31).
@@ -82,6 +82,19 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
   Now snapsrc stores the latency from the LATENCY event and drops only when
   `playout + latency < now`; the PTS is computed signed. Regression test:
   `aloop_snapsrc_loses_no_frames_behind_a_high_latency_sink` (104 gaps before, 0 after).
+- **Fixed 2026-11-19 (L12 and start-up alignment).** Both came from the sink's slaving:
+  with `slave-method=skew` an audio sink follows its card and jumps back only after 40 ms,
+  and its start-up calibration left each run off by up to ~4 ms. snapsrc now sets
+  `slave-method=resample` on the first audio sink downstream (new property `adjust-sink`,
+  default true; only if that sink is still at `skew`; it follows pads through bins such as
+  `autoaudiosink`). Also: snapsrc **no longer provides a clock**. In live pipelines the
+  pipeline then uses the system clock anyway (sinks can't offer theirs before negotiation;
+  a design with the card as master clock was tried and failed for that reason), but another
+  live element's clock can win now. New `src/snapsrc/align.rs` (unit-tested) keeps the PTS
+  contiguous and corrects the ideal-vs-sample-count difference by inserting/dropping single
+  frames (absorbs time-sync steps, L5, and a drifting pipeline clock). aloop: two snapsrc
+  pass under drift (4/4); snapsrc+C++ under drift fails only because the C++ snapclient is
+  +1.7…+2.0 ms off the server there. Open: snapsrc sometimes wanders ±1.5 ms within a run.
 - **Test audio:** `assets/audio/freejazz_medley.flac` (CC0, OpenGameArt, 38 s, 44.1 kHz) for
   listening tests, used by `scripts/host-play.sh`.
 - **Host interop:** `snapsink` → C++ snapclient 0.35 passes (pcm, flac). C++ snapserver
@@ -94,12 +107,14 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
   - **Sink:** server timestamp = `now_usec() + (base_time + running_time + latency − clock.time())`,
     which works with any pipeline clock. Without a clock it falls back to counting samples.
   - **Source:** play-out = `server_ts − diff_to_server + (buffer − server_latency − client_latency)`,
-    and PTS = `clock.time() + (playout − now_usec()) − base_time`. Network arrival time is
-    never used.
-  - **Clock:** `snapsrc` provides a monotonic `GstSystemClock`, so audio sinks slave to the
-    Snapcast timeline. Its latency query answers min 0, max unbounded.
-  - **Late frames:** frames whose play-out time has passed are dropped and the next buffer
-    is marked DISCONT.
+    ideal PTS = `clock.time() + (playout − now_usec()) − base_time − pipeline latency` (L13).
+    `align.rs` keeps the PTS contiguous and steers towards the ideal by inserting/dropping
+    single frames. Network arrival time is never used.
+  - **Clock:** `snapsrc` provides none; in live pipelines that's the monotonic system clock.
+    The audio sink slaves its card to it with `slave-method=resample`, set by snapsrc
+    (`adjust-sink`, L12). Its latency query answers min 0, max unbounded.
+  - **Late frames:** frames whose play-out time (= render time) has passed are dropped,
+    and the next buffer is marked DISCONT.
 - **Server sharing:** a registry keyed by port. The first `snapsink` on a port starts the
   server, and the last one to release it stops it. Each stream can be claimed by only one
   sink at a time. `port=0` gives an ephemeral port that is never shared; read it back from
@@ -154,6 +169,9 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 - 2026-11-19: the devcontainer mounts the host's `/run/udev` read-only, so that WirePlumber
   may discover the sound card (not tested yet; low priority). No PulseAudio in the
   container: redundant with `pipewire-pulse` (reasons in `docs/testing-devcontainer.md`).
+- 2026-11-19: **snapsrc adjusts the downstream audio sink** (`adjust-sink`, opt-out):
+  `slave-method=resample`, because `autoaudiosink` cannot pass properties to its child and
+  the default `skew` breaks sync (L12). snapsrc no longer provides a clock.
 - 2026-11-19: Claude Code's config in the devcontainer lives on a named volume
   (`claude-code-config-${devcontainerId}`, `CLAUDE_CONFIG_DIR`).
 
@@ -172,7 +190,7 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 | L9 | snapcast-rs `tracing` output is not visible in GStreamer logs | engine | — | Bridge `tracing` to the GStreamer debug log |
 | L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | Prototype: copy it into `snapcast-engine`. Later, upstream a control library crate |
 | L11 | snapcast-rs cannot serve **audio** over WebSocket (C++ snapserver: `/stream` on port 1780, used by Snapweb's player). Its WebSocket endpoint carries only JSON-RPC | snapcast-rs server | — | Only if a WebSocket audio client must work with `snapsink` (open question) |
-| L12 | `snapsrc` → `alsasink` (default `slave-method=skew`, `drift-tolerance` 40 ms) does not follow the server timeline when the sound card drifts; it jumps back only after 40 ms | `snapsrc` + audio sink | — | P3 (b) |
+| L12 | ~~`snapsrc` → `alsasink` (`skew`, 40 ms tolerance) follows a drifting card, not the server~~ | `snapsrc` + audio sink | — | **Fixed 2026-11-19**: snapsrc sets `slave-method=resample` on the downstream audio sink (`adjust-sink`); rate error −17…+4 ppm (was +300) on a −300 ppm card, ~1 ms from the server timeline |
 | L13 | ~~`snapsrc` plays late by its pipeline latency~~ (+62 ms with 65 ms latency) | `snapsrc` PTS | — | **Fixed 2026-11-19**: `pts = playout − pipeline latency`; now −3…+1 ms, in sync with the C++ snapclient (+0.4 ms) |
 
 ## Plan (2026-11-10, agreed)
@@ -214,11 +232,9 @@ auth, no persistence, no mDNS, no `Stream.AddStream` (L1).
 
 **P3. Timing robustness for the prototype:** make the aloop tests pass. That means
 (a) ~~snapsrc's absolute offset~~: **done 2026-11-19** (L13, see State).
-(b) letting `snapsrc` playback follow the server against a drifting
-card: try `alsasink slave-method=resample` / a small `drift-tolerance`, or have `snapsrc`
-make the sink slave properly; document what users must set; (c) the start-up alignment
-(per run about +0.5…+0.9 ms or about −3 ms, so two snapsrc up to ~4 ms apart; look at
-`alsasink`'s ring buffer start and the period size first). Also smoothing for `diff_to_server` (L5) if the measurements
+(b) ~~drift (L12)~~ and (c) ~~start-up alignment~~: **done 2026-11-19** (see State).
+Open from it: snapsrc's occasional ±1.5 ms wander within a run; the drift pair test's
+1 ms tolerance versus the C++ client's own +2 ms under drift. Also smoothing for `diff_to_server` (L5) if the measurements
 call for it, plus reconnect in `snapsrc` (F5).
 L2/L3 stay engine workarounds, and L4 stays "pcm default".
 

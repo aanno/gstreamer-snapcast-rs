@@ -1,6 +1,7 @@
 use gst::glib;
 use gst::prelude::*;
 
+mod align;
 mod imp;
 
 glib::wrapper! {

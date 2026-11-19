@@ -55,6 +55,8 @@
 //! - `ALOOP_TOLERANCE_PPM`: max allowed rate error against the server (default 100)
 //! - `ALOOP_TOLERANCE_ABS_US`: max allowed absolute offset against the server timeline
 //!   (default 5000; the method itself is good to a few ms)
+//! - `ALOOP_SINK_PROPS`: extra properties for the snapsrc receivers' `alsasink`,
+//!   e.g. `slave-method=skew drift-tolerance=5000`
 //! - `SNAPCLIENT`: C++ snapclient binary (default: `PATH`)
 
 use std::process::{Child, Command, Stdio};
@@ -323,8 +325,9 @@ impl Receiver {
         match kind {
             Kind::Snapsrc => Receiver::Snapsrc(Running::start(&format!(
                 "snapsrc port={port} client-name={name} instance={instance} \
-                 ! audioconvert ! audioresample ! alsasink device={}",
-                side.pcm()
+                 ! audioconvert ! audioresample ! alsasink device={} {}",
+                side.pcm(),
+                std::env::var("ALOOP_SINK_PROPS").unwrap_or_default()
             ))),
             Kind::CppSnapclient => {
                 let bin = std::env::var("SNAPCLIENT").unwrap_or_else(|_| "snapclient".into());

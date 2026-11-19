@@ -45,9 +45,12 @@ Snapdroid, ...) can connect to it, provided you use the PCM or FLAC codec.
 |            | `client-name` | `gst-snapsrc` | Name shown in Snapcast controllers |
 |            | `instance`    | `1`         | Distinguishes several clients on one host |
 |            | `latency-ms`  | `0`         | Extra local output latency to compensate |
+|            | `adjust-sink` | `true`      | Set `slave-method=resample` on the downstream audio sink (if at `skew`) |
 
-`snapsrc` outputs F32LE and provides a clock (monotonic, the Snapcast time
-base), so the audio sink slaves to the Snapcast timeline.
+`snapsrc` outputs F32LE, timestamped so that the sound leaves the speaker at the
+Snapcast play-out time (the pipeline latency is compensated). The audio sink follows the
+pipeline clock with `slave-method=resample`, which `snapsrc` sets for you
+(`adjust-sink`), so a drifting sound card stays on the Snapcast timeline.
 
 Background and design discussion:
 [docs/gstreamer-plugins/](docs/gstreamer-plugins/) (see `dlna-rs-gstreamer-2.md`

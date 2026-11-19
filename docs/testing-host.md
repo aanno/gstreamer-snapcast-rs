@@ -135,13 +135,15 @@ gst-launch-1.0 audiotestsrc num-buffers=200 ! audioconvert ! alsasink device=plu
 | `device` | `default` | ALSA PCM name (`default`, `pipewire`, `hw:C,D`, `plughw:C,D`, a name from `~/.asoundrc`) |
 | `buffer-time` | 200000 µs | size of the ring buffer; a direct `hw:` device may round it |
 | `latency-time` | 10000 µs | period size, i.e. how often data is handed over |
-| `slave-method` | `skew` | how it follows the pipeline clock (`snapsrc`'s): `skew` jumps after `drift-tolerance`, `resample` adjusts the rate. Relevant for L12 |
+| `slave-method` | `skew` | how it follows the pipeline clock: `skew` jumps after `drift-tolerance`, `resample` adjusts continuously. **snapsrc sets `resample`** on the first audio sink downstream (`adjust-sink=true`, default) unless you chose something other than `skew` (L12) |
 | `drift-tolerance` | 40000 µs | how much drift `skew` accepts before it jumps |
 
-Example with all of them, for experiments with L12:
+Example with all of them, for experiments with L12. `adjust-sink` only changes `skew`,
+so the explicit `skew` here stays unless you also disable it in `snapsrc`:
 
 ```sh
-make listen-recv SINK="alsasink device=plughw:1,0 buffer-time=100000 latency-time=10000 slave-method=skew drift-tolerance=5000"
+make listen-recv SINK="alsasink device=plughw:1,0 buffer-time=100000 latency-time=10000 slave-method=none"
+gst-launch-1.0 snapsrc adjust-sink=false ! audioconvert ! alsasink slave-method=skew drift-tolerance=5000
 ```
 
 `pulsesink` has the same four properties with the same defaults (checked with

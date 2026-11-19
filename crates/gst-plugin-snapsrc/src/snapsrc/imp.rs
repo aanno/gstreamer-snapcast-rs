@@ -22,11 +22,35 @@
 //! +62 ms behind `alsasink` (65 ms latency), while the C++ snapclient was on time
 //! (L13; `aloop_*_plays_on_the_server_timeline`, 2026-11-19).
 //!
-//! The element provides a monotonic system clock (the Snapcast clock domain)
-//! so that audio sinks slave their device clock to it, rather than the source
-//! drifting against an audio device clock. Buffers arrive roughly `buffer-ms`
-//! ahead of their PTS.
+//! Buffers arrive roughly `buffer-ms` ahead of their PTS.
 //!
+//! # Clock
+//!
+//! The element does not provide a clock. In a live pipeline the pipeline then
+//! uses the system clock (`CLOCK_MONOTONIC`, the Snapcast clock domain): audio
+//! sinks can offer their card's clock only after caps negotiation, too late for
+//! the clock selection at PAUSED→PLAYING. Another live element (e.g. `alsasrc`)
+//! may provide its card's clock instead; the formula above maps onto any clock.
+//!
+//! Two mechanisms keep the output on the Snapcast timeline:
+//!
+//! - **The audio sink** slaves its card to the pipeline clock. With its default
+//!   `slave-method=skew` it follows the card and jumps back only after
+//!   `drift-tolerance` (40 ms), and its start-up calibration left each run off by
+//!   up to ~4 ms (L12 and start-up alignment, aloop tests 2026-11-19). With
+//!   `slave-method=resample` it inserts/drops single samples continuously: rate
+//!   error +4 ppm on a −300 ppm card, within 1 ms of the server timeline.
+//!   `adjust-sink` (default on) therefore sets `resample` on the first audio sink
+//!   downstream, if it is still at `skew`.
+//! - **[`super::align`]** keeps the PTS contiguous, and corrects the difference
+//!   between the ideal PTS and the sample count by inserting/dropping single frames.
+//!   That absorbs time-sync steps (L5) and the drift of the pipeline clock against
+//!   the Snapcast clock, if the pipeline clock is a card clock.
+//!
+//! Until 2026-11-19 the element provided a monotonic system clock itself. That is
+//! equivalent for the sink, but it made snapsrc the clock provider even when
+//! another element's clock would have been the better choice.
+
 //! # Late frames
 //!
 //! Downstream decides when `create()` runs: an audio sink blocks the streaming
@@ -51,6 +75,8 @@ use gst_base::subclass::base_src::CreateSuccess;
 use gst_base::subclass::prelude::*;
 use snapcast_engine::client::{self, ClientHandle, ClientOptions};
 use snapcast_engine::{now_usec, runtime};
+
+use super::align::{self, Aligner};
 use tokio::sync::watch;
 
 static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
@@ -67,6 +93,7 @@ const DEFAULT_PORT: u32 = 1704;
 const DEFAULT_CLIENT_NAME: &str = "gst-snapsrc";
 const DEFAULT_INSTANCE: u32 = 1;
 const DEFAULT_LATENCY_MS: i32 = 0;
+const DEFAULT_ADJUST_SINK: bool = true;
 
 #[derive(Debug, Clone)]
 struct Settings {
@@ -75,6 +102,7 @@ struct Settings {
     client_name: String,
     instance: u32,
     latency_ms: i32,
+    adjust_sink: bool,
 }
 
 impl Default for Settings {
@@ -85,6 +113,7 @@ impl Default for Settings {
             client_name: DEFAULT_CLIENT_NAME.to_owned(),
             instance: DEFAULT_INSTANCE,
             latency_ms: DEFAULT_LATENCY_MS,
+            adjust_sink: DEFAULT_ADJUST_SINK,
         }
     }
 }
@@ -96,6 +125,8 @@ struct Active {
     discont: bool,
     /// The pipeline latency the last PTS was computed with.
     latency_usec: i64,
+    /// Keeps the output contiguous and on the Snapcast timeline (drift correction).
+    aligner: Aligner,
 }
 
 pub struct SnapSrc {
@@ -103,7 +134,6 @@ pub struct SnapSrc {
     state: Mutex<Option<Active>>,
     /// Set by `unlock()` to interrupt a blocking `create()`.
     flushing: watch::Sender<bool>,
-    clock: gst::Clock,
     /// Pipeline latency in ns, from the LATENCY event. Not in `state`: `create()`
     /// holds that lock while waiting for data, and events must not block on it.
     pipeline_latency_ns: AtomicU64,
@@ -111,16 +141,72 @@ pub struct SnapSrc {
 
 impl Default for SnapSrc {
     fn default() -> Self {
-        let clock = glib::Object::builder::<gst::SystemClock>()
-            .property("clock-type", gst::ClockType::Monotonic)
-            .build()
-            .upcast();
         Self {
             settings: Mutex::default(),
             state: Mutex::default(),
             flushing: watch::Sender::new(false),
-            clock,
             pipeline_latency_ns: AtomicU64::new(0),
+        }
+    }
+}
+
+impl SnapSrc {
+    /// The first audio sink downstream, following pads into and out of bins
+    /// (e.g. the child of `autoaudiosink`).
+    fn downstream_audio_sink(&self) -> Option<gst_audio::AudioBaseSink> {
+        let mut pad = self.obj().static_pad("src")?.peer()?;
+        for _ in 0..64 {
+            if let Some(ghost) = pad.downcast_ref::<gst::GhostPad>() {
+                // Into a bin: continue at the child's pad.
+                pad = ghost.target()?;
+                continue;
+            }
+            let Some(element) = pad.parent_element() else {
+                // The inner side of a bin's ghost pad: out of the bin.
+                let ghost = pad.downcast_ref::<gst::ProxyPad>()?.internal()?;
+                pad = ghost.peer()?;
+                continue;
+            };
+            if let Ok(sink) = element.clone().downcast::<gst_audio::AudioBaseSink>() {
+                return Some(sink);
+            }
+            pad = element.src_pads().into_iter().next()?.peer()?;
+        }
+        None
+    }
+
+    /// Sets `slave-method=resample` on the downstream audio sink (see "Clock").
+    fn adjust_sink(&self) {
+        let Some(sink) = self.downstream_audio_sink() else {
+            gst::debug!(
+                CAT,
+                imp = self,
+                "No audio sink downstream, nothing to adjust"
+            );
+            return;
+        };
+        let current = sink.property_value("slave-method");
+        let nick = current
+            .get::<&glib::EnumValue>()
+            .ok()
+            .map(|v| v.nick().to_owned())
+            .unwrap_or_default();
+        if nick == "skew" {
+            sink.set_property_from_str("slave-method", "resample");
+            gst::info!(
+                CAT,
+                imp = self,
+                "Set slave-method=resample on {} (was skew), so that it follows the \
+                 Snapcast timeline (adjust-sink=false keeps it)",
+                sink.name()
+            );
+        } else {
+            gst::info!(
+                CAT,
+                imp = self,
+                "Leaving {} at slave-method={nick}",
+                sink.name()
+            );
         }
     }
 }
@@ -171,6 +257,15 @@ impl ObjectImpl for SnapSrc {
                     .default_value(DEFAULT_LATENCY_MS)
                     .mutable_ready()
                     .build(),
+                glib::ParamSpecBoolean::builder("adjust-sink")
+                    .nick("Adjust sink")
+                    .blurb(
+                        "Set slave-method=resample on the downstream audio sink (if it is \
+                         at skew), so that it follows the Snapcast timeline exactly",
+                    )
+                    .default_value(DEFAULT_ADJUST_SINK)
+                    .mutable_ready()
+                    .build(),
             ]
         });
         PROPERTIES.as_ref()
@@ -190,6 +285,7 @@ impl ObjectImpl for SnapSrc {
             "client-name" => settings.client_name = string_or(DEFAULT_CLIENT_NAME),
             "instance" => settings.instance = value.get().expect("type checked upstream"),
             "latency-ms" => settings.latency_ms = value.get().expect("type checked upstream"),
+            "adjust-sink" => settings.adjust_sink = value.get().expect("type checked upstream"),
             _ => unimplemented!(),
         }
     }
@@ -202,6 +298,7 @@ impl ObjectImpl for SnapSrc {
             "client-name" => settings.client_name.to_value(),
             "instance" => settings.instance.to_value(),
             "latency-ms" => settings.latency_ms.to_value(),
+            "adjust-sink" => settings.adjust_sink.to_value(),
             _ => unimplemented!(),
         }
     }
@@ -212,7 +309,7 @@ impl ObjectImpl for SnapSrc {
         // Snapcast is inherently live; buffers are timestamped in TIME format.
         obj.set_live(true);
         obj.set_format(gst::Format::Time);
-        obj.set_element_flags(gst::ElementFlags::PROVIDE_CLOCK);
+        // No PROVIDE_CLOCK: the audio sink's clock drives the pipeline ("Clock" above).
     }
 }
 
@@ -249,10 +346,6 @@ impl ElementImpl for SnapSrc {
         });
         PAD_TEMPLATES.as_ref()
     }
-
-    fn provide_clock(&self) -> Option<gst::Clock> {
-        Some(self.clock.clone())
-    }
 }
 
 impl BaseSrcImpl for SnapSrc {
@@ -268,12 +361,18 @@ impl BaseSrcImpl for SnapSrc {
         };
         let client = client::connect(&options)
             .map_err(|e| gst::error_msg!(gst::ResourceError::OpenRead, ["{e}"]))?;
+        // Downstream elements change state before us, so the sink (and the child of
+        // an autoaudiosink) exists by now.
+        if settings.adjust_sink {
+            self.adjust_sink();
+        }
         self.flushing.send_replace(false);
         *self.state.lock().unwrap() = Some(Active {
             client,
             info: None,
             discont: true,
             latency_usec: 0,
+            aligner: Aligner::default(),
         });
         Ok(())
     }
@@ -376,13 +475,12 @@ impl PushSrcImpl for SnapSrc {
             };
             // Signed: the PTS lies one latency before play-out, which may be before the
             // pipeline started.
-            let pts_ns = clock.time().nseconds() as i64
+            let ideal_ns = clock.time().nseconds() as i64
                 + (frame.playout_usec - latency_usec - now) * 1000
                 - base_time.nseconds() as i64;
-            let Ok(pts_ns) = u64::try_from(pts_ns) else {
+            if ideal_ns < 0 {
                 continue; // before pipeline start
-            };
-            let pts = gst::ClockTime::from_nseconds(pts_ns);
+            }
 
             let info = gst_audio::AudioInfo::builder(
                 gst_audio::AudioFormat::F32le,
@@ -400,8 +498,38 @@ impl PushSrcImpl for SnapSrc {
                 active.discont = true;
             }
 
-            let n_frames = frame.samples.len() as u64 / u64::from(frame.channels.max(1));
-            let bytes: Vec<u8> = frame.samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+            let channels = usize::from(frame.channels.max(1));
+            if active.discont {
+                active.aligner.reset();
+            }
+            let place = active
+                .aligner
+                .place(ideal_ns, frame.samples.len() / channels, frame.rate);
+            if place.resync {
+                gst::debug!(
+                    CAT,
+                    imp = self,
+                    "Resync to {} (off by {} µs)",
+                    gst::ClockTime::from_nseconds(ideal_ns as u64),
+                    (place.pts_ns - ideal_ns) / 1000
+                );
+                active.discont = true;
+            } else if place.correction != 0 {
+                gst::trace!(
+                    CAT,
+                    imp = self,
+                    "Drift correction {:+} frames",
+                    place.correction
+                );
+            }
+            let samples = align::stretch(&frame.samples, channels, place.correction);
+            let Ok(pts_ns) = u64::try_from(place.pts_ns) else {
+                continue; // before pipeline start
+            };
+            let pts = gst::ClockTime::from_nseconds(pts_ns);
+
+            let n_frames = (samples.len() / channels) as u64;
+            let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
             let mut buffer = gst::Buffer::from_mut_slice(bytes);
             {
                 let buffer = buffer.get_mut().unwrap();
