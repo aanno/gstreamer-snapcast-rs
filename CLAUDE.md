@@ -119,3 +119,21 @@ Run `make check` before declaring work done.
 - VS Code tasks, CodeLLDB launch configs and rust-analyzer settings are in
   `gstreamer-snapcast-rs.code-workspace` (`.vscode/` is git-ignored).
 - `Cargo.lock` is committed (the plugins are shipped artifacts).
+
+## MCP: xerj (local code and doc search)
+
+The `xerj` MCP server indexes this repo (`ax-docs`) and the `snapcast-rs` submodule
+(`ax-snapcast-rs-docs`), with a link graph (brain `gstreamer-snapcast-rs`). Usage,
+caveats and known problems: `docs/claude/mcp-xerj.md`.
+
+- **Use it for:**
+  - Finding a definition in `snapcast-rs` (`xerj_def`, or `xerj_search` with a plain-string query).
+  - Questions phrased in prose about the docs or design (`xerj_semantic_search`, `field=body`).
+  - Finding which code a doc section refers to (`xerj_brain_ego`).
+- **Prefer Grep/Read for:** exact strings, files changed since the last index (the index is
+  a host-side snapshot and does not update itself), and anything that must be complete.
+- Always pass `_source` and `max_tokens`, or hits return whole files. Check line numbers
+  before relying on them after recent edits.
+- Never send xerj field reports or corpus feedback, and never use `rerank`, unless the
+  user asks. Both send data off the machine.
+- If xerj is down (`xerj_status`), fall back to Grep. Indexing needs the host-side `xerj` CLI.
