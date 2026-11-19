@@ -16,9 +16,12 @@ RUN apt-get update \
         # alsasrc/alsasink and aplay/arecord/amixer for the snd-aloop timing tests
         gstreamer1.0-alsa \
         alsa-utils \
+        gstreamer1.0-pipewire \
         # snapcast-rs: optional opus codec; ALSA for snapclient-rs (cpal)
         libopus-dev \
         libasound2-dev \
+        # pw-cli and other
+        pipewire-audio \
         # Reference C++ Snapcast (interop testing only, never linked). Debian
         # trixie ships 0.31.0; upstream (github.com/snapcast/snapcast) is at 0.34.0.
         snapserver \

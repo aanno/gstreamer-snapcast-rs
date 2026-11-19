@@ -7,6 +7,9 @@ claude mcp add --transport http memory http://host.docker.internal:8765/mcp
 # find claude (vscode devcontainer install)
 find /home/vscode/ -iname claude
 
+mkdir -p /home/vscode/.local/bin
+ln -s /home/vscode/.vscode-server/extensions/anthropic.claude-code-2.1.327-linux-x64/resources/native-binary/claude ~/.local/bin
+
 # install xerj
 curl -fsSL https://xerj.org/get | sh -s -- --with-model
 # only for test (maybe it is better to run xerj inside the devcontainer)
