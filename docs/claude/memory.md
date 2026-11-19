@@ -15,7 +15,7 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
   `scripts/host-play.sh` + `make listen-recv` (start the receiver first) is clean since the
   frame-loss fix. Run `make install` again after plugin changes.
 
-- **Limitations done in this round:** L4 (2026-11-19). The fork commits are local:
+- **Limitations done in this round:** L4, L5 (2026-11-19). The fork commits are local:
   push `aanno/snapcast-rs` before others can build the new submodule pointer.
 
 ### Still open (2026-11-19)
@@ -25,11 +25,15 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
   while snapsrc is at +0.6…+0.9 ms: our receiver is closer to the server than the
   reference. So the drift tests use a separate, wider bound (`ALOOP_TOLERANCE_DRIFT_US`,
   default 2500 µs). Without drift, F2's 1 ms stays.
-- **snapsrc wanders by up to ±1.5 ms within some runs.** User's hypothesis: something is
-  adjusted too aggressively and makes a (low-pass) oscillation. Candidates: `align.rs`
-  (`ALPHA` 0.1, `DEADBAND` 0.25 ms, up to 0.1 % per buffer) following a noisy
-  `diff_to_server` (L5), or the sink's `resample` slaving. Measure which one (corrections
-  per second, `diff_to_server` over time), then damp. Part of L5.
+- **snapsrc wanders by up to ±1.5 ms within some runs.** Measured 2026-11-19
+  (`ALOOP_VERBOSE=1`, snapsrc debug "Alignment: …"). The user's hypothesis (too aggressive
+  adjusting) is **not** our code: the aligner made **0 corrections** in all runs (error
+  stable at about −110 µs, inside its deadband), and `diff_to_server` is stable. The wander
+  is tick-to-tick **jitter of ±0.7 ms in single runs and single receivers** (e.g. −0.37,
+  +1.04, +0.61 ms…), i.e. the sink's `resample` slaving, whose rate estimate (a regression
+  over clock observations) is sometimes restless. Possible remedy, not done: smoother
+  slaving via the sink clock's `window-size`/`timeout`, at the cost of slower convergence.
+  Within the F2 bounds as is.
 
 ## State
 
@@ -197,7 +201,7 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 | L2 | The client's internal player `Stream` is never drained when you don't use its cpal player, so it grows without bound | snapcast-rs client | `ClientHandle::recv` clears it after each frame | Upstream: make the player stream optional |
 | L3 | `TimeSyncComplete` arrives only after 50 quick syncs (5 s) | snapcast-rs client | Schedule frames after `MIN_SYNC_TIME` (500 ms) | Upstream: a "sync usable" event, or a configurable count |
 | L4 | ~~FLAC chunks stamped with the newest input's time~~ (confirmed: +12 ms late, C++ +6…+22 ms) | snapcast-rs server | — | **Fixed 2026-11-19** in the fork (`fix(server): stamp encoded chunks with the time of their first sample`, upstream PR candidate): `Encoder::pending_frames`; FLAC now +0.5 ms (snapsrc) / +0.9 ms (C++). Tests: `aloop_*_plays_flac_on_the_server_timeline` |
-| L5 | Time-sync updates shift PTS slightly; no smoothing | `snapsrc` | Audio sinks tolerate this (alignment threshold) | Plan step 1 |
+| L5 | ~~Time-sync updates shift PTS; no smoothing~~ | `snapsrc` | — | **Resolved 2026-11-19**: snapcast-rs already takes the median of 200 syncs (like C++); `align.rs` turns remaining steps into gradual frame corrections. Measured: 0 corrections in 3 drift runs, error stable at about −110 µs |
 | L6 | Sink input is only S16LE/S32LE; no S24_32LE | `snapsink` | `audioconvert` upstream | Plan step 3 |
 | L7 | `sync=false` with a non-live source floods clients (nothing paces it) | `snapsink` | Keep `sync=true` | Document, or pace in the sink |
 | L8 | No reconnect handling, server volume/mute, mDNS or client id in `snapsrc` | `snapsrc` | — | Plan step 4 |

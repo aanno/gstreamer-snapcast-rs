@@ -127,6 +127,8 @@ struct Active {
     latency_usec: i64,
     /// Keeps the output contiguous and on the Snapcast timeline (drift correction).
     aligner: Aligner,
+    /// Buffers pushed, for periodic diagnostics.
+    buffers: u64,
 }
 
 pub struct SnapSrc {
@@ -373,6 +375,7 @@ impl BaseSrcImpl for SnapSrc {
             discont: true,
             latency_usec: 0,
             aligner: Aligner::default(),
+            buffers: 0,
         });
         Ok(())
     }
@@ -520,6 +523,16 @@ impl PushSrcImpl for SnapSrc {
                     imp = self,
                     "Drift correction {:+} frames",
                     place.correction
+                );
+            }
+            active.buffers += 1;
+            if active.buffers % 256 == 0 {
+                let (error_ns, corrected) = active.aligner.stats();
+                gst::debug!(
+                    CAT,
+                    imp = self,
+                    "Alignment: error {:+.0} µs, {corrected:+} frames corrected since resync",
+                    error_ns / 1000.0
                 );
             }
             let samples = align::stretch(&frame.samples, channels, place.correction);

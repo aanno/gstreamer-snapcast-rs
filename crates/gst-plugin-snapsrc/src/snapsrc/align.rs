@@ -46,12 +46,20 @@ pub struct Aligner {
     /// Filtered error in ns: ideal minus contiguous PTS. Positive: play later (insert).
     error_ns: f64,
     synced: bool,
+    /// Frames inserted (+) / dropped (−) since the last resync, for diagnostics.
+    corrected: i64,
 }
 
 impl Aligner {
     /// Forgets the position: the next buffer resyncs.
     pub fn reset(&mut self) {
         self.synced = false;
+    }
+
+    /// The filtered error in ns (ideal minus output PTS) and the frames corrected since
+    /// the last resync, for diagnostics.
+    pub fn stats(&self) -> (f64, i64) {
+        (self.error_ns, self.corrected)
     }
 
     fn next_pts_ns(&self) -> i64 {
@@ -68,6 +76,7 @@ impl Aligner {
                 rate,
                 error_ns: 0.0,
                 synced: true,
+                corrected: 0,
             };
             return Placement {
                 pts_ns: ideal_ns,
@@ -90,6 +99,7 @@ impl Aligner {
         // Never drop a whole buffer.
         correction = correction.max(1 - n);
         self.frames += n + correction;
+        self.corrected += correction;
         Placement {
             pts_ns,
             correction,

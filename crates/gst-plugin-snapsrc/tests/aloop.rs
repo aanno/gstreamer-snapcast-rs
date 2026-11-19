@@ -59,6 +59,7 @@
 //!   (default 5000; the method itself is good to a few ms)
 //! - `ALOOP_SINK_PROPS`: extra properties for the snapsrc receivers' `alsasink`,
 //!   e.g. `slave-method=skew drift-tolerance=5000`
+//! - `ALOOP_VERBOSE`: print each tick's offset against the server timeline
 //! - `SNAPCLIENT`: C++ snapclient binary (default: `PATH`)
 
 use std::process::{Child, Command, Stdio};
@@ -513,6 +514,10 @@ fn stats(values: &[f64]) -> (f64, f64, f64) {
 
 /// One line about a receiver's absolute offset, e.g. for the test output.
 fn describe_absolute(name: &str, offsets: &[f64], latency: Option<gst::ClockTime>) -> String {
+    if std::env::var_os("ALOOP_VERBOSE").is_some() {
+        let ticks: Vec<String> = offsets.iter().map(|o| format!("{o:+.2}")).collect();
+        eprintln!("aloop: {name} per tick (ms): {}", ticks.join(" "));
+    }
     let (mean, min, max) = stats(offsets);
     let latency = latency
         .map(|l| format!(" (its pipeline latency {} ms)", l.mseconds()))
