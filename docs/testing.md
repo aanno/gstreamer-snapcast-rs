@@ -101,6 +101,7 @@ sink, and no longer provides its clock), in the devcontainer:
 | two snapsrc, card −300 ppm | **passes** (4/4 runs): rate error −17…+4 ppm (was +300), mostly < 0.1 ms apart |
 | snapsrc + C++ snapclient, card −300 ppm | **fails** with +0.9…+1.4 ms: the **C++ snapclient** is +1.7…+2.0 ms off the server under drift, while snapsrc is at +0.6…+0.9 ms |
 | no gaps behind a high-latency sink | **passes** |
+| FLAC against the server timeline (L4) | before the fix +12 ms (C++ +6…+22 ms); **passes since the fix**: snapsrc +0.5 ms, C++ +0.9 ms |
 
 In some runs snapsrc wanders by ±1.5 ms within a run, probably while the sink's
 `resample` slaving converges.

@@ -15,6 +15,9 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
   `scripts/host-play.sh` + `make listen-recv` (start the receiver first) is clean since the
   frame-loss fix. Run `make install` again after plugin changes.
 
+- **Limitations done in this round:** L4 (2026-11-19). The fork commits are local:
+  push `aanno/snapcast-rs` before others can build the new submodule pointer.
+
 ### Still open (2026-11-19)
 
 - **snapsrc + C++ snapclient under drift.** The test failed at a 1 ms tolerance because
@@ -193,7 +196,7 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 | L1 | Streams are fixed once `SnapServer::serve()` runs. `ServerCommand::AddStream` exists, but it always answers with an error after `run()`; `RemoveStream` works | snapcast-rs server | One stream per port; a second stream name fails with `StreamsFixed` | Upstream: runtime `add_stream` (**postponed**, 2026-11-10) |
 | L2 | The client's internal player `Stream` is never drained when you don't use its cpal player, so it grows without bound | snapcast-rs client | `ClientHandle::recv` clears it after each frame | Upstream: make the player stream optional |
 | L3 | `TimeSyncComplete` arrives only after 50 quick syncs (5 s) | snapcast-rs client | Schedule frames after `MIN_SYNC_TIME` (500 ms) | Upstream: a "sync usable" event, or a configurable count |
-| L4 | **Suspected, not verified:** the FLAC encoder buffers samples, but each output chunk carries the timestamp of the latest input, which could make playback up to ~24 ms late, with jitter | snapcast-rs server `encoder/flac.rs` | Default codec is `pcm` | Write a test first; upstream fix if confirmed |
+| L4 | ~~FLAC chunks stamped with the newest input's time~~ (confirmed: +12 ms late, C++ +6…+22 ms) | snapcast-rs server | — | **Fixed 2026-11-19** in the fork (`fix(server): stamp encoded chunks with the time of their first sample`, upstream PR candidate): `Encoder::pending_frames`; FLAC now +0.5 ms (snapsrc) / +0.9 ms (C++). Tests: `aloop_*_plays_flac_on_the_server_timeline` |
 | L5 | Time-sync updates shift PTS slightly; no smoothing | `snapsrc` | Audio sinks tolerate this (alignment threshold) | Plan step 1 |
 | L6 | Sink input is only S16LE/S32LE; no S24_32LE | `snapsink` | `audioconvert` upstream | Plan step 3 |
 | L7 | `sync=false` with a non-live source floods clients (nothing paces it) | `snapsink` | Keep `sync=true` | Document, or pace in the sink |

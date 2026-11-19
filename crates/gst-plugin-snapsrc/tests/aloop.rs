@@ -207,17 +207,19 @@ struct Reference {
     left: Vec<i16>,
 }
 
+const TICKS: &str = "audiotestsrc is-live=true wave=ticks freq=1000 volume=0.8";
+
 fn start_sender() -> Sender {
-    start_sender_with("audiotestsrc is-live=true wave=ticks freq=1000 volume=0.8")
+    start_sender_with(TICKS, "pcm")
 }
 
 /// Starts `source ! S16LE 48 kHz stereo ! snapsink`, with a `tee` that keeps a
 /// reference copy of what was sent.
-fn start_sender_with(source: &str) -> Sender {
+fn start_sender_with(source: &str, codec: &str) -> Sender {
     let p = pipeline(&format!(
         "{source} \
          ! audio/x-raw,format=S16LE,rate={RATE},channels=2 ! tee name=t \
-         t. ! queue ! snapsink name=sink port=0 buffer-ms={BUFFER_MS} \
+         t. ! queue ! snapsink name=sink port=0 buffer-ms={BUFFER_MS} codec={codec} \
          t. ! queue ! appsink name=reference sync=false"
     ));
     let reference = Arc::new(Mutex::new(Reference::default()));
@@ -735,8 +737,10 @@ fn aloop_snapsrc_loses_no_frames_behind_a_high_latency_sink() {
     let card = card();
     let seconds: u64 = env_or("ALOOP_SECONDS", 20);
 
-    let sender =
-        start_sender_with("audiotestsrc is-live=true freq=440 volume=0.8 samplesperbuffer=4608");
+    let sender = start_sender_with(
+        "audiotestsrc is-live=true freq=440 volume=0.8 samplesperbuffer=4608",
+        "pcm",
+    );
     let port = sender.port;
     let receiver = pipeline(&format!(
         "snapsrc port={port} client-name=aloop-latency \
@@ -772,14 +776,14 @@ fn aloop_snapsrc_loses_no_frames_behind_a_high_latency_sink() {
 }
 
 /// One receiver alone, measured against the server timeline (see "Absolute reference").
-fn run_absolute(kind: Kind, side: Side) {
+fn run_absolute(kind: Kind, side: Side, codec: &str) {
     init();
     let card = card();
     let seconds: u64 = env_or("ALOOP_SECONDS", 20);
     let tol_ms: f64 = env_or("ALOOP_TOLERANCE_ABS_US", 5000.0) / 1000.0;
 
     let _shift = RateShift::set(&card, RATE_SHIFT_NOMINAL);
-    let sender = start_sender();
+    let sender = start_sender_with(TICKS, codec);
     let mut receiver = Receiver::start(kind, side, sender.port);
     let cap = capture(&card, seconds, &mut [("receiver", &mut receiver)]);
     let latency = receiver.latency();
@@ -797,7 +801,7 @@ fn run_absolute(kind: Kind, side: Side) {
         Kind::CppSnapclient => "C++ snapclient",
     };
     eprintln!(
-        "aloop: against the server timeline: {} over {} ticks (capture jitter {:.1} ms)",
+        "aloop: against the server timeline ({codec}): {} over {} ticks (capture jitter {:.1} ms)",
         describe_absolute(name, &offsets, latency),
         offsets.len(),
         cap.jitter_ms
@@ -818,11 +822,25 @@ fn run_absolute(kind: Kind, side: Side) {
 #[test]
 #[ignore = "needs snd-aloop (make test-aloop)"]
 fn aloop_snapsrc_plays_on_the_server_timeline() {
-    run_absolute(Kind::Snapsrc, Side::Left);
+    run_absolute(Kind::Snapsrc, Side::Left, "pcm");
 }
 
 #[test]
 #[ignore = "needs snd-aloop and the C++ snapclient (make test-aloop)"]
 fn aloop_cpp_snapclient_plays_on_the_server_timeline() {
-    run_absolute(Kind::CppSnapclient, Side::Right);
+    run_absolute(Kind::CppSnapclient, Side::Right, "pcm");
+}
+
+/// L4: the FLAC encoder buffers samples. Does it stamp its output chunks too late? Both
+/// receivers decode the same stream, so a timestamp error shows in both.
+#[test]
+#[ignore = "needs snd-aloop (make test-aloop)"]
+fn aloop_snapsrc_plays_flac_on_the_server_timeline() {
+    run_absolute(Kind::Snapsrc, Side::Left, "flac");
+}
+
+#[test]
+#[ignore = "needs snd-aloop and the C++ snapclient (make test-aloop)"]
+fn aloop_cpp_snapclient_plays_flac_on_the_server_timeline() {
+    run_absolute(Kind::CppSnapclient, Side::Right, "flac");
 }
