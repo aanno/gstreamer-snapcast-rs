@@ -120,6 +120,9 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 - 2026-11-19: devcontainer audio is **plain ALSA** (dmix on the loopback card via
   `~/.asoundrc`), not PipeWire. PipeWire works in the container only by hand: no udev, so
   the card has to be added manually, and `pipewiresink` deadlocks on stop with PipeWire 1.4.2.
+- 2026-11-19: the devcontainer mounts the host's `/run/udev` read-only, so that WirePlumber
+  may discover the sound card (not tested yet; low priority). No PulseAudio in the
+  container: redundant with `pipewire-pulse` (reasons in `docs/testing-devcontainer.md`).
 - 2026-11-19: Claude Code's config in the devcontainer lives on a named volume
   (`claude-code-config-${devcontainerId}`, `CLAUDE_CONFIG_DIR`).
 

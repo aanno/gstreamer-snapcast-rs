@@ -10,11 +10,16 @@
 	// for timing tests (`sudo modprobe snd-aloop` on the host first). The container does
 	// not start on a host without /dev/snd: remove the line there. With rootless Podman
 	// and --userns=keep-id, the host user's ACLs on /dev/snd/* apply inside the container.
+	// /run/udev (read-only): the host's udev database, so that libudev users such as
+	// WirePlumber can discover the sound card (experimental, not verified yet; see
+	// docs/testing-devcontainer.md). Never add :z/:Z here: that would relabel a host system
+	// directory. Remove the line on a host without /run/udev.
 	"runArgs": [
 		"--cap-add=SYS_PTRACE",
 		"--security-opt",
 		"seccomp=unconfined",
-		"--device=/dev/snd"
+		"--device=/dev/snd",
+		"--volume=/run/udev:/run/udev:ro"
 	],
 
 	// Claude Code's config (plugins, settings, MCP servers, file-based memory, sessions)

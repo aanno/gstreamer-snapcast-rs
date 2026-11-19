@@ -54,6 +54,7 @@ General ones are in [testing.md](testing.md#gotchas-both-environments).
 | `make listen-*` plays nothing audible | There are no speakers in the container | Expected. Record from `hw:Loopback,1,2` (above), or listen on the host |
 | `arecord` from the loopback: `read error: Input/output error` or `File descriptor in bad state`, truncated WAV | The playing end closed or changed format; snd-aloop then breaks the capture | Start the capture first, use the dmix format (S16_LE/48000/2), use `-t raw` for analysis |
 | `no 'Loopback' sound card` / `/dev/snd missing` | Module not loaded on the host, or container started before it was / without `--device=/dev/snd` | `sudo modprobe snd-aloop` on the host, then rebuild/restart the container. `make doctor` checks it |
+| Container doesn't start: `/run/udev: no such file or directory` | The read-only udev mount in `runArgs` needs `/run/udev` on the host | Remove `--volume=/run/udev:/run/udev:ro` from `devcontainer.json` on such hosts |
 | `/dev/snd present but not accessible` | Rootless Podman: the host user's ACLs on `/dev/snd/*` apply (`--userns=keep-id`) | Check `getfacl /dev/snd/*` on the host; possibly `--group-add keep-groups` in `runArgs` |
 | Claude Code plugins (e.g. `rust-analyzer-lsp`), MCP servers or memory are gone after a rebuild | Before 2026-11-19, `~/.claude` and `~/.claude.json` lived in the container | Now on the named volume `claude-code-config-<id>`, with `CLAUDE_CONFIG_DIR=~/.claude` (so `.claude.json` is there too). To migrate an old container, see below |
 | Claude Code says "permission denied" under `~/.claude` | The volume was created owned by root (mount point missing in an older image) | `sudo chown -R vscode: ~/.claude` |
@@ -85,8 +86,9 @@ ALSA is enough for everything above. If you need PipeWire anyway (e.g. to try `S
 or `pipewiresrc`), it can be started privately. Known problems:
 
 - It needs a session D-Bus; realtime scheduling is unavailable (warnings, harmless).
-- **WirePlumber finds no sound card**: without udev in the container, only the
-  `auto_null` dummy sink exists. Add the loopback card by hand.
+- **WirePlumber finds no sound card**: without the udev database in the container, only
+  the `auto_null` dummy sink exists. Add the loopback card by hand (below), or see
+  [udev](#udev-and-sound-card-discovery).
 - **`pipewiresink` deadlocks on stop** (PipeWire 1.4.2; also with `audiotestsrc`). Use
   `pulsesink`/`autoaudiosink` via pipewire-pulse instead.
 - While it runs, `~/.asoundrc`'s `default` is still the plain dmix. Use `pulsesink` or
@@ -106,3 +108,30 @@ pw-record --target aloop-sink -P stream.capture.sink=true --format s16 /tmp/out.
 
 Stop it with `pkill -x wireplumber; pkill -x pipewire-pulse; pkill -x pipewire`, and move
 `~/.asoundrc` back.
+
+### udev and sound card discovery
+
+WirePlumber (and other libudev users) find sound cards through the **udev database** in
+`/run/udev`, which the host's udev daemon fills from kernel events. `libudev` itself is
+installed in the container. Installing the `udev` package would not help: a rootless
+container doesn't receive the kernel's device events, so a udev daemon in here has
+nothing to work with.
+
+Since 2026-11-19, `devcontainer.json` mounts the host's `/run/udev` read-only
+(`--volume=/run/udev:/run/udev:ro`). WirePlumber might then discover the loopback card by
+itself, which would make the `pw-cli create-node` step above unnecessary. **Not verified
+yet.** To check it, start PipeWire as above without `create-node` and look at `wpctl status`.
+
+- On a host without `/run/udev`, the container does not start: remove the line.
+- Never add `:z`/`:Z` to that mount: it would relabel a host system directory.
+- Even with discovery, the `pipewiresink` deadlock remains. The gain is small, since what
+  needs PipeWire (`SRC=desktop`, real speakers) belongs on the host anyway.
+
+### Why not PulseAudio?
+
+Redundant. The `pulsesink` path (what `autoaudiosink` picks when a Pulse server exists)
+is already covered by PipeWire's `pipewire-pulse`, and the host runs PipeWire, not
+PulseAudio. A real PulseAudio daemon would be easier to start in the container
+(`pulseaudio -n -F <file>` with `load-module module-alsa-sink device=hw:Loopback,0,3`, no
+D-Bus, no udev). But it would test a setup that neither the host nor the target users
+have. ALSA (above) covers what the container needs.
