@@ -63,6 +63,10 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
   audible, as a **mixture of single and double clicks**. The constant ~62 ms from the aloop
   test would sound like a steady double click, so via PipeWire the offset seems to
   move (L12: snapsrc follows the real card's clock and resyncs). Not measured yet.
+- **Absolute reference** (2026-11-19): every aloop test now also reports each receiver's
+  offset against the server timeline (`CLOCK_MONOTONIC`, the server's clock). Result:
+  snapsrc **+62 ms late** (pipeline latency 65 ms), C++ snapclient **+1 ms**. That confirms
+  hypothesis 2 (L13, P3 (a)); nothing was changed in snapsrc yet.
 - **Fixed 2026-11-19: snapsrc lost frames behind `pulsesink`.** Music from a file "wobbled
   with short pauses" on the host. The cause: `create()` dropped frames with `playout < now`,
   but downstream sets the pace (a sink blocks until its ring buffer has room) and renders at
@@ -161,7 +165,7 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 | L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | Prototype: copy it into `snapcast-engine`. Later, upstream a control library crate |
 | L11 | snapcast-rs cannot serve **audio** over WebSocket (C++ snapserver: `/stream` on port 1780, used by Snapweb's player). Its WebSocket endpoint carries only JSON-RPC | snapcast-rs server | — | Only if a WebSocket audio client must work with `snapsink` (open question) |
 | L12 | `snapsrc` → `alsasink` (default `slave-method=skew`, `drift-tolerance` 40 ms) does not follow the server timeline when the sound card drifts; it jumps back only after 40 ms | `snapsrc` + audio sink | — | P3 (b) |
-| L13 | `snapsrc` and the C++ `snapclient` play 60.6 ms apart (constant) on the same card | `snapsrc` or engine timing | — | P3 (a): find out which one is off |
+| L13 | `snapsrc` plays **late by its pipeline latency** (aloop: +62 ms with 65 ms latency; the C++ snapclient is at +1 ms). That's the ~62 ms between them | `snapsrc` PTS | — | P3 (a): PTS = playout − pipeline latency |
 
 ## Plan (2026-11-10, agreed)
 
@@ -201,11 +205,13 @@ property `control-port` (`0` = off); optional `snapweb-dir` for Snapweb's static
 auth, no persistence, no mDNS, no `Stream.AddStream` (L1).
 
 **P3. Timing robustness for the prototype:** make the aloop tests pass. That means
-(a) understanding the −60.6 ms offset to the C++ snapclient. Hypothesis (2026-11-19):
-snapsrc's PTS ignores the pipeline latency, so its sound comes out one pipeline latency
-late. Doubt: `alsasink` reports 110 ms but the offset is ~62 ms, so snapclient may be off
-too. Before changing anything, add an absolute reference to the test (each receiver
-against the server timeline); (b) letting `snapsrc` playback follow the server against a drifting
+(a) snapsrc's absolute offset. **Measured 2026-11-19** with the new absolute reference
+(`aloop_*_plays_on_the_server_timeline`): snapsrc is +62 ms late with 65 ms pipeline
+latency, and the C++ snapclient +0.9…+2.1 ms, which also validates the method. So the PTS
+must map play-out onto the *output* time: `pts = … − pipeline latency`. Only one latency
+can apply per pipeline, but it can change (Latency event), so the PTS must follow it.
+Check with both absolute tests and the offset test (snapsrc + snapclient within 1 ms).
+(b) letting `snapsrc` playback follow the server against a drifting
 card: try `alsasink slave-method=resample` / a small `drift-tolerance`, or have `snapsrc`
 make the sink slave properly; document what users must set; (c) the start-up alignment
 (< 1 ms, but varying). Also smoothing for `diff_to_server` (L5) if the measurements

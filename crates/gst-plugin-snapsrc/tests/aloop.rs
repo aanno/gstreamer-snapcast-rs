@@ -30,19 +30,40 @@
 //! Both receivers share the card, so this emulates "sound card drifts against the
 //! server", not two cards drifting against each other.
 //!
+//! # Absolute reference
+//!
+//! Every test also measures each receiver against the **server timeline**: when a tick
+//! is due (its server timestamp + `buffer-ms`) versus when it leaves the card.
+//!
+//! - Due: snapsink stamps a buffer with its render time, `base_time + running_time +
+//!   latency` of the sender's clock, translated to `CLOCK_MONOTONIC` (the server's
+//!   clock; on one machine `diff_to_server` is 0). The sender `tee`s a reference copy to
+//!   an appsink, so the test knows the PTS of every tick. (Don't assume ticks on full
+//!   seconds: `audiotestsrc` puts them about one buffer earlier.)
+//! - Out: the capture maps frames to `CLOCK_MONOTONIC` with the fitted card rate and the
+//!   earliest buffer arrival (arrival delays are only ever positive). snd-aloop hands
+//!   samples to the capture end when the playback end consumes them, which is the moment
+//!   a real DAC would play them, within a period of a few ms.
+//!
+//! Positive = the receiver plays late.
+//!
 //! # Settings (environment variables)
 //!
 //! - `ALOOP_CARD`: card name (default `Loopback`)
 //! - `ALOOP_SECONDS`: measured seconds after warm-up (default 20)
 //! - `ALOOP_TOLERANCE_US`: max allowed offset between receivers (default 1000, F2)
 //! - `ALOOP_TOLERANCE_PPM`: max allowed rate error against the server (default 100)
+//! - `ALOOP_TOLERANCE_ABS_US`: max allowed absolute offset against the server timeline
+//!   (default 5000; the method itself is good to a few ms)
 //! - `SNAPCLIENT`: C++ snapclient binary (default: `PATH`)
 
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use gst::prelude::*;
+use gst_base::prelude::*;
+use snapcast_engine::now_usec;
 
 const RATE: u32 = 48_000;
 const BUFFER_MS: u32 = 1000;
@@ -169,26 +190,100 @@ impl Drop for Running {
     }
 }
 
-fn start_sender() -> (Running, u32) {
+/// The sender, and what it sent: a reference copy of its left channel.
+struct Sender {
+    running: Running,
+    port: u32,
+    reference: Arc<Mutex<Reference>>,
+}
+
+#[derive(Default)]
+struct Reference {
+    first_pts: Option<gst::ClockTime>,
+    left: Vec<i16>,
+}
+
+fn start_sender() -> Sender {
     start_sender_with("audiotestsrc is-live=true wave=ticks freq=1000 volume=0.8")
 }
 
-/// Starts `source ! S16LE 48 kHz stereo ! snapsink` and returns its port.
-fn start_sender_with(source: &str) -> (Running, u32) {
-    let sender = Running::start(&format!(
+/// Starts `source ! S16LE 48 kHz stereo ! snapsink`, with a `tee` that keeps a
+/// reference copy of what was sent.
+fn start_sender_with(source: &str) -> Sender {
+    let p = pipeline(&format!(
         "{source} \
-         ! audio/x-raw,format=S16LE,rate={RATE},channels=2 \
-         ! snapsink name=sink port=0 buffer-ms={BUFFER_MS}"
+         ! audio/x-raw,format=S16LE,rate={RATE},channels=2 ! tee name=t \
+         t. ! queue ! snapsink name=sink port=0 buffer-ms={BUFFER_MS} \
+         t. ! queue ! appsink name=reference sync=false"
     ));
+    let reference = Arc::new(Mutex::new(Reference::default()));
+    let store = Arc::clone(&reference);
+    p.by_name("reference")
+        .unwrap()
+        .downcast::<gst_app::AppSink>()
+        .unwrap()
+        .set_callbacks(
+            gst_app::AppSinkCallbacks::builder()
+                .new_sample(move |appsink| {
+                    let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                    let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+                    let mut r = store.lock().unwrap();
+                    if r.first_pts.is_none() {
+                        r.first_pts = buffer.pts();
+                    }
+                    r.left.extend(
+                        map.as_chunks::<4>()
+                            .0
+                            .iter()
+                            .map(|f| i16::from_le_bytes([f[0], f[1]])),
+                    );
+                    Ok(gst::FlowSuccess::Ok)
+                })
+                .build(),
+        );
+    play(&p);
+    let sender = Running(p);
     let sink = sender.0.by_name("sink").unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let port = sink.property::<u32>("bound-port");
         if port != 0 {
-            return (sender, port);
+            return Sender {
+                running: sender,
+                port,
+                reference,
+            };
         }
         assert!(Instant::now() < deadline, "snapsink did not start a server");
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+impl Sender {
+    /// When each tick sent so far is due at the output, in seconds of `CLOCK_MONOTONIC`:
+    /// its server timestamp (snapsink's formula) plus `buffer-ms`.
+    fn due_times(&self) -> Vec<f64> {
+        let p = &self.running.0;
+        let sink = p
+            .by_name("sink")
+            .unwrap()
+            .downcast::<gst_base::BaseSink>()
+            .unwrap();
+        let (clock, base_time) = (p.clock().unwrap(), p.base_time().unwrap());
+        // snapsink: server_ts = now_usec() + (render - clock.time()), i.e. render + offset.
+        let offset_ns = now_usec() * 1000 - clock.time().nseconds() as i64;
+        let latency_ns = sink.latency().nseconds() as i64;
+        let r = self.reference.lock().unwrap();
+        let first_pts = r.first_pts.expect("the sender sent nothing").nseconds() as i64;
+        onsets(&r.left)
+            .iter()
+            .map(|&f| {
+                let pts_ns = first_pts + (f * 1e9 / f64::from(RATE)) as i64;
+                let server_ns = base_time.nseconds() as i64 + pts_ns + latency_ns + offset_ns;
+                server_ns as f64 / 1e9 + f64::from(BUFFER_MS) / 1000.0
+            })
+            .collect()
     }
 }
 
@@ -244,6 +339,15 @@ impl Receiver {
                 Receiver::Cpp(child)
             }
         }
+    }
+
+    /// The pipeline latency of a snapsrc receiver (None for the C++ client).
+    fn latency(&self) -> Option<gst::ClockTime> {
+        let Receiver::Snapsrc(p) = self else {
+            return None;
+        };
+        let mut q = gst::query::Latency::new();
+        p.0.query(&mut q).then(|| q.result().1)
     }
 
     fn assert_alive(&mut self, what: &str) {
@@ -311,6 +415,12 @@ struct Capture {
     right: Vec<i16>,
     /// Captured frames per second of `CLOCK_MONOTONIC`.
     card_rate: f64,
+    /// Index of `left[0]` among all captured frames (the warm-up came before).
+    first_frame: usize,
+    /// `CLOCK_MONOTONIC` seconds of captured frame 0: `t(frame) = t0 + frame / card_rate`.
+    t0: f64,
+    /// Spread of the arrival delays in ms, a measure of the capture's timing jitter.
+    jitter_ms: f64,
 }
 
 /// Records `WARMUP + seconds` from the capture side of subdevice 0 and keeps the part
@@ -333,7 +443,6 @@ fn capture(card: &str, seconds: u64, receivers: &mut [(&str, &mut Receiver)]) ->
     let (mut left, mut right) = (Vec::new(), Vec::new());
     // (arrival time, frames captured so far) of each buffer after warm-up.
     let mut arrivals: Vec<(f64, f64)> = Vec::new();
-    let start = Instant::now();
     let mut frames = 0usize;
     while frames < total_frames {
         let sample = appsink
@@ -348,17 +457,60 @@ fn capture(card: &str, seconds: u64, receivers: &mut [(&str, &mut Receiver)]) ->
             frames += 1;
         }
         if frames > warmup_frames {
-            arrivals.push((start.elapsed().as_secs_f64(), frames as f64));
+            arrivals.push((now_usec() as f64 / 1e6, frames as f64));
         }
         for (what, receiver) in receivers.iter_mut() {
             receiver.assert_alive(what);
         }
     }
+    let card_rate = slope(&arrivals);
+    // Each buffer arrives (slightly) after its last frame was captured, never before:
+    // the earliest arrival gives the time of frame 0.
+    let starts: Vec<f64> = arrivals.iter().map(|(t, n)| t - n / card_rate).collect();
+    let t0 = starts.iter().copied().fold(f64::MAX, f64::min);
+    let latest = starts.iter().copied().fold(f64::MIN, f64::max);
     Capture {
         left,
         right,
-        card_rate: slope(&arrivals),
+        card_rate,
+        first_frame: warmup_frames,
+        t0,
+        jitter_ms: (latest - t0) * 1000.0,
     }
+}
+
+/// Each tick's offset against the server timeline in ms (positive = late): when it left
+/// the card versus when it was due.
+fn absolute_offsets_ms(ticks: &[f64], cap: &Capture, due: &[f64]) -> Vec<f64> {
+    ticks
+        .iter()
+        .filter_map(|&f| {
+            let out = cap.t0 + (cap.first_frame as f64 + f) / cap.card_rate;
+            due.iter()
+                .map(|&d| out - d)
+                .min_by(|x, y| x.abs().total_cmp(&y.abs()))
+                .filter(|d| d.abs() < 0.5)
+                .map(|d| d * 1000.0)
+        })
+        .collect()
+}
+
+/// Mean, min and max.
+fn stats(values: &[f64]) -> (f64, f64, f64) {
+    let mean = values.iter().sum::<f64>() / values.len().max(1) as f64;
+    let (min, max) = values
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+    (mean, min, max)
+}
+
+/// One line about a receiver's absolute offset, e.g. for the test output.
+fn describe_absolute(name: &str, offsets: &[f64], latency: Option<gst::ClockTime>) -> String {
+    let (mean, min, max) = stats(offsets);
+    let latency = latency
+        .map(|l| format!(" (its pipeline latency {} ms)", l.mseconds()))
+        .unwrap_or_default();
+    format!("{name} {mean:+.1} ms [{min:+.1}..{max:+.1}]{latency}")
 }
 
 /// Least-squares slope of y over x.
@@ -416,7 +568,8 @@ fn run(a: Kind, b: Kind, rate_shift: Option<i64>) {
     let tol_ppm: f64 = env_or("ALOOP_TOLERANCE_PPM", 100.0);
 
     let _shift = RateShift::set(&card, rate_shift.unwrap_or(RATE_SHIFT_NOMINAL));
-    let (_sender, port) = start_sender();
+    let sender = start_sender();
+    let port = sender.port;
     let mut left = Receiver::start(a, Side::Left, port);
     let mut right = Receiver::start(b, Side::Right, port);
     let cap = capture(
@@ -427,7 +580,9 @@ fn run(a: Kind, b: Kind, rate_shift: Option<i64>) {
             ("receiver B (right)", &mut right),
         ],
     );
+    let (lat_a, lat_b) = (left.latency(), right.latency());
     drop((left, right));
+    let due = sender.due_times();
 
     let (l, r) = (onsets(&cap.left), onsets(&cap.right));
     let min_ticks = seconds as usize - 2;
@@ -474,6 +629,12 @@ fn run(a: Kind, b: Kind, rate_shift: Option<i64>) {
          offset B-A over {} ticks: mean {mean:+.0} µs, range {min:+.0}..{max:+.0} µs; \
          rate error A {ppm_a:+.1} ppm, B {ppm_b:+.1} ppm",
         offsets_us.len()
+    );
+    eprintln!(
+        "aloop: against the server timeline: {}; {} (capture jitter {:.1} ms)",
+        describe_absolute("A", &absolute_offsets_ms(&l, &cap, &due), lat_a),
+        describe_absolute("B", &absolute_offsets_ms(&r, &cap, &due), lat_b),
+        cap.jitter_ms
     );
 
     if rate_shift.is_some() {
@@ -565,8 +726,9 @@ fn aloop_snapsrc_loses_no_frames_behind_a_high_latency_sink() {
     let card = card();
     let seconds: u64 = env_or("ALOOP_SECONDS", 20);
 
-    let (_sender, port) =
+    let sender =
         start_sender_with("audiotestsrc is-live=true freq=440 volume=0.8 samplesperbuffer=4608");
+    let port = sender.port;
     let receiver = pipeline(&format!(
         "snapsrc port={port} client-name=aloop-latency \
          ! audioconvert ! audioresample \
@@ -598,4 +760,60 @@ fn aloop_snapsrc_loses_no_frames_behind_a_high_latency_sink() {
         "snapsrc lost audio: {} silent gaps ({total_ms} ms)",
         gaps.len()
     );
+}
+
+/// One receiver alone, measured against the server timeline (see "Absolute reference").
+fn run_absolute(kind: Kind, side: Side) {
+    init();
+    let card = card();
+    let seconds: u64 = env_or("ALOOP_SECONDS", 20);
+    let tol_ms: f64 = env_or("ALOOP_TOLERANCE_ABS_US", 5000.0) / 1000.0;
+
+    let _shift = RateShift::set(&card, RATE_SHIFT_NOMINAL);
+    let sender = start_sender();
+    let mut receiver = Receiver::start(kind, side, sender.port);
+    let cap = capture(&card, seconds, &mut [("receiver", &mut receiver)]);
+    let latency = receiver.latency();
+    drop(receiver);
+    let due = sender.due_times();
+
+    let channel = match side {
+        Side::Left => &cap.left,
+        Side::Right => &cap.right,
+    };
+    let ticks = onsets(channel);
+    let offsets = absolute_offsets_ms(&ticks, &cap, &due);
+    let name = match kind {
+        Kind::Snapsrc => "snapsrc",
+        Kind::CppSnapclient => "C++ snapclient",
+    };
+    eprintln!(
+        "aloop: against the server timeline: {} over {} ticks (capture jitter {:.1} ms)",
+        describe_absolute(name, &offsets, latency),
+        offsets.len(),
+        cap.jitter_ms
+    );
+    assert!(
+        offsets.len() >= seconds as usize - 2,
+        "only {} of {} ticks matched the server timeline",
+        offsets.len(),
+        ticks.len()
+    );
+    let (mean, _, _) = stats(&offsets);
+    assert!(
+        mean.abs() <= tol_ms,
+        "{name} plays {mean:+.1} ms off the server timeline (tolerance ±{tol_ms} ms)"
+    );
+}
+
+#[test]
+#[ignore = "needs snd-aloop (make test-aloop)"]
+fn aloop_snapsrc_plays_on_the_server_timeline() {
+    run_absolute(Kind::Snapsrc, Side::Left);
+}
+
+#[test]
+#[ignore = "needs snd-aloop and the C++ snapclient (make test-aloop)"]
+fn aloop_cpp_snapclient_plays_on_the_server_timeline() {
+    run_absolute(Kind::CppSnapclient, Side::Right);
 }
