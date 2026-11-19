@@ -29,7 +29,7 @@ fn second_stream_on_running_server_fails() {
     let launch = |stream: &str| {
         gst::parse::launch(&format!(
             "audiotestsrc is-live=true ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
-             ! snapsink port={port} stream={stream}"
+             ! snapsink port={port} stream={stream} mdns-name=\"\""
         ))
         .unwrap()
     };

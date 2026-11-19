@@ -59,6 +59,9 @@ General ones are in [testing.md](testing.md#gotchas-both-environments).
 | Claude Code plugins (e.g. `rust-analyzer-lsp`), MCP servers or memory are gone after a rebuild | Before 2026-11-19, `~/.claude` and `~/.claude.json` lived in the container | Now on the named volume `claude-code-config-<id>`, with `CLAUDE_CONFIG_DIR=~/.claude` (so `.claude.json` is there too). To migrate an old container, see below |
 | Claude Code says "permission denied" under `~/.claude` | The volume was created owned by root (mount point missing in an older image) | `sudo chown -R vscode: ~/.claude` |
 | Claude Code's LSP plugin doesn't work (`Unknown binary 'rust-analyzer'`) | Only the rustup proxy existed, without the component | Now in `rust-toolchain.toml`; `rustup component add rust-analyzer` for an existing container |
+| snapcast-rs's own `make check` fails in `astro-dnssd` (`build.rs` panics, `avahi-compat-libdns_sd` not found) | The `snapserver-rs` binary announces itself via Avahi's compat library; its dev files were missing | `libavahi-compat-libdnssd-dev` (in the Dockerfile since 2026-11-19). Our plugins don't need it: they use the pure-Rust `mdns-sd` |
+| mDNS: snapsrc finds snapsink (`make test-mdns`), but the C++ snapclient/snapserver find nothing | The container has no `avahi-daemon` (and no system D-Bus), which the C++ peers use | Test discovery with the C++ peers on the host (`docs/testing-host.md`) |
+| mDNS: snapsrc connects to a `fe80::…` address and gets no audio | IPv6 link-local addresses need a scope id that mDNS doesn't provide | Fixed 2026-11-19: discovery skips them and waits for an IPv4 or routable IPv6 address |
 | MCP servers (memory, xerj) unreachable | They run on the host and are reached via `host.docker.internal` | See `docs/claude/mcp-*.md` |
 
 ### Moving Claude Code's config onto the volume (once)

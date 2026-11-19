@@ -22,6 +22,8 @@ use std::sync::OnceLock;
 
 #[cfg(feature = "client")]
 pub mod client;
+#[cfg(any(feature = "client", feature = "server"))]
+pub mod mdns;
 #[cfg(feature = "server")]
 pub mod server;
 
@@ -100,6 +102,9 @@ pub enum EngineError {
     /// Invalid configuration.
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),
+    /// mDNS discovery or announcement failed.
+    #[error("mDNS: {0}")]
+    Mdns(String),
 }
 
 #[cfg(test)]

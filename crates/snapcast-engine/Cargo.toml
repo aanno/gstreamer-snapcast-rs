@@ -12,9 +12,9 @@ publish = false
 [features]
 default = []
 # Embedded Snapcast server (used by snapsink)
-server = ["dep:snapcast-server"]
+server = ["dep:snapcast-server", "dep:mdns-sd"]
 # Embedded Snapcast client (used by snapsrc)
-client = ["dep:snapcast-client"]
+client = ["dep:snapcast-client", "dep:mdns-sd"]
 
 [dependencies]
 snapcast-server = { workspace = true, optional = true }
@@ -23,6 +23,7 @@ snapcast-proto = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
+mdns-sd = { workspace = true, optional = true }
 
 [lints]
 workspace = true

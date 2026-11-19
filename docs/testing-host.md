@@ -150,6 +150,26 @@ gst-launch-1.0 snapsrc adjust-sink=false ! audioconvert ! alsasink slave-method=
 `gst-inspect-1.0`, GStreamer 1.26), so the same experiments work there. `pipewiresink` is
 different: it has only its own `slave-method` (default `none`) and none of the others.
 
+### mDNS: receivers without a host name
+
+snapsink announces its server via mDNS (`_snapcast._tcp`, name `gst-snapsink`, property
+`mdns-name`; never for `port=0`). snapsrc with an empty `host` finds a server (the first
+one, or the one named by its `mdns-name`) within 5 s and uses its announced port. Both
+use the pure-Rust `mdns-sd`, so no Avahi library is needed, but it is the same protocol
+as Avahi. `make test-mdns` tests snapsink → snapsrc. With the C++ peers, by hand
+(they use Avahi, so `avahi-daemon` must run, as it does on Fedora by default):
+
+```sh
+avahi-browse -rt _snapcast._tcp            # lists gst-snapsink (and other servers)
+make listen-send                           # terminal 1: snapsink, announced
+make listen-recv HOST=                     # terminal 2: snapsrc finds it (empty HOST)
+make listen-cpp-client HOST=               # or the C++ snapclient (no -h: it browses)
+snapserver &  make listen-recv HOST=       # snapsrc finds a C++ snapserver
+```
+
+Open ports for others on the network: 5353/udp (mDNS) besides the stream port
+(`sudo firewall-cmd --add-service=mdns`).
+
 ### Several receivers on one host
 
 Several `snapsrc` on one machine are fine, e.g. line-out and a Bluetooth speaker in sync.

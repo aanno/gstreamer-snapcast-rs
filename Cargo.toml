@@ -41,6 +41,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "
 
 tracing = "0.1"
 thiserror = "2"
+# mDNS / DNS-SD, pure Rust (same crate and version as snapcast-rs's snapclient-rs)
+mdns-sd = "0.12"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

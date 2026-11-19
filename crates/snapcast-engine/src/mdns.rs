@@ -17,6 +17,22 @@ fn daemon() -> Result<mdns_sd::ServiceDaemon, EngineError> {
     mdns_sd::ServiceDaemon::new().map_err(|e| EngineError::Mdns(e.to_string()))
 }
 
+/// The address to connect to: IPv4 first, then a routable IPv6 address. IPv6
+/// link-local addresses (`fe80::/10`) are skipped: they need the interface's scope
+/// id, which mDNS doesn't give us (connecting fails or hangs; seen 2026-11-19).
+#[cfg(feature = "client")]
+fn usable_address(addresses: &std::collections::HashSet<std::net::IpAddr>) -> Option<String> {
+    let link_local = |a: &std::net::IpAddr| match a {
+        std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80,
+        std::net::IpAddr::V4(_) => false,
+    };
+    addresses
+        .iter()
+        .find(|a| a.is_ipv4())
+        .or_else(|| addresses.iter().find(|a| !link_local(a)))
+        .map(ToString::to_string)
+}
+
 /// Finds a Snapcast server on the local network: the first that answers within
 /// `timeout` (and is announced under the instance `name`, if given), as
 /// `(address, stream port)`. IPv4 addresses are preferred (an IPv6 link-local
@@ -35,13 +51,12 @@ pub fn discover(timeout: Duration, name: Option<&str>) -> Result<(String, u16), 
             Ok(mdns_sd::ServiceEvent::ServiceResolved(info))
                 if wanted.as_deref().is_none_or(|w| info.get_fullname() == w) =>
             {
-                let addresses = info.get_addresses();
-                let address = addresses
-                    .iter()
-                    .find(|a| a.is_ipv4())
-                    .or_else(|| addresses.iter().next())
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| info.get_hostname().trim_end_matches('.').to_owned());
+                // A resolve event may carry only some of the addresses (e.g. just the
+                // IPv6 link-local one first): wait for a usable one.
+                let Some(address) = usable_address(info.get_addresses()) else {
+                    tracing::debug!(name = info.get_fullname(), "No usable address yet");
+                    continue;
+                };
                 tracing::info!(
                     name = info.get_fullname(),
                     %address,
@@ -105,5 +120,34 @@ impl Drop for Announcement {
             let _ = done.recv_timeout(Duration::from_millis(500));
         }
         let _ = self.daemon.shutdown();
+    }
+}
+
+#[cfg(all(test, feature = "client"))]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::net::IpAddr;
+
+    fn set(addresses: &[&str]) -> HashSet<IpAddr> {
+        addresses.iter().map(|a| a.parse().unwrap()).collect()
+    }
+
+    #[test]
+    fn prefers_ipv4_and_skips_link_local_ipv6() {
+        assert_eq!(
+            usable_address(&set(&["fe80::1", "192.168.1.5"])).as_deref(),
+            Some("192.168.1.5")
+        );
+        assert_eq!(
+            usable_address(&set(&["fe80::1"])),
+            None,
+            "link-local only: wait"
+        );
+        assert_eq!(
+            usable_address(&set(&["fe80::1", "2001:db8::5"])).as_deref(),
+            Some("2001:db8::5")
+        );
+        assert_eq!(usable_address(&set(&[])), None);
     }
 }

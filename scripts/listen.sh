@@ -18,7 +18,7 @@
 #              desktop: whatever the desktop plays (PipeWire default sink monitor).
 #   SINK       GStreamer sink for `recv` (default: autoaudiosink)
 #   SOUNDCARD  ALSA PCM for the C++ snapclient (default: default), e.g. hw:Loopback,0,1
-#   HOST       server for receivers (default 127.0.0.1)
+#   HOST       server for receivers (default 127.0.0.1; empty, i.e. HOST=, finds one via mDNS)
 #   PORT       stream port (default 1704)
 #   STREAM     stream name (default: default)
 #   CODEC      pcm (default) | flac
@@ -29,7 +29,7 @@ set -euo pipefail
 
 SRC=${SRC:-ticks}
 SINK=${SINK:-autoaudiosink}
-HOST=${HOST:-127.0.0.1}
+HOST=${HOST-127.0.0.1}   # set but empty = mDNS discovery
 PORT=${PORT:-1704}
 STREAM=${STREAM:-default}
 CODEC=${CODEC:-pcm}
@@ -106,12 +106,19 @@ send() {
 }
 
 recv() {
-    exec gst-launch-1.0 -e snapsrc host="$HOST" port="$PORT" client-name="gst-snapsrc" \
+    # gst-launch joins its arguments into one string: an empty value must be "" or the
+    # next property becomes the host. Empty host = mDNS discovery.
+    local host_arg="host=$HOST"
+    [ -z "$HOST" ] && host_arg='host=""'
+    exec gst-launch-1.0 -e snapsrc "$host_arg" port="$PORT" client-name="gst-snapsrc" \
         latency-ms="$LATENCY_MS" ! audioconvert ! audioresample ! $SINK
 }
 
 cpp_client() {
-    exec "$SNAPCLIENT" -h "$HOST" -p "$PORT" --latency "$LATENCY_MS" --soundcard "$SOUNDCARD" \
+    # Without -h/-p the C++ snapclient looks for a server via mDNS (needs avahi-daemon).
+    local server=()
+    [ -n "$HOST" ] && server=(-h "$HOST" -p "$PORT")
+    exec "$SNAPCLIENT" "${server[@]}" --latency "$LATENCY_MS" --soundcard "$SOUNDCARD" \
         --hostID "listen-cpp-client"
 }
 

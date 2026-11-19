@@ -10,7 +10,7 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 - **Limitations round done** (one commit each): L4 FLAC timestamps, L5 (resolved by
   measurement), L3 `TimeSyncUsable`, L2 `player_stream`, L7 snapsink pacing, L8 reconnect +
   client id (automatic `instance`) + server volume/mute. Earlier the same day: L12, L13,
-  start-up alignment. **L8 mDNS is postponed** (Avahi packages, see the table).
+  start-up alignment. L8 mDNS done after all (pure Rust; the Avahi dev package is only needed for snapcast-rs's own `snapserver-rs` build).
 - **snapcast-rs fork commits are local only** (FLAC timestamps, `TimeSyncUsable`,
   `player_stream`, client instance ids): push `aanno/snapcast-rs` before anyone else
   builds this repo's submodule pointer; each is an upstream PR candidate.
@@ -196,6 +196,10 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
   `instance` defaults to automatic, coordinated host-wide by lock files (C++ snapclients
   don't take part; give them `--instance` above the snapsrc numbers), and the snapcast-rs
   server distinguishes instances like the C++ one.
+- 2026-11-19: **mDNS via `mdns-sd`** (pure Rust, as snapclient-rs uses), not Avahi:
+  keeps the sender Android-portable and needs no daemon. Discovery runs once at
+  `connect` (blocks up to 5 s); reconnects keep that address. Tests on fixed ports set
+  `mdns-name=""` so they don't announce themselves on the user's network.
 - 2026-11-19: Claude Code's config in the devcontainer lives on a named volume
   (`claude-code-config-${devcontainerId}`, `CLAUDE_CONFIG_DIR`).
 
@@ -210,7 +214,7 @@ Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; dev
 | L5 | ~~Time-sync updates shift PTS; no smoothing~~ | `snapsrc` | — | **Resolved 2026-11-19**: snapcast-rs already takes the median of 200 syncs (like C++); `align.rs` turns remaining steps into gradual frame corrections. Measured: 0 corrections in 3 drift runs, error stable at about −110 µs |
 | L6 | Sink input is only S16LE/S32LE; no S24_32LE | `snapsink` | `audioconvert` upstream | Plan step 3 |
 | L7 | ~~`sync=false` with a non-live source floods clients~~ | `snapsink` | — | **Fixed 2026-11-19**: snapsink paces itself, sending a chunk at most 200 ms ahead of its server timestamp (interruptible wait). Test `paces_a_non_live_source_without_sync` (before: 1.07 s of audio in 3 ms) |
-| L8 | No mDNS discovery in `snapsrc` | `snapsrc` | — | **Postponed (user, 2026-11-19)**: snapcast-rs's mDNS uses `astro-dnssd`, which needs the Avahi/Bonjour dev files; probably just a missing package (Debian e.g. `libavahi-compat-libdnssd-dev`, Fedora `avahi-compat-libdns_sd-devel`; to be checked). **Done 2026-11-19:** reconnect (test `snapsrc_resumes_after_a_server_restart`), client id (`host-id`, automatic `instance`, server appends `#instance`), server volume/mute (linear gain, ramped, read-only `volume`/`mute`; test `snapsrc_applies_the_servers_volume_and_mute`; a C++ snapserver sends no audio to muted clients) |
+| L8 | ~~No reconnect handling, server volume/mute, mDNS or client id in `snapsrc`~~ | `snapsrc` | — | **Done 2026-11-19**: reconnect (verified), client id (`host-id`, automatic `instance`, server appends `#instance`), server volume/mute (linear gain, read-only properties), **mDNS** via the pure-Rust `mdns-sd`: snapsink announces (`mdns-name`, not for `port=0`), snapsrc with an empty `host` discovers (optional `mdns-name` filter, 5 s, skips IPv6 link-local). Tests: `make test-mdns` (devcontainer: passes; the C++ peers need `avahi-daemon`, host only) |
 | L9 | snapcast-rs `tracing` output is not visible in GStreamer logs | engine | — | Bridge `tracing` to the GStreamer debug log |
 | L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | Prototype: copy it into `snapcast-engine`. Later, upstream a control library crate |
 | L11 | snapcast-rs cannot serve **audio** over WebSocket (C++ snapserver: `/stream` on port 1780, used by Snapweb's player). Its WebSocket endpoint carries only JSON-RPC | snapcast-rs server | — | Only if a WebSocket audio client must work with `snapsink` (open question) |

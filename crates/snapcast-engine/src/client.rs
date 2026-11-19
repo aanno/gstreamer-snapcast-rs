@@ -29,7 +29,8 @@ mod instance;
 /// Client options.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientOptions {
-    /// Server host name or address (mDNS discovery is not supported).
+    /// Server host name or address. Empty: find a server via mDNS
+    /// ([`crate::mdns::discover`], up to [`DISCOVERY_TIMEOUT`]) when connecting.
     pub host: String,
     /// Server stream port.
     pub port: u16,
@@ -42,6 +43,9 @@ pub struct ClientOptions {
     pub instance: u32,
     /// Additional local latency in milliseconds (e.g. of the audio device).
     pub latency_ms: i32,
+    /// With an empty `host`: only accept a server announced under this mDNS instance
+    /// name (empty: the first one found).
+    pub mdns_name: String,
     /// Unique host id sent to the server; empty means snapcast-client's default,
     /// the MAC address. Like the C++ snapclient's `--hostID`.
     pub host_id: String,
@@ -56,6 +60,7 @@ impl Default for ClientOptions {
             instance: 0,
             latency_ms: 0,
             host_id: String::new(),
+            mdns_name: String::new(),
         }
     }
 }
@@ -112,6 +117,8 @@ pub struct ClientHandle {
     time_provider: Arc<Mutex<snapcast_client::time_provider::TimeProvider>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     instance: u32,
+    /// The server address actually used (after mDNS discovery, if any).
+    server: (String, u16),
     /// The server's volume (percent) and mute state for this client.
     volume: watch::Receiver<(u16, bool)>,
     /// Keeps the instance number claimed while the client lives.
@@ -175,11 +182,28 @@ fn claim_instance(requested: u32) -> (u32, Option<instance::InstanceLock>) {
     }
 }
 
+/// How long [`connect`] looks for a server via mDNS when no host is given.
+pub const DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Start a client connecting to `options.host:options.port`.
+///
+/// With an empty `host`, the first server found via mDNS within
+/// [`DISCOVERY_TIMEOUT`] is used, host *and* port (this blocks that long at most).
+/// Discovery runs once: reconnects go to the same address.
 pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
-    if options.host.is_empty() {
-        return Err(EngineError::InvalidConfig("host must not be empty".into()));
-    }
+    let discovered;
+    let options = if options.host.is_empty() {
+        let name = Some(options.mdns_name.as_str()).filter(|n| !n.is_empty());
+        let (host, port) = crate::mdns::discover(DISCOVERY_TIMEOUT, name)?;
+        discovered = ClientOptions {
+            host,
+            port,
+            ..options.clone()
+        };
+        &discovered
+    } else {
+        options
+    };
     let (instance, instance_lock) = claim_instance(options.instance);
     let (mut client, mut events, audio_rx) = SnapClient::new(client_config(options, instance));
     let cmd_tx = client.command_sender();
@@ -235,6 +259,7 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
         time_provider,
         tasks: vec![run_task, event_task],
         instance,
+        server: (options.host.clone(), options.port),
         volume: volume_rx,
         _instance_lock: instance_lock,
     })
@@ -278,6 +303,12 @@ impl ClientHandle {
         self.volume.clone()
     }
 
+    /// The server this client connects to, as `(host, port)`: the configured one,
+    /// or the one found via mDNS.
+    pub fn server(&self) -> (&str, u16) {
+        (&self.server.0, self.server.1)
+    }
+
     /// The instance number this client uses (see [`ClientOptions::instance`]).
     pub fn instance(&self) -> u32 {
         self.instance
@@ -311,6 +342,7 @@ mod tests {
             instance: 3,
             latency_ms: 40,
             host_id: "kitchen-pi".into(),
+            mdns_name: String::new(),
         };
         let c = client_config(&options, options.instance);
         assert_eq!((c.host.as_str(), c.port), ("10.0.0.2", 1800));

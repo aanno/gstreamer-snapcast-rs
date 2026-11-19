@@ -51,6 +51,7 @@ const DEFAULT_STREAM: &str = "default";
 // Snapcast's default stream port (snapcast_proto::DEFAULT_STREAM_PORT).
 const DEFAULT_PORT: u32 = 1704;
 const DEFAULT_BUFFER_MS: u32 = 1000;
+const DEFAULT_MDNS_NAME: &str = "gst-snapsink";
 const CODECS: &[&str] = &["pcm", "flac"];
 /// Chunks are sent at most this far ahead of their server timestamp ("Pacing").
 const MAX_AHEAD_USEC: i64 = 200_000;
@@ -61,6 +62,7 @@ struct Settings {
     port: u32,
     codec: String,
     buffer_ms: u32,
+    mdns_name: String,
 }
 
 impl Default for Settings {
@@ -70,6 +72,7 @@ impl Default for Settings {
             port: DEFAULT_PORT,
             codec: server::DEFAULT_CODEC.to_owned(),
             buffer_ms: DEFAULT_BUFFER_MS,
+            mdns_name: DEFAULT_MDNS_NAME.to_owned(),
         }
     }
 }
@@ -178,6 +181,16 @@ impl ObjectImpl for SnapSink {
                     .default_value(DEFAULT_BUFFER_MS)
                     .mutable_ready()
                     .build(),
+                glib::ParamSpecString::builder("mdns-name")
+                    .nick("mDNS name")
+                    .blurb(
+                        "Announce the server via mDNS (_snapcast._tcp) under this name, so \
+                         clients find it without a host name; empty: don't. Never for \
+                         port=0 (set by the first snapsink of a server)",
+                    )
+                    .default_value(Some(DEFAULT_MDNS_NAME))
+                    .mutable_ready()
+                    .build(),
                 glib::ParamSpecUInt::builder("bound-port")
                     .nick("Bound port")
                     .blurb("Port the server actually listens on (0 while not running)")
@@ -216,6 +229,12 @@ impl ObjectImpl for SnapSink {
                 }
             }
             "buffer-ms" => settings.buffer_ms = value.get().expect("type checked upstream"),
+            "mdns-name" => {
+                settings.mdns_name = value
+                    .get::<Option<String>>()
+                    .expect("type checked upstream")
+                    .unwrap_or_default();
+            }
             _ => unimplemented!(),
         }
     }
@@ -236,6 +255,7 @@ impl ObjectImpl for SnapSink {
                     "port" => settings.port.to_value(),
                     "codec" => settings.codec.to_value(),
                     "buffer-ms" => settings.buffer_ms.to_value(),
+                    "mdns-name" => settings.mdns_name.to_value(),
                     _ => unimplemented!(),
                 }
             }
@@ -325,6 +345,7 @@ impl BaseSinkImpl for SnapSink {
         let server_opts = ServerOptions {
             port: settings.port as u16,
             buffer_ms: settings.buffer_ms,
+            mdns_name: Some(settings.mdns_name.clone()).filter(|n| !n.is_empty()),
         };
         let stream_opts = StreamOptions {
             name: settings.stream.clone(),

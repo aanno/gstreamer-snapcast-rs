@@ -34,6 +34,10 @@ pub struct ServerOptions {
     pub port: u16,
     /// End-to-end buffer in milliseconds announced to clients.
     pub buffer_ms: u32,
+    /// Announce the server via mDNS (`_snapcast._tcp`) under this instance name, so
+    /// clients find it without a host name (`None`: don't). Servers on an ephemeral
+    /// port (`port == 0`) are never announced.
+    pub mdns_name: Option<String>,
 }
 
 impl Default for ServerOptions {
@@ -41,6 +45,7 @@ impl Default for ServerOptions {
         Self {
             port: snapcast_server::DEFAULT_STREAM_PORT,
             buffer_ms: 1000,
+            mdns_name: None,
         }
     }
 }
@@ -69,6 +74,8 @@ struct ServerEntry {
     local_port: u16,
     cmd_tx: mpsc::Sender<ServerCommand>,
     streams: Mutex<HashMap<String, StreamSlot>>,
+    /// The mDNS announcement, withdrawn together with the server.
+    _announcement: Option<crate::mdns::Announcement>,
 }
 
 impl Drop for ServerEntry {
@@ -253,11 +260,20 @@ fn start_server(
             claimed: false,
         },
     );
+    let announcement = match &server.mdns_name {
+        Some(name) if server.port != 0 && !name.is_empty() => {
+            crate::mdns::announce(name, local_port)
+                .inspect_err(|e| tracing::warn!(error = %e, "Server runs without mDNS"))
+                .ok()
+        }
+        _ => None,
+    };
     Ok(Arc::new(ServerEntry {
         requested_port: server.port,
         local_port,
         cmd_tx,
         streams: Mutex::new(streams),
+        _announcement: announcement,
     }))
 }
 
@@ -306,6 +322,7 @@ mod tests {
         let opts = ServerOptions {
             port: free_port(),
             buffer_ms: 500,
+            ..ServerOptions::default()
         };
         let a = acquire_stream(&opts, &stream("a")).unwrap();
         assert_eq!(a.port(), opts.port);
@@ -335,6 +352,7 @@ mod tests {
         let opts = ServerOptions {
             port: free_port(),
             buffer_ms: 500,
+            ..ServerOptions::default()
         };
         let a = acquire_stream(&opts, &stream("a")).unwrap();
         // Keep the server alive through a second user of the same entry.
@@ -356,6 +374,7 @@ mod tests {
         let opts = ServerOptions {
             port: 0,
             buffer_ms: 500,
+            ..ServerOptions::default()
         };
         let a = acquire_stream(&opts, &stream("x")).unwrap();
         let b = acquire_stream(&opts, &stream("x")).unwrap();

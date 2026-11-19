@@ -1,5 +1,5 @@
 .PHONY: check fmt fmt-fix clippy test doc build release inspect submodule \
-	install uninstall install-system uninstall-system test-interop test-aloop doctor \
+	install uninstall install-system uninstall-system test-interop test-aloop test-mdns doctor \
 	listen-send listen-recv listen-cpp-client listen-cpp-server listen-pair listen-all
 
 PLUGIN_PATH := $(CURDIR)/target/debug
@@ -75,6 +75,10 @@ test-interop:
 ## they share loopback subdevice 0. See docs/testing.md.
 test-aloop:
 	cargo test -p gst-plugin-snapsrc --test aloop -- --ignored --test-threads=1 --nocapture
+
+## mDNS: snapsrc without a host finds a snapsink (needs multicast on the network)
+test-mdns:
+	cargo test -p gst-plugin-snapsrc --test mdns -- --ignored
 
 ## Report tools, elements and sound devices needed for building and testing
 doctor:

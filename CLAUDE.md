@@ -32,6 +32,7 @@ cargo test -p gst-plugin-snapsink  # single crate
 make inspect                       # gst-inspect-1.0 the built plugins
 make test-interop                  # #[ignore]d tests against the C++ snapclient/snapserver
 make test-aloop                    # #[ignore]d timing tests on the snd-aloop card (offset, drift)
+make test-mdns                     # #[ignore]d mDNS discovery tests (need multicast)
 make doctor                        # what this machine has (tools, elements, sound devices)
 make install / make listen-all     # per-user install; listening tests (scripts/listen.sh)
 GST_PLUGIN_PATH=$PWD/target/debug GST_DEBUG=snapsink:6 gst-launch-1.0 audiotestsrc num-buffers=50 ! snapsink

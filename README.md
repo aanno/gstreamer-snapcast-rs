@@ -40,8 +40,10 @@ Snapdroid, ...) can connect to it, provided you use the PCM or FLAC codec.
 |            | `port`        | `1704`      | Server port, shared by all snapsinks using it (`0` = ephemeral) |
 |            | `codec`       | `pcm`       | `pcm` or `flac` |
 |            | `buffer-ms`   | `1000`      | End-to-end buffer announced to clients |
+|            | `mdns-name`   | `gst-snapsink` | Announce the server via mDNS (`_snapcast._tcp`) under this name; empty: don't (never for `port=0`) |
 |            | `bound-port`  | (read-only) | Port actually listened on |
-| `snapsrc`  | `host`/`port` | `127.0.0.1`/`1704` | Server to connect to |
+| `snapsrc`  | `host`/`port` | `127.0.0.1`/`1704` | Server to connect to; empty `host`: find one via mDNS (its port is used) |
+|            | `mdns-name`   | (empty)     | With an empty `host`: only the server announced under this name |
 |            | `client-name` | `gst-snapsrc` | Name shown in Snapcast controllers |
 |            | `instance`    | `0` (auto)  | Tells several clients on one host apart (the server sees `<host-id>#<instance>`); `0` picks the lowest number no other snapsrc on this host uses |
 |            | `latency-ms`  | `0`         | Extra local output latency to compensate |

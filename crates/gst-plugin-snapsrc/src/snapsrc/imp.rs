@@ -114,6 +114,7 @@ struct Settings {
     latency_ms: i32,
     adjust_sink: bool,
     host_id: String,
+    mdns_name: String,
 }
 
 impl Default for Settings {
@@ -126,6 +127,7 @@ impl Default for Settings {
             latency_ms: DEFAULT_LATENCY_MS,
             adjust_sink: DEFAULT_ADJUST_SINK,
             host_id: String::new(),
+            mdns_name: String::new(),
         }
     }
 }
@@ -294,7 +296,10 @@ impl ObjectImpl for SnapSrc {
             vec![
                 glib::ParamSpecString::builder("host")
                     .nick("Host")
-                    .blurb("Snapcast server host name or address")
+                    .blurb(
+                        "Snapcast server host name or address; empty: find a server via \
+                         mDNS (then its announced port is used, not the port property)",
+                    )
                     .default_value(Some(DEFAULT_HOST))
                     .mutable_ready()
                     .build(),
@@ -329,6 +334,15 @@ impl ObjectImpl for SnapSrc {
                     .minimum(0)
                     .maximum(10_000)
                     .default_value(DEFAULT_LATENCY_MS)
+                    .mutable_ready()
+                    .build(),
+                glib::ParamSpecString::builder("mdns-name")
+                    .nick("mDNS name")
+                    .blurb(
+                        "With an empty host: only use the server announced under this \
+                         mDNS name (empty: the first one found)",
+                    )
+                    .default_value(Some(""))
                     .mutable_ready()
                     .build(),
                 glib::ParamSpecString::builder("host-id")
@@ -383,6 +397,7 @@ impl ObjectImpl for SnapSrc {
             "latency-ms" => settings.latency_ms = value.get().expect("type checked upstream"),
             "adjust-sink" => settings.adjust_sink = value.get().expect("type checked upstream"),
             "host-id" => settings.host_id = string_or(""),
+            "mdns-name" => settings.mdns_name = string_or(""),
             _ => unimplemented!(),
         }
     }
@@ -397,6 +412,7 @@ impl ObjectImpl for SnapSrc {
             "latency-ms" => settings.latency_ms.to_value(),
             "adjust-sink" => settings.adjust_sink.to_value(),
             "host-id" => settings.host_id.to_value(),
+            "mdns-name" => settings.mdns_name.to_value(),
             "volume" => self.volume.load(Ordering::Relaxed).to_value(),
             "mute" => self.muted.load(Ordering::Relaxed).to_value(),
             _ => unimplemented!(),
@@ -459,10 +475,17 @@ impl BaseSrcImpl for SnapSrc {
             instance: settings.instance,
             latency_ms: settings.latency_ms,
             host_id: settings.host_id,
+            mdns_name: settings.mdns_name,
         };
         let client = client::connect(&options)
             .map_err(|e| gst::error_msg!(gst::ResourceError::OpenRead, ["{e}"]))?;
-        gst::info!(CAT, imp = self, "Client instance {}", client.instance());
+        let (host, port) = client.server();
+        gst::info!(
+            CAT,
+            imp = self,
+            "Client instance {} for server {host}:{port}",
+            client.instance()
+        );
         self.watch_volume(client.volume());
         // Downstream elements change state before us, so the sink (and the child of
         // an autoaudiosink) exists by now.
