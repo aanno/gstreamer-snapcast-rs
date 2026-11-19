@@ -13,14 +13,23 @@
 //!
 //! This works for any pipeline clock (system, audio device, network...).
 //! Without a clock (e.g. `sync=false` outside PLAYING), timestamps fall back to
-//! sample counting anchored at the first buffer. Note that with `sync=false`
-//! nothing paces a non-live source, so clients would be flooded; keep
-//! `sync=true` (the default) unless the source is live.
+//! sample counting anchored at the first buffer.
+//!
+//! # Pacing
+//!
+//! `render` hands a chunk to the server only once its server timestamp is at
+//! most [`MAX_AHEAD_USEC`] in the future, and waits (interruptibly) otherwise.
+//! With `sync=true` (the default) basesink already renders on time, so this
+//! never waits. With `sync=false` and a non-live source (e.g. a file) nothing
+//! else paces the pipeline; before 2026-11-19 that flooded the clients with
+//! the whole file at once (L7).
 //!
 //! The stream is acquired in `set_caps`, because snapcast-rs fixes a stream's
 //! sample format when the server starts.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
 
 use gst::glib;
 use gst::prelude::*;
@@ -43,6 +52,8 @@ const DEFAULT_STREAM: &str = "default";
 const DEFAULT_PORT: u32 = 1704;
 const DEFAULT_BUFFER_MS: u32 = 1000;
 const CODECS: &[&str] = &["pcm", "flac"];
+/// Chunks are sent at most this far ahead of their server timestamp ("Pacing").
+const MAX_AHEAD_USEC: i64 = 200_000;
 
 #[derive(Debug, Clone)]
 struct Settings {
@@ -81,6 +92,8 @@ struct Active {
 pub struct SnapSink {
     settings: Mutex<Settings>,
     state: Mutex<Option<Active>>,
+    /// Set by `unlock()` to interrupt the pacing wait in `render()`.
+    flushing: AtomicBool,
 }
 
 impl SnapSink {
@@ -280,6 +293,16 @@ impl BaseSinkImpl for SnapSink {
         Ok(())
     }
 
+    fn unlock(&self) -> Result<(), gst::ErrorMessage> {
+        self.flushing.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn unlock_stop(&self) -> Result<(), gst::ErrorMessage> {
+        self.flushing.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
     fn set_caps(&self, caps: &gst::Caps) -> Result<(), gst::LoggableError> {
         let info = gst_audio::AudioInfo::from_caps(caps)
             .map_err(|_| gst::loggable_error!(CAT, "Failed to parse caps {caps:?}"))?;
@@ -338,6 +361,18 @@ impl BaseSinkImpl for SnapSink {
         };
 
         let timestamp_usec = self.server_timestamp(buffer, active);
+        // Pacing (see the module docs): wait in small steps, so that unlock() can
+        // interrupt us within 10 ms.
+        loop {
+            let ahead = timestamp_usec - now_usec() - MAX_AHEAD_USEC;
+            if ahead <= 0 {
+                break;
+            }
+            if self.flushing.load(Ordering::SeqCst) {
+                return Err(gst::FlowError::Flushing);
+            }
+            std::thread::sleep(Duration::from_micros(ahead.min(10_000) as u64));
+        }
         let map = buffer.map_readable().map_err(|_| {
             gst::element_imp_error!(self, gst::CoreError::Failed, ["Failed to map buffer"]);
             gst::FlowError::Error

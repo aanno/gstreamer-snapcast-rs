@@ -85,3 +85,35 @@ fn accepts_pcm_until_eos() {
 
     assert_eq!(msg.type_(), gst::MessageType::Eos, "got {msg:?}");
 }
+
+/// L7: with `sync=false` nothing paces a non-live source; snapsink must pace itself
+/// instead of flooding clients with the whole input at once.
+#[test]
+fn paces_a_non_live_source_without_sync() {
+    init();
+    // 50 buffers of 1024 frames at 48 kHz: 1.07 s of audio.
+    let pipeline = gst::parse::launch(
+        "audiotestsrc num-buffers=50 ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
+         ! snapsink port=0 sync=false",
+    )
+    .unwrap();
+    let start = std::time::Instant::now();
+    pipeline.set_state(gst::State::Playing).unwrap();
+    let msg = pipeline
+        .bus()
+        .unwrap()
+        .timed_pop_filtered(
+            gst::ClockTime::from_seconds(10),
+            &[gst::MessageType::Eos, gst::MessageType::Error],
+        )
+        .expect("pipeline timed out");
+    let elapsed = start.elapsed();
+    pipeline.set_state(gst::State::Null).unwrap();
+
+    assert_eq!(msg.type_(), gst::MessageType::Eos, "got {msg:?}");
+    // Paced to real time, minus the up to 200 ms snapsink sends ahead.
+    assert!(
+        elapsed >= std::time::Duration::from_millis(750),
+        "1.07 s of audio went out in {elapsed:?}: not paced"
+    );
+}
