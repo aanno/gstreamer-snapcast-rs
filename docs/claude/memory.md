@@ -297,7 +297,23 @@ from the sink's `resample` slaving; could be smoothed via the sink clock's
 `window-size`/`timeout`); the drift tests use 2.5 ms because the C++ snapclient itself is
 ~2 ms off there. L2, L3, L4 are fixed in the fork (no engine workarounds any more).
 
+| P3 item | State (2026-11-19) |
+|---|---|
+| (a) absolute offset (L13) | fixed: snapsrc and C++ snapclient each about 1 ms from the server timeline |
+| (b) drift (L12) | fixed: snapsrc follows the server on a −300 ppm card (rate error −17…+4 ppm) |
+| (c) start-up alignment | fixed: two snapsrc usually < 0.1 ms apart |
+| L5, reconnect | L5 needs nothing (measured); reconnect verified |
+| left open, not blocking | tick-to-tick jitter ±0.7 ms in single runs (sink's `resample` slaving); drift tests allow 2.5 ms because the C++ client itself is ~2 ms off there |
+
 **P4. Evaluation:** listening tests on the host, endurance run, write-up, and the decision.
+
+| Criterion | State (2026-11-19) |
+|---|---|
+| F1 listening (desktop sender, snapsrc + C++ in sync) | partly: music through snapsrc on the host is clean since the frame-loss fix; `listen-pair` not re-listened since the L13 fix (should no longer echo) |
+| F2 measured (≤ 1 ms, also under drift) | met in the aloop tests; under drift only to 2.5 ms, because of the C++ reference |
+| F3 endurance (hours, no growth) | not started |
+| F4 controller (optional) | needs P2 |
+| F5 lifecycle | reconnect done; PLAYING→PAUSED→PLAYING and stop/restart not tested systematically |
 
 **After the prototype** (unchanged, not scheduled): multiple streams (L1), upstream PRs
 (the fork commits for L2, L3, L4 and the client-instance fix; the control crate is part of P2 now), finishing `snapsink` (L6, L7, Android build and CI), finishing
