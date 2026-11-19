@@ -57,7 +57,7 @@ audiotestsrc wave=ticks ! snapsink (embedded server)
   96 ms in 20 s.
 - The tests run one at a time (`--test-threads=1`) because they share subdevice 0. Each takes about 25 s.
 - Settings: `ALOOP_CARD` (default `Loopback`), `ALOOP_SECONDS` (20), `ALOOP_TOLERANCE_US`
-  (1000), `ALOOP_TOLERANCE_PPM` (100), `ALOOP_TOLERANCE_ABS_US` (5000), `SNAPCLIENT`.
+  (1000), `ALOOP_TOLERANCE_DRIFT_US` (2500, under emulated drift), `ALOOP_TOLERANCE_PPM` (100), `ALOOP_TOLERANCE_ABS_US` (5000), `SNAPCLIENT`.
 
 Each test prints one line, e.g.:
 

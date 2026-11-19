@@ -5,17 +5,28 @@ update **State** and **Plan** when a step is finished, and add decisions with a 
 
 Last updated: 2026-11-19 (P1 done: `make test-aloop`; first F2 measurements; devcontainer audio).
 
-## Resume here (2026-11-19)
+## Resume here (2026-11-19, evening)
 
-- **Uncommitted work** (the user commits): `make test-aloop`
-  (`crates/gst-plugin-snapsrc/tests/aloop.rs`), the `scripts/listen.sh` fixes, devcontainer
-  audio (`.devcontainer/asoundrc`, `postCreateCommand`), the Claude Code config volume
-  (`devcontainer.json` `mounts`, Dockerfile), `rust-analyzer` in `rust-toolchain.toml`, and
-  the testing docs (`docs/testing*.md`; README trimmed). `make check` is green.
-- **P1 is done.** As planned, **stop and discuss** before P2. The F2 findings below suggest
-  doing part of P3 first: discuss that order with the user.
-- Open from 2026-11-10: the host results (`make install`, `make doctor`, `make listen-all`);
-  `SRC=desktop` relies on `stream.capture.sink`; a newer `snapclient` may want `tcp://host:port`.
+- P1 done; P3 (a) L13, (b) L12 and (c) start-up alignment are fixed and committed. The
+  user asked to work through the limitations **L2, L3, L4, L5, L7, L8** next (agent's
+  order, one commit each; snapcast-rs changes in the submodule fork with its own
+  conventions, then the pointer commit here). P2 (control plane) comes after that.
+- Host: everything green on Fedora 45 (`scripts/test-host.sh`); listening with
+  `scripts/host-play.sh` + `make listen-recv` (start the receiver first) is clean since the
+  frame-loss fix. Run `make install` again after plugin changes.
+
+### Still open (2026-11-19)
+
+- **snapsrc + C++ snapclient under drift.** The test failed at a 1 ms tolerance because
+  the **C++ snapclient** itself is +1.7…+2.0 ms off the server timeline on a −300 ppm card,
+  while snapsrc is at +0.6…+0.9 ms: our receiver is closer to the server than the
+  reference. So the drift tests use a separate, wider bound (`ALOOP_TOLERANCE_DRIFT_US`,
+  default 2500 µs). Without drift, F2's 1 ms stays.
+- **snapsrc wanders by up to ±1.5 ms within some runs.** User's hypothesis: something is
+  adjusted too aggressively and makes a (low-pass) oscillation. Candidates: `align.rs`
+  (`ALPHA` 0.1, `DEADBAND` 0.25 ms, up to 0.1 % per buffer) following a noisy
+  `diff_to_server` (L5), or the sink's `resample` slaving. Measure which one (corrections
+  per second, `diff_to_server` over time), then damp. Part of L5.
 
 ## State
 

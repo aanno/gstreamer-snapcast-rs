@@ -52,6 +52,8 @@
 //! - `ALOOP_CARD`: card name (default `Loopback`)
 //! - `ALOOP_SECONDS`: measured seconds after warm-up (default 20)
 //! - `ALOOP_TOLERANCE_US`: max allowed offset between receivers (default 1000, F2)
+//! - `ALOOP_TOLERANCE_DRIFT_US`: the same under emulated card drift (default 2500: the
+//!   C++ snapclient itself is about +2 ms off the server timeline there)
 //! - `ALOOP_TOLERANCE_PPM`: max allowed rate error against the server (default 100)
 //! - `ALOOP_TOLERANCE_ABS_US`: max allowed absolute offset against the server timeline
 //!   (default 5000; the method itself is good to a few ms)
@@ -567,7 +569,11 @@ fn run(a: Kind, b: Kind, rate_shift: Option<i64>) {
     init();
     let card = card();
     let seconds: u64 = env_or("ALOOP_SECONDS", 20);
-    let tol_us: f64 = env_or("ALOOP_TOLERANCE_US", 1000.0);
+    let tol_us: f64 = if rate_shift.is_some() {
+        env_or("ALOOP_TOLERANCE_DRIFT_US", 2500.0)
+    } else {
+        env_or("ALOOP_TOLERANCE_US", 1000.0)
+    };
     let tol_ppm: f64 = env_or("ALOOP_TOLERANCE_PPM", 100.0);
 
     let _shift = RateShift::set(&card, rate_shift.unwrap_or(RATE_SHIFT_NOMINAL));
