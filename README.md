@@ -96,7 +96,8 @@ first).
 ```text
 .
 ├── Cargo.toml                 # Cargo workspace (excludes snapcast-rs/)
-├── scripts/                   # doctor.sh, listen.sh (used by the Makefile), host test/play helpers
+├── scripts/                   # doctor.sh, listen.sh (used by the Makefile), host test/play helpers,
+│                              #   xerj-host.sh (xerj search for Claude Code, on the host)
 ├── assets/audio/              # CC0 music for listening tests (see its README)
 ├── crates/
 │   ├── gst-snapcast-engine/   # GStreamer-free glue: tokio runtime, shared server/client lifecycle

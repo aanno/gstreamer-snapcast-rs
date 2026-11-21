@@ -158,7 +158,8 @@ caveats and known problems: `docs/claude/mcp-xerj.md`.
   before relying on them after recent edits.
 - Never send xerj field reports or corpus feedback, and never use `rerank`, unless the
   user asks. Both send data off the machine.
-- If xerj is down (`xerj_status`), fall back to Grep. Indexing needs the host-side `xerj` CLI.
+- If xerj is down (`xerj_status`), fall back to Grep. Node, gateway and indexing run on the
+  host: `scripts/xerj-host.sh up` (the user runs it; it refuses to run in the container).
 
 ## MCP: memory (persistent agent memory)
 

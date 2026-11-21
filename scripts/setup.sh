@@ -28,6 +28,7 @@ mkdir -p /home/vscode/.local/bin
 ln -s /home/vscode/.vscode-server/extensions/anthropic.claude-code-2.1.327-linux-x64/resources/native-binary/claude ~/.local/bin
 
 # xerj _outside_ devcontainer
+# (node, MCP gateway and indexing below are automated by scripts/xerj-host.sh up)
 claude mcp add --transport http xerj "http://host.docker.internal:9201/mcp"
 
 # install xerj
@@ -52,5 +53,5 @@ pnpx -y supergateway --stdio "xerj mcp" --outputTransport streamableHttp --port 
 
 # for xerj to actually index the source, you have to autoindex it, e.g.
 # _outside_ devcontainer
-cd gstreamer-snapcast-r
+cd gstreamer-snapcast-rs
 xerj autoindex .

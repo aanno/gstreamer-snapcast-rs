@@ -7,9 +7,15 @@ Claude Code as the MCP server `xerj`. These notes come from a hands-on test (202
 
 - The node runs on the **host**, not in the devcontainer: `localhost:9200` there. The MCP
   stdio server (`xerj mcp`) is bridged to HTTP by `supergateway` on port 9201. Claude
-  Code connects to `http://host.docker.internal:9201/mcp`. Commands: `scripts/setup.sh`.
+  Code connects to `http://host.docker.internal:9201/mcp`.
+- **On the host, `scripts/xerj-host.sh up`** starts the node and the gateway in the
+  background (if they don't run yet) and indexes the repo. Also `status`, `index`,
+  `brain`, `logs`, `stop`; `show <cmd>` prints the commands with notes, `--help` lists the
+  settings (`MODEL_DIR`, `DATA_DIR`, `GATEWAY_PORT`, …). It sets `XERJ_DISABLE_FEEDBACK=true`
+  for the node and for `xerj mcp`. One-time setup (`claude mcp add`): `scripts/setup.sh`.
 - The `xerj` CLI is **not installed in the devcontainer**, so indexing (`xerj autoindex`,
-  `xerj brain`) must run on the host, against the repo's host path.
+  `xerj brain`) must run on the host, against the repo's host path
+  (`scripts/xerj-host.sh index` / `brain`).
 - Check that the node is up with `xerj_status`, then call `xerj_map` before writing any query DSL.
 
 ## What is indexed
