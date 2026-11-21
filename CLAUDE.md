@@ -11,18 +11,22 @@ built on the embeddable engines of the `snapcast-rs` submodule:
 - `snapsrc` (`crates/gst-plugin-snapsrc`, live `GstPushSrc`): embedded Snapcast **client** in, timestamped PCM out.
 - `snapcast-engine` (`crates/snapcast-engine`): GStreamer-free glue (tokio runtime,
   servers shared per port, client lifecycle). Features `server` / `client`.
+- `gst-snapcast-common` (`crates/gst-snapcast-common`): GStreamer-side code shared by both
+  plugins (so far the `tracing`/`log` → GStreamer debug log bridge).
 
-The design rationale is in `docs/gstreamer-plugins/dlna-rs-gstreamer-2.md`.
+Architecture, dependency rules (with reasons), threads, logging and the interfaces
+(environment variables, debug categories): `docs/architecture.md`. Keep it current.
+The original design rationale is in `docs/gstreamer-plugins/dlna-rs-gstreamer-2.md`.
 `-1.md` is broader DLNA/UPnP background; read it only when needed.
 
 **Read `docs/claude/memory.md` first.** It holds the current state, the decisions, the
 known limitations (L1–L10) and the plan. Keep it up to date: update State and Plan when
 a step is done, and record new decisions with a date.
 
-Short version: the PCM loopback works (`crates/gst-plugin-snapsrc/tests/loopback.rs`), and
-interop with the C++ `snapclient` was verified by hand. Current goal (2026-11-10): a
-**feasibility prototype** with minimal snapcast-rs changes (test infrastructure, control
-plane in the engine, timing checks). Multiple streams per server are postponed.
+Short version (2026-11-21): goal is a **feasibility prototype**. Loopback, C++ interop in
+both directions (`make test-interop`), timing (`make test-aloop`, P3), mDNS, reconnect,
+volume/mute and logging (L9) work. Next: the control plane (P2), then the evaluation
+(P4). Multiple streams per server are postponed.
 
 ## Commands
 
@@ -43,7 +47,10 @@ Run `make check` before declaring work done.
 ## Architecture rules
 
 - **`snapcast-engine` must never depend on GStreamer.** Plugin crates only translate
-  buffers/caps/events to engine calls.
+  buffers/caps/events to engine calls. Reasons (2026-11-21; *not* Android, which has
+  GStreamer): the path upstream into snapcast-rs, one timing boundary (the engine speaks
+  only `CLOCK_MONOTONIC` µs), tests without GStreamer, and gstreamer-rs churn stays in the
+  plugins. Shared code that needs GStreamer goes into `gst-snapcast-common`.
 - **Android is a near-term target for the sender** (`snapsink` and the engine's `server`
   feature). Keep that path portable: no Linux-only APIs and no extra system C libraries.
   The receiver (`snapsrc`, `client` feature) is desktop-only. Android already has a
@@ -81,7 +88,10 @@ Run `make check` before declaring work done.
   `glib::wrapper!` and `register()`, and `src/<element>/imp.rs` holds the subclass implementation.
   Use `LazyLock` statics for the debug category, properties, metadata and pad templates.
 - Logging inside elements: `gst::{error,warning,info,debug,trace}!(CAT, imp = self, ...)`.
-  In `snapcast-engine`, use `tracing` (as snapcast-rs does). Do not use `println!`.
+  In `snapcast-engine`, use `tracing` (as snapcast-rs does); never install a subscriber
+  there. The plugins bridge it into the GStreamer debug log (`gst_snapcast_common::log`,
+  categories `snapcast-*`); engine work that belongs to an element runs in a span with a
+  `log_id` field. Do not use `println!`.
 - Errors posted to the bus: `gst::error_msg!` / `gst::element_imp_error!`. No `unwrap()`
   on runtime data paths. `unwrap()` on mutex locks and `expect("type checked upstream")`
   in property setters are fine.

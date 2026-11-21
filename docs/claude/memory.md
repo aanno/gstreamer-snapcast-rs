@@ -3,9 +3,18 @@
 Working memory for agents and humans continuing this project. Keep it current:
 update **State** and **Plan** when a step is finished, and add decisions with a date.
 
-Last updated: 2026-11-19, late (P1 and P3 done, limitations round done incl. mDNS; P2 next).
+Last updated: 2026-11-21 (L9 done: snapcast-rs logs in the GStreamer debug log; P2 next).
 
-## Resume here (2026-11-19, end of session)
+## Resume here (2026-11-21)
+
+**2026-11-21:** devcontainer rebuilt and checked: `make doctor`, `make check`,
+`make test-interop` green; xerj and memory MCP up. **L9 done** (logging bridge, see
+`docs/architecture.md`, which is new). Two new fork commits, **not pushed yet**:
+`fix(server): run spawned tasks and the encoder thread in the caller's tracing context`
+(upstream PR candidate, groundwork for L9) and `docs(server): link SnapServer::serve
+instead of the removed run` (separate PR candidate; rustdoc `-D warnings` was broken).
+
+Notes of 2026-11-19, still valid:
 
 **Where we are:** P1 (test tooling) and P3 (timing) are done; the limitations round
 (L2, L3, L4, L5, L7, L8 incl. mDNS, L12, L13) is done, one commit each. The fork commits
@@ -55,10 +64,20 @@ Not blocking, left over from P3:
 
 ## State
 
-- **Workspace:** `snapcast-engine` (no GStreamer dependency), `gst-plugin-snapsink`
-  (`libgstsnapsink.so`) and `gst-plugin-snapsrc` (`libgstsnapsrc.so`). snapcast-rs is a
-  submodule (fork `aanno/snapcast-rs`), excluded from our workspace, used via path deps.
-  It is **unmodified** so far.
+- **Workspace:** `snapcast-engine` (no GStreamer dependency), `gst-snapcast-common`
+  (GStreamer-side code shared by both plugins, so far the logging bridge),
+  `gst-plugin-snapsink` (`libgstsnapsink.so`) and `gst-plugin-snapsrc` (`libgstsnapsrc.so`).
+  snapcast-rs is a submodule (fork `aanno/snapcast-rs`, branch `aanno/fixes`), excluded
+  from our workspace, used via path deps. The fork carries our upstream PR candidates
+  (L2, L3, L4, L8, the tracing context for L9, a rustdoc fix). Crates, rules, threads
+  and logging: `docs/architecture.md`.
+- **Logging (L9, 2026-11-21):** snapcast-rs and engine `tracing` events and `log` records
+  (mdns-sd, symphonia) go to the GStreamer debug log, categories `snapcast-client`,
+  `-server`, `-engine`, `-mdns`, `-deps`, tagged `<snapsrc0>` / `<snapserver:<port>>` via
+  span field `log_id`. Installed by `plugin_init` as the global subscriber if none is
+  set; `GST_SNAPCAST_TRACING=0` turns it off. Tests: `gst-snapcast-common` unit tests,
+  `crates/gst-plugin-snapsrc/tests/logging.rs` (end to end), fork
+  `snapcast-server/tests/tracing_context.rs`.
 - **Loopback works:** `snapsink → embedded server → snapsrc` for PCM
   (`crates/gst-plugin-snapsrc/tests/loopback.rs`).
   - Format F32LE 48 kHz stereo, signal level as expected (RMS 0.566 for a 0.8 sine).
@@ -166,7 +185,8 @@ Not blocking, left over from P3:
 - 2026-11-07: **Android is a near-term target for the sender** (`snapsink`, i.e. the
   embedded server). The server half of `snapcast-engine` and its dependencies must stay
   Android-buildable: no Linux-only APIs and no system C libraries beyond what GStreamer
-  for Android provides.
+  for Android provides. (2026-11-21: this is *not* why the engine is GStreamer-free;
+  see that decision.)
 - 2026-11-07: **No Android receiver.** An existing websocket-based Android Snapcast app
   covers that, so `snapsrc` may stay desktop/Linux-focused.
 - 2026-11-07: **The control plane** (JSON-RPC, groups, volume, stream assignment) still
@@ -225,6 +245,19 @@ Not blocking, left over from P3:
   2026-11-10 "copying is fine for the prototype".
 - 2026-11-19: Claude Code's config in the devcontainer lives on a named volume
   (`claude-code-config-${devcontainerId}`, `CLAUDE_CONFIG_DIR`).
+- 2026-11-21 (with the user): **`snapcast-engine` stays GStreamer-free, but not because
+  of Android** (GStreamer for Android exists, and `snapsink` needs it there). Reasons:
+  the path upstream into snapcast-rs, one timing boundary (the engine speaks only
+  `CLOCK_MONOTONIC` µs), tests without GStreamer, gstreamer-rs churn stays in the plugins.
+  Shared GStreamer code goes into the new crate **`gst-snapcast-common`**. Written down in
+  `docs/architecture.md` (new: architecture and interfaces), CLAUDE.md, README.
+- 2026-11-21 (with the user): **L9 bridge design.** Categories `snapcast-client`,
+  `snapcast-server`, `snapcast-engine`, `snapcast-mdns`, `snapcast-deps` (by the crate of
+  the target). A **global** subscriber, set only if none is set yet (covers threads we
+  don't create; each plugin `.so` has its own `tracing` copy). Opt-out by environment
+  variable `GST_SNAPCAST_TRACING=0`. Element names via spans with `log_id`, now (not later).
+  Our own `log::Log` instead of `tracing-log`, so mdns-sd's daemon thread needs no tracing
+  context. `tracing-gstreamer` is not used (other direction; stuck on gstreamer-rs 0.24).
 
 ## Known limitations
 
@@ -238,7 +271,7 @@ Not blocking, left over from P3:
 | L6 | Sink input is only S16LE/S32LE; no S24_32LE | `snapsink` | `audioconvert` upstream | Plan step 3 |
 | L7 | ~~`sync=false` with a non-live source floods clients~~ | `snapsink` | — | **Fixed 2026-11-19**: snapsink paces itself, sending a chunk at most 200 ms ahead of its server timestamp (interruptible wait). Test `paces_a_non_live_source_without_sync` (before: 1.07 s of audio in 3 ms) |
 | L8 | ~~No reconnect handling, server volume/mute, mDNS or client id in `snapsrc`~~ | `snapsrc` | — | **Done 2026-11-19**: reconnect (verified), client id (`host-id`, automatic `instance`, server appends `#instance`), server volume/mute (linear gain, read-only properties), **mDNS** via the pure-Rust `mdns-sd`: snapsink announces (`mdns-name`, not for `port=0`), snapsrc with an empty `host` discovers (optional `mdns-name` filter, 5 s, skips IPv6 link-local). Tests: `make test-mdns` (devcontainer: passes; the C++ peers need `avahi-daemon`, host only) |
-| L9 | snapcast-rs `tracing` output is not visible in GStreamer logs | engine | — | Bridge `tracing` to the GStreamer debug log |
+| L9 | ~~snapcast-rs `tracing` output is not visible in GStreamer logs~~ | engine | — | **Fixed 2026-11-21**: `gst-snapcast-common::log` bridges `tracing` and `log` into the GStreamer debug log (`snapcast-*` categories, element names via `log_id` spans); fork commit for the server's tasks and encoder threads (upstream PR candidate). See `docs/architecture.md` |
 | L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | **Changed 2026-11-19 (user): nothing is copied.** Create a control library crate in snapcast-rs (fork first, upstream PR candidate) that both `snapserver-rs` and `snapcast-engine` use |
 | L11 | snapcast-rs cannot serve **audio** over WebSocket (C++ snapserver: `/stream` on port 1780, used by Snapweb's player). Its WebSocket endpoint carries only JSON-RPC | snapcast-rs server | — | Only if a WebSocket audio client must work with `snapsink` (open question) |
 | L12 | ~~`snapsrc` → `alsasink` (`skew`, 40 ms tolerance) follows a drifting card, not the server~~ | `snapsrc` + audio sink | — | **Fixed 2026-11-19**: snapsrc sets `slave-method=resample` on the downstream audio sink (`adjust-sink`); rate error −17…+4 ppm (was +300) on a −300 ppm card, ~1 ms from the server timeline |
@@ -316,5 +349,6 @@ from the sink's `resample` slaving; could be smoothed via the sink clock's
 | F5 lifecycle | reconnect done; PLAYING→PAUSED→PLAYING and stop/restart not tested systematically |
 
 **After the prototype** (unchanged, not scheduled): multiple streams (L1), upstream PRs
-(the fork commits for L2, L3, L4 and the client-instance fix; the control crate is part of P2 now), finishing `snapsink` (L6, L7, Android build and CI), finishing
-`snapsrc` (L8), infrastructure (CI, L9, packaging).
+(the fork commits for L2, L3, L4, the client-instance fix, the tracing context and the
+rustdoc fix; the control crate is part of P2 now), finishing `snapsink` (L6, L7, Android
+build and CI), finishing `snapsrc` (L8), infrastructure (CI, packaging).

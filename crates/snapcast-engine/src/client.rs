@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use snapcast_client::{ClientCommand, ClientConfig, ClientEvent, SnapClient};
 use tokio::sync::{mpsc, watch};
+use tracing::Instrument;
 
 use crate::{EngineError, runtime};
 
@@ -49,6 +50,9 @@ pub struct ClientOptions {
     /// Unique host id sent to the server; empty means snapcast-client's default,
     /// the MAC address. Like the C++ snapclient's `--hostID`.
     pub host_id: String,
+    /// Id for log lines of this client (e.g. the element name), as the
+    /// [`crate::LOG_ID_FIELD`] of the span its work runs in. Empty: none.
+    pub log_id: String,
 }
 
 impl Default for ClientOptions {
@@ -61,6 +65,7 @@ impl Default for ClientOptions {
             latency_ms: 0,
             host_id: String::new(),
             mdns_name: String::new(),
+            log_id: String::new(),
         }
     }
 }
@@ -191,6 +196,9 @@ pub const DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// [`DISCOVERY_TIMEOUT`] is used, host *and* port (this blocks that long at most).
 /// Discovery runs once: reconnects go to the same address.
 pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
+    // Discovery, instance claim and both tasks log in this span.
+    let span = tracing::info_span!("snapcast_client", log_id = %options.log_id);
+    let _entered = span.enter();
     let discovered;
     let options = if options.host.is_empty() {
         let name = Some(options.mdns_name.as_str()).filter(|n| !n.is_empty());
@@ -215,42 +223,48 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
 
     let rt = runtime();
     let run_status = Arc::clone(&status);
-    let run_task = rt.spawn(async move {
-        if let Err(e) = client.run().await {
-            tracing::error!(error = %e, "Snapcast client failed");
-            run_status.lock().unwrap().last_error = Some(e.to_string());
-        }
-    });
-    let event_status = Arc::clone(&status);
-    let client_latency = options.latency_ms;
-    let event_task = rt.spawn(async move {
-        while let Some(event) = events.recv().await {
-            tracing::debug!(?event, "Snapcast client event");
-            let mut status = event_status.lock().unwrap();
-            match event {
-                ClientEvent::ServerSettings {
-                    buffer_ms,
-                    latency,
-                    volume,
-                    muted,
-                } => {
-                    status.buffer_ms = Some((buffer_ms - latency - client_latency).max(0));
-                    volume_tx.send_replace((volume, muted));
-                }
-                ClientEvent::VolumeChanged { volume, muted } => {
-                    volume_tx.send_replace((volume, muted));
-                }
-                ClientEvent::TimeSyncUsable { .. } | ClientEvent::TimeSyncComplete { .. } => {
-                    status.time_synced = true;
-                }
-                ClientEvent::Disconnected { reason } => {
-                    status.time_synced = false;
-                    status.last_error = Some(reason);
-                }
-                _ => {}
+    let run_task = rt.spawn(
+        async move {
+            if let Err(e) = client.run().await {
+                tracing::error!(error = %e, "Snapcast client failed");
+                run_status.lock().unwrap().last_error = Some(e.to_string());
             }
         }
-    });
+        .in_current_span(),
+    );
+    let event_status = Arc::clone(&status);
+    let client_latency = options.latency_ms;
+    let event_task = rt.spawn(
+        async move {
+            while let Some(event) = events.recv().await {
+                tracing::debug!(?event, "Snapcast client event");
+                let mut status = event_status.lock().unwrap();
+                match event {
+                    ClientEvent::ServerSettings {
+                        buffer_ms,
+                        latency,
+                        volume,
+                        muted,
+                    } => {
+                        status.buffer_ms = Some((buffer_ms - latency - client_latency).max(0));
+                        volume_tx.send_replace((volume, muted));
+                    }
+                    ClientEvent::VolumeChanged { volume, muted } => {
+                        volume_tx.send_replace((volume, muted));
+                    }
+                    ClientEvent::TimeSyncUsable { .. } | ClientEvent::TimeSyncComplete { .. } => {
+                        status.time_synced = true;
+                    }
+                    ClientEvent::Disconnected { reason } => {
+                        status.time_synced = false;
+                        status.last_error = Some(reason);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        .in_current_span(),
+    );
 
     Ok(ClientHandle {
         audio_rx,
@@ -343,6 +357,7 @@ mod tests {
             latency_ms: 40,
             host_id: "kitchen-pi".into(),
             mdns_name: String::new(),
+            log_id: "snapsrc0".into(),
         };
         let c = client_config(&options, options.instance);
         assert_eq!((c.host.as_str(), c.port), ("10.0.0.2", 1800));

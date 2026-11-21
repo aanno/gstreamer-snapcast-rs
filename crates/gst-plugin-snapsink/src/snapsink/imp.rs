@@ -351,6 +351,7 @@ impl BaseSinkImpl for SnapSink {
             name: settings.stream.clone(),
             codec: settings.codec.clone(),
             format,
+            log_id: self.obj().name().to_string(),
         };
         let stream = server::acquire_stream(&server_opts, &stream_opts).map_err(|e| {
             gst::element_imp_error!(self, gst::ResourceError::OpenWrite, ["{e}"]);

@@ -19,6 +19,7 @@ use snapcast_server::{
     AudioData, AudioFrame, ServerCommand, ServerConfig, SnapServer, StreamConfig,
 };
 use tokio::sync::mpsc;
+use tracing::Instrument;
 
 use crate::{EngineError, PcmFormat, runtime};
 
@@ -59,6 +60,10 @@ pub struct StreamOptions {
     pub codec: String,
     /// PCM format of the data passed to [`StreamHandle::send_pcm`].
     pub format: PcmFormat,
+    /// Id for log lines of this acquisition (e.g. the element name), as the
+    /// [`crate::LOG_ID_FIELD`] of its span. Empty: none. The server itself is
+    /// shared and logs as `snapserver:<port>`.
+    pub log_id: String,
 }
 
 struct StreamSlot {
@@ -152,6 +157,9 @@ pub fn acquire_stream(
     server: &ServerOptions,
     stream: &StreamOptions,
 ) -> Result<StreamHandle, EngineError> {
+    let span =
+        tracing::info_span!("snapcast_stream", log_id = %stream.log_id, stream = %stream.name);
+    let _entered = span.enter();
     let mut registry = REGISTRY.lock().unwrap();
 
     if server.port != 0
@@ -232,23 +240,35 @@ fn start_server(
     );
     let cmd_tx = snap.command_sender();
 
+    // The server outlives the sink that started it: its own span, not the caller's.
+    let span = tracing::info_span!(
+        parent: None,
+        "snapcast_server",
+        log_id = %format!("snapserver:{local_port}")
+    );
     let rt = runtime();
     let listener = {
         let _guard = rt.enter();
         tokio::net::TcpListener::from_std(std_listener)
             .map_err(|e| EngineError::Bind(server.port, e))?
     };
-    rt.spawn(async move {
-        if let Err(e) = snap.serve(listener).await {
-            tracing::error!(error = %e, port = local_port, "Snapcast server failed");
+    rt.spawn(
+        async move {
+            if let Err(e) = snap.serve(listener).await {
+                tracing::error!(error = %e, port = local_port, "Snapcast server failed");
+            }
         }
-    });
+        .instrument(span.clone()),
+    );
     // The event channel is bounded; drain it so the server never stalls.
-    rt.spawn(async move {
-        while let Some(event) = events.recv().await {
-            tracing::debug!(?event, "Snapcast server event");
+    rt.spawn(
+        async move {
+            while let Some(event) = events.recv().await {
+                tracing::debug!(?event, "Snapcast server event");
+            }
         }
-    });
+        .instrument(span.clone()),
+    );
 
     let mut streams = HashMap::new();
     streams.insert(
@@ -262,6 +282,7 @@ fn start_server(
     );
     let announcement = match &server.mdns_name {
         Some(name) if server.port != 0 && !name.is_empty() => {
+            let _entered = span.enter();
             crate::mdns::announce(name, local_port)
                 .inspect_err(|e| tracing::warn!(error = %e, "Server runs without mDNS"))
                 .ok()
@@ -314,6 +335,7 @@ mod tests {
                 bits: 16,
                 channels: 2,
             },
+            log_id: String::new(),
         }
     }
 

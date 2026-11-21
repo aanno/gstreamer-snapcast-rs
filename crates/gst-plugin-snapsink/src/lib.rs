@@ -16,6 +16,8 @@ mod snapsink;
 pub use snapsink::SnapSink;
 
 fn plugin_init(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
+    // snapcast-rs logs via tracing: route it to the GStreamer debug log (L9).
+    gst_snapcast_common::log::init();
     snapsink::register(plugin)
 }
 

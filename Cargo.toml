@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/snapcast-engine",
+    "crates/gst-snapcast-common",
     "crates/gst-plugin-snapsink",
     "crates/gst-plugin-snapsrc",
 ]
@@ -22,6 +23,7 @@ authors = ["aanno"]
 [workspace.dependencies]
 # Internal
 snapcast-engine = { path = "crates/snapcast-engine" }
+gst-snapcast-common = { path = "crates/gst-snapcast-common" }
 
 # snapcast-rs (git submodule). Keep `version` in sync with the submodule so we
 # could switch to crates.io releases by simply dropping `path`.
@@ -40,6 +42,9 @@ gst-plugin-version-helper = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "macros"] }
 
 tracing = "0.1"
+# Only in gst-snapcast-common (the logging bridge). No fmt/ansi/env-filter.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
+log = "0.4"
 thiserror = "2"
 # mDNS / DNS-SD, pure Rust (same crate and version as snapcast-rs's snapclient-rs)
 mdns-sd = "0.12"

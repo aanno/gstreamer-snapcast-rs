@@ -476,6 +476,7 @@ impl BaseSrcImpl for SnapSrc {
             latency_ms: settings.latency_ms,
             host_id: settings.host_id,
             mdns_name: settings.mdns_name,
+            log_id: self.obj().name().to_string(),
         };
         let client = client::connect(&options)
             .map_err(|e| gst::error_msg!(gst::ResourceError::OpenRead, ["{e}"]))?;

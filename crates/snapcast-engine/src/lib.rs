@@ -1,6 +1,8 @@
 //! GStreamer-agnostic glue between the GStreamer elements and `snapcast-rs`.
 //!
-//! This crate must **not** depend on GStreamer. It owns everything that has a
+//! This crate must **not** depend on GStreamer (reasons in `docs/architecture.md`:
+//! the path upstream into snapcast-rs, one timing boundary, tests without
+//! GStreamer; shared GStreamer code lives in `gst-snapcast-common`). It owns everything that has a
 //! lifecycle independent of a single GStreamer element:
 //!
 //! * the shared tokio runtime that drives the `snapcast-rs` engines,
@@ -14,6 +16,16 @@
 //! All timestamps are microseconds of the monotonic clock returned by
 //! [`now_usec`] (`CLOCK_MONOTONIC` on Linux), the clock Snapcast uses for
 //! time sync. Callers translate between this and their own clock domain.
+//!
+//! # Logging
+//!
+//! The engine logs with `tracing`, as snapcast-rs does, and installs no
+//! subscriber: that is the embedder's job (the GStreamer plugins bridge to the
+//! GStreamer debug log, see `gst-snapcast-common`). The engine runs its work
+//! in spans with a [`LOG_ID_FIELD`] field naming who it works for: the
+//! caller's `log_id` for a client or a stream acquisition, `snapserver:<port>`
+//! for a shared server (whose snapcast-rs tasks and encoder threads inherit
+//! that span).
 
 #![warn(missing_docs)]
 
@@ -26,6 +38,10 @@ pub mod client;
 pub mod mdns;
 #[cfg(feature = "server")]
 pub mod server;
+
+/// Name of the span field that tags events with the id of the element (or
+/// other embedder object) they belong to. See "Logging" above.
+pub const LOG_ID_FIELD: &str = "log_id";
 
 /// Current time of the Snapcast clock domain in microseconds.
 pub fn now_usec() -> i64 {

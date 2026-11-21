@@ -18,6 +18,7 @@ path = "src/lib.rs"
 
 [dependencies]
 gst = { workspace = true }
+gst-snapcast-common = { workspace = true }
 gst-base = { workspace = true }
 gst-audio = { workspace = true }
 snapcast-engine = { workspace = true, features = ["server"] }

@@ -33,7 +33,8 @@ claude mcp add --transport http xerj "http://host.docker.internal:9201/mcp"
 # install xerj
 curl -fsSL https://xerj.org/get | sh -s -- --with-model
 # only for test (maybe it is better to run xerj inside the devcontainer)
-XERJ_DISABLE_FEEDBACK=true XERJ_ALLOW_INSECURE_NETWORK_BIND=true xerj --facts-model-dir /home/tpasch/.local/share/xerj/model --insecure --data-dir ~/dev/xerj-data --bind 0.0.0.0
+XERJ_DISABLE_FEEDBACK=true XERJ_ALLOW_INSECURE_NETWORK_BIND=true xerj --facts-model-dir /home/tpasch/.local/share/xerj/model --insecure --data-dir ~/dev/xerj-data
+# --bind 0.0.0.0
 # this listens to: http://localhost:9200/_facts
 
 # XERJ-Query is off until you start the node with the model directory:

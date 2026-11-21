@@ -207,6 +207,11 @@ The plugin layer translates between GStreamer buffers and the engine APIs.
 
 This also gives us a useful separation for Android: the Snapcast engine can be reused without requiring GStreamer to own the entire application architecture.
 
+> **Update 2026-11-21:** Android alone is no reason for a GStreamer-free engine: GStreamer
+> for Android exists, and `snapsink` needs it there anyway. The engine stays
+> GStreamer-free for other reasons (path upstream into snapcast-rs, one timing boundary,
+> tests, gstreamer-rs churn); see `docs/architecture.md`.
+
 ## 5. Recommendation
 
 <badge color="success">Strong candidate</badge>

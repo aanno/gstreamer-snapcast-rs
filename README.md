@@ -21,16 +21,18 @@ All `snapsink` elements in one process share a single embedded server; each
 element feeds one stream. Standard Snapcast clients (C++ `snapclient`,
 Snapdroid, ...) can connect to it, provided you use the PCM or FLAC codec.
 
-> **Status: first working loopback.** `snapsink → embedded server → snapsrc`
-> works for PCM, end to end within a few ms of the configured buffer. It interoperates
-> with the C++ Snapcast in both directions (`snapsink` → `snapclient`,
-> `snapserver` → `snapsrc`), with `pcm` and `flac` (`make test-interop`).
-> Limitations: one stream per server port (snapcast-rs cannot add streams at
-> runtime yet), S16LE/S32LE input only, no mDNS, no volume/control handling.
-> The current state, decisions, all known limitations and the plan are in
-> [docs/claude/memory.md](docs/claude/memory.md). Next up: a feasibility
-> prototype (install/test tooling, control plane, timing checks with a loopback sound
-> device).
+> **Status: feasibility prototype.** `snapsink → embedded server → snapsrc` works for
+> `pcm` and `flac`, and interoperates with the C++ Snapcast in both directions
+> (`snapsink` → `snapclient`, `snapserver` → `snapsrc`; `make test-interop`). Measured on
+> a loopback sound card, receivers play within about 1 ms of each other and of the
+> server timeline, also on a drifting card (`make test-aloop`). snapsink announces itself
+> via mDNS and snapsrc finds it; snapsrc reconnects after a server restart and applies
+> the server's volume and mute. snapcast-rs logs into the GStreamer debug log.
+> Limitations: one stream per server port (snapcast-rs cannot add streams at runtime
+> yet), S16LE/S32LE input only, no control plane yet (JSON-RPC for Snapweb/Snapdroid;
+> next step, P2). The current state, decisions, all known limitations and the plan are
+> in [docs/claude/memory.md](docs/claude/memory.md); the architecture in
+> [docs/architecture.md](docs/architecture.md).
 
 ### Element properties
 
@@ -69,10 +71,12 @@ first).
 ├── assets/audio/              # CC0 music for listening tests (see its README)
 ├── crates/
 │   ├── snapcast-engine/       # GStreamer-free glue: tokio runtime, shared server/client lifecycle
+│   ├── gst-snapcast-common/   # GStreamer-side code shared by both plugins (logging bridge)
 │   ├── gst-plugin-snapsink/   # -> libgstsnapsink.so  (element: snapsink)
 │   └── gst-plugin-snapsrc/    # -> libgstsnapsrc.so   (element: snapsrc)
 ├── snapcast-rs/               # git submodule (fork of metaneutrons/snapcast-rs), own Cargo workspace
 ├── docs/
+│   ├── architecture.md        # crates and their rules, threads, logging, interfaces
 │   ├── testing*.md            # tests, host and devcontainer setup, gotchas
 │   ├── gstreamer-plugins/     # design discussion (background)
 │   └── claude/memory.md       # current state, decisions, limitations, plan
@@ -212,6 +216,17 @@ configurations that:
 * debug each plugin's integration tests.
 
 `GST_DEBUG=snapsink:6` (or `snapsrc:6`) enables the elements' debug logs.
+The logs of snapcast-rs and of the engine are in the GStreamer debug log too, in the
+categories `snapcast-client`, `snapcast-server`, `snapcast-engine`, `snapcast-mdns` and
+`snapcast-deps`, tagged with the element (`<snapsrc0>`) or the shared server
+(`<snapserver:1704>`):
+
+```sh
+GST_DEBUG=snapsrc:5,snapcast*:5 gst-launch-1.0 snapsrc ! autoaudiosink
+```
+
+`GST_SNAPCAST_TRACING=0` turns that bridge off. Details:
+[docs/architecture.md](docs/architecture.md#logging).
 
 ## License
 
