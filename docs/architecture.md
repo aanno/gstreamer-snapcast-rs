@@ -263,7 +263,11 @@ log, so `GST_DEBUG` controls everything (L9, 2026-11-21).
 (or `gst-inspect-1.0 snapsink`). `snapsink` keeps GstBaseSink's `sync` and `async`;
 `async=false` is needed only when the same pipeline also receives from its server
 ([pipelines.md](pipelines.md#preroll-and-async-false), L14). Planned with the control plane (P2): a `control-port`
-property, JSON-RPC over TCP and WebSocket, and `Stream.Control` as a bus message.
+property, JSON-RPC over TCP and WebSocket (the only inter-process control interface; no
+D-Bus), a `snapweb-dir` property so that Snapweb serves as the user interface, and
+`Stream.Control` as a bus message. The contract behind it is the Rust trait
+`SnapControl` in a new snapcast-rs control crate. Plan and gap list:
+[claude/memory.md](claude/memory.md), P2.
 
 ### Environment variables
 

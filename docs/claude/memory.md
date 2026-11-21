@@ -3,7 +3,7 @@
 Working memory for agents and humans continuing this project. Keep it current:
 update **State** and **Plan** when a step is finished, and add decisions with a date.
 
-Last updated: 2026-11-21 (L9 done: snapcast-rs logs in the GStreamer debug log; P2 next).
+Last updated: 2026-11-21 (P2 step 1 done: reference submodules, gap list; next: the control crate).
 
 ## Resume here (2026-11-21)
 
@@ -31,10 +31,11 @@ upstream PR candidate for `metaneutrons/snapcast-rs`; no PR opened yet.
 
 **Next, in this order:**
 1. Look at the pending results; fix what fails, record gotchas in `docs/testing*.md`.
-2. **P2, control plane** (see Plan). First step in the fork: extract the control code of
-   `snapserver-rs` into a **new control library crate** (decision 2026-11-19: no copying).
-   Clarify with the user first: the crate's name, and whether HTTP/WebSocket (axum) is
-   in it or behind a feature (server side = sender, so it must stay Android-portable).
+2. **P2, control plane** (see Plan; step 1, the analysis, is done). Next, step 2 in the
+   fork: extract the control code of `snapserver-rs` into a **new control library crate**
+   with the `SnapControl` trait. Clarify with the user first: the crate's name, and
+   whether HTTP/WebSocket (axum) is in it or behind a feature (server side = sender, so it
+   must stay Android-portable).
 3. P4, evaluation: F3 endurance (hours, memory/latency), F5 lifecycle
    (PLAYING→PAUSED→PLAYING, stop/restart; reconnect is done), F1 listening, write-up.
 
@@ -284,6 +285,23 @@ Not blocking, left over from P3:
 - 2026-11-21: **not ready for crates.io** (in principle; no publishing planned): blocked
   by unreleased snapcast-rs fork commits, plus maturity and housekeeping. List:
   `docs/architecture.md`, "Publishing".
+- 2026-11-21 (with the user): **P2 direction.**
+  - **Snapweb is the user-facing control UI.** It is only served as static files
+    (`snapweb-dir`; Debian ships it in `/usr/share/snapserver/snapweb`), never vendored.
+  - **No separate control application, no D-Bus.** JSON-RPC (TCP and WebSocket) is the
+    inter-process interface: it is network-capable, language-neutral, and already spoken
+    by Snapweb, Snapdroid and Home Assistant. D-Bus has no session bus on Android and is
+    local-only. A separate process, if ever needed, is a JSON-RPC proxy. The HTTP stack
+    stays out of builds that don't want it via the engine feature `control`, and out of
+    pipelines at runtime via `control-port=0`. D-Bus only for an optional MPRIS add-on.
+  - **The control contract is a Rust trait `SnapControl`** in the new control crate in
+    snapcast-rs (one async method per `ServerCommand`, plus event subscription),
+    implemented for `mpsc::Sender<ServerCommand>`. The JSON-RPC server is generic over
+    it. `snapcast-server` stays unchanged. Later, optionally, a `RemoteControl` over
+    JSON-RPC.
+  - **Read-only reference submodules** `reference/snapcast` (v0.35.0) and
+    `reference/snapweb` (v0.9.3): shallow, `update = none` (not fetched by
+    `--recurse-submodules`), for the API spec and Snapweb's calls. Never built or linked.
 
 ## Known limitations
 
@@ -298,7 +316,7 @@ Not blocking, left over from P3:
 | L7 | ~~`sync=false` with a non-live source floods clients~~ | `snapsink` | — | **Fixed 2026-11-19**: snapsink paces itself, sending a chunk at most 200 ms ahead of its server timestamp (interruptible wait). Test `paces_a_non_live_source_without_sync` (before: 1.07 s of audio in 3 ms) |
 | L8 | ~~No reconnect handling, server volume/mute, mDNS or client id in `snapsrc`~~ | `snapsrc` | — | **Done 2026-11-19**: reconnect (verified), client id (`host-id`, automatic `instance`, server appends `#instance`), server volume/mute (linear gain, read-only properties), **mDNS** via the pure-Rust `mdns-sd`: snapsink announces (`mdns-name`, not for `port=0`), snapsrc with an empty `host` discovers (optional `mdns-name` filter, 5 s, skips IPv6 link-local). Tests: `make test-mdns` (devcontainer: passes; the C++ peers need `avahi-daemon`, host only) |
 | L9 | ~~snapcast-rs `tracing` output is not visible in GStreamer logs~~ | engine | — | **Fixed 2026-11-21**: `gst-snapcast-common::log` bridges `tracing` and `log` into the GStreamer debug log (`snapcast-*` categories, element names via `log_id` spans); fork commit for the server's tasks and encoder threads (upstream PR candidate). See `docs/architecture.md` |
-| L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | **Changed 2026-11-19 (user): nothing is copied.** Create a control library crate in snapcast-rs (fork first, upstream PR candidate) that both `snapserver-rs` and `gst-snapcast-engine` use |
+| L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | **Changed 2026-11-19 (user): nothing is copied.** Create a control library crate in snapcast-rs (fork first, upstream PR candidate) that both `snapserver-rs` and `gst-snapcast-engine` use. 2026-11-21: the event → notification loop is in `main.rs` too and must move as well; gap list in Plan, P2 |
 | L11 | snapcast-rs cannot serve **audio** over WebSocket (C++ snapserver: `/stream` on port 1780, used by Snapweb's player). Its WebSocket endpoint carries only JSON-RPC | snapcast-rs server | — | Only if a WebSocket audio client must work with `snapsink` (open question) |
 | L12 | ~~`snapsrc` → `alsasink` (`skew`, 40 ms tolerance) follows a drifting card, not the server~~ | `snapsrc` + audio sink | — | **Fixed 2026-11-19**: snapsrc sets `slave-method=resample` on the downstream audio sink (`adjust-sink`); rate error −17…+4 ppm (was +300) on a −300 ppm card, ~1 ms from the server timeline |
 | L13 | ~~`snapsrc` plays late by its pipeline latency~~ (+62 ms with 65 ms latency) | `snapsrc` PTS | — | **Fixed 2026-11-19**: `pts = playout − pipeline latency`; now −3…+1 ms, in sync with the C++ snapclient (+0.4 ms) |
@@ -340,14 +358,43 @@ because of the C++ reference). F3 not started. F4 needs P2. F5: reconnect done
 
 **P2. Control plane** in `gst-snapcast-engine` (feature `control`), built on a **new control
 library crate in snapcast-rs** (2026-11-19: nothing is copied from `snapserver-rs`; the
-crate is extracted there, `snapserver-rs` uses it too, upstream PR candidate, L10):
-JSON-RPC over TCP (1705) and WebSocket (1780 `/jsonrpc`), started with the server; `snapsink`
-forwards GStreamer tags as stream metadata; `Stream.Control` becomes a bus message for the
-application. Port property `control-port` (`0` = off); optional `snapweb-dir` for Snapweb's
-static files. No auth, no persistence, no `Stream.AddStream` (L1). Already done
-before P2 (2026-11-19, L8): `snapsrc` applies the server's volume/mute (read-only
-`volume`/`mute`), and mDNS (snapsink announces the stream port; the control ports would
-need their own `_snapcast-jsonrpc._tcp` etc. records). Not started yet.
+crate is extracted there, `snapserver-rs` uses it too, upstream PR candidate, L10).
+Direction agreed 2026-11-21 (see Decisions): Snapweb as the UI, JSON-RPC as the only
+inter-process interface, contract = trait `SnapControl`. Already done before P2
+(2026-11-19, L8): `snapsrc` applies the server's volume/mute (read-only `volume`/`mute`).
+
+1. **Analysis: done 2026-11-21.** Reference submodules added; gap list below.
+2. **Control crate in the fork:** extract from `snapserver-rs` the JSON-RPC dispatcher
+   (`jsonrpc.rs`), notification builders (`notify.rs`), the **event → notification loop
+   (now in `main.rs`)**, TCP control (`control.rs`, 1705) and HTTP/WS (`http.rs`, 1780,
+   `/jsonrpc` plus `doc_root`); `auth.rs` stays optional. Add the `SnapControl` trait.
+   `snapserver-rs` then uses the crate. One or two upstream PRs.
+3. **Engine and snapsink:** feature `control`; one control endpoint per shared server.
+   The crate takes over the server's `mpsc::Receiver<ServerEvent>` (the engine only logs
+   it today) and fans it out (notifications, engine, logging). `snapsink`: properties
+   `control-port` (`0` = off) and `snapweb-dir`; GStreamer tags as stream metadata;
+   `Stream.Control` as a bus message. mDNS for the control ports as C++ does:
+   `_snapcast-ctrl._tcp` (TCP control) and `_snapcast-http._tcp` (HTTP). No auth, no
+   persistence, no `Stream.AddStream` (L1).
+4. **F4 check:** Snapweb lists our `snapsrc` and a C++ `snapclient`, changes volume, mute,
+   name, latency and the group's stream.
+
+**Gap list (2026-11-21; C++ snapcast v0.35.0 `doc/json_rpc_api/`, Snapweb v0.9.3
+`src/snapcontrol.ts`, `snapserver-rs` on `aanno/fixes`):**
+
+| Area | C++ spec | Snapweb uses | snapserver-rs |
+|---|---|---|---|
+| Methods | `Server.{GetRPCVersion,GetStatus,DeleteClient}`, `Client.{GetStatus,SetVolume,SetLatency,SetName}`, `Group.{GetStatus,SetMute,SetStream,SetClients,SetName}`, `Stream.{Control,SetProperty,AddStream,RemoveStream}` | `Server.{GetStatus,DeleteClient}`, `Client.{SetVolume,SetLatency,SetName}`, `Group.{SetMute,SetStream,SetClients}`, `Stream.Control` | all of the spec, plus `Server.{GetToken,Authenticate}` (auth); RPC version 2.0.0 like C++ |
+| Notifications | `Client.On{Connect,Disconnect,VolumeChanged,LatencyChanged,NameChanged}`, `Group.On{Mute,StreamChanged,NameChanged}`, `Stream.On{Update,Properties}`, `Server.OnUpdate` | all of these except `Group.OnNameChanged` | all of the spec; but the event loop that emits them is in the binary (`main.rs`), not reusable yet |
+| Endpoints | TCP 1705, HTTP/WS 1780: `/jsonrpc`, `/stream`, static files | `ws://<page host>/jsonrpc`; `/stream` for the in-browser player | `/jsonrpc` (WS and POST), `doc_root`; **no `/stream`** |
+| mDNS | `_snapcast._tcp`, `_snapcast-ctrl._tcp`, `_snapcast-http._tcp`, `_snapcast-https._tcp` | – | (embedded case: our engine announces `_snapcast._tcp` only) |
+
+Consequences: method and notification coverage is complete for Snapweb; the work is the
+extraction (including the event loop) and the engine wiring. **Not covered:** Snapweb's
+in-browser player (`/stream`, a binary Snapcast stream over WebSocket); a later,
+separate snapcast-rs PR. Still to verify at F4: that the JSON shapes (`Server.GetStatus`,
+`Stream.OnProperties`) match what Snapweb reads; streams without properties (no
+`canControl`) should simply hide Snapweb's player controls.
 
 **P3. Timing robustness for the prototype:** **done 2026-11-19.** (a) absolute offset
 (L13), (b) drift (L12), (c) start-up alignment, plus L5 (resolved by measurement) and

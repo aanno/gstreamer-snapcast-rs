@@ -1,3 +1,13 @@
 [submodule "snapcast-rs"]
 	path = snapcast-rs
 	url = git@github.com:aanno/snapcast-rs.git
+[submodule "reference/snapcast"]
+	path = reference/snapcast
+	url = https://github.com/snapcast/snapcast.git
+	shallow = true
+	update = none
+[submodule "reference/snapweb"]
+	path = reference/snapweb
+	url = https://github.com/snapcast/snapweb.git
+	shallow = true
+	update = none

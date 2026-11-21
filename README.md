@@ -105,6 +105,7 @@ first).
 │   ├── gst-plugin-snapsink/   # -> libgstsnapsink.so  (element: snapsink)
 │   └── gst-plugin-snapsrc/    # -> libgstsnapsrc.so   (element: snapsrc)
 ├── snapcast-rs/               # git submodule (fork of metaneutrons/snapcast-rs), own Cargo workspace
+├── reference/                 # read-only submodules, not fetched by default: C++ snapcast, snapweb
 ├── docs/
 │   ├── architecture.md        # crates and their rules, threads, logging, interfaces
 │   ├── pipelines.md           # cookbook: your own pipelines with snapsink/snapsrc

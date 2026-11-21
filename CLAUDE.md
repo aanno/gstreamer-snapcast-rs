@@ -81,6 +81,16 @@ Run `make check` before declaring work done.
   snapcast-rs when the right fix belongs in the library (e.g. runtime `add_stream`/`remove_stream`).
 - Keep the `version` of the path deps in sync with `snapcast-rs/Cargo.toml`.
 
+## Reference submodules (read-only)
+
+- `reference/snapcast` (C++ Snapcast, v0.35.0) and `reference/snapweb` (v0.9.3) are
+  for reading only: the JSON-RPC API spec (`reference/snapcast/doc/json_rpc_api/`) and
+  what Snapweb calls (`reference/snapweb/src/snapcontrol.ts`). Never build, link, copy
+  code from, or commit into them.
+- They are shallow and `update = none`, so `--recurse-submodules` skips them. Fetch them
+  with `git submodule update --init --checkout reference/snapcast reference/snapweb`.
+- Pin a new release by checking out its tag inside the submodule, then commit the pointer.
+
 ## Code conventions
 
 - Edition 2024, MSRV 1.94.1 (dictated by snapcast-rs). Toolchain: `rust-toolchain.toml` (stable).
