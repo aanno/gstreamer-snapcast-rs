@@ -63,6 +63,8 @@ publishing: [docs/architecture.md](docs/architecture.md).
 |            | `buffer-ms`   | `1000`      | End-to-end buffer announced to clients |
 |            | `mdns-name`   | `gst-snapsink` | Announce the server via mDNS (`_snapcast._tcp`) under this name; empty: don't (never for `port=0`) |
 |            | `bound-port`  | (read-only) | Port actually listened on |
+|            | `async`       | `true`      | (from GstBaseSink) Wait for the first buffer ("preroll") before the pipeline counts as PAUSED. Set `false` when the same pipeline also contains a `snapsrc` (see below) |
+|            | `sync`        | `true`      | (from GstBaseSink) Render on the pipeline clock. With `false`, `snapsink` still paces non-live sources (files) to real time itself |
 | `snapsrc`  | `host`/`port` | `127.0.0.1`/`1704` | Server to connect to; empty `host`: find one via mDNS (its port is used) |
 |            | `mdns-name`   | (empty)     | With an empty `host`: only the server announced under this name |
 |            | `client-name` | `gst-snapsrc` | Name shown in Snapcast controllers |
@@ -71,6 +73,14 @@ publishing: [docs/architecture.md](docs/architecture.md).
 |            | `host-id`     | (MAC address) | Unique client id towards the server, like snapclient's `--hostID` |
 |            | `volume`/`mute` | (read-only) | The server's volume (0–100) and mute for this client, applied to the audio |
 |            | `adjust-sink` | `true`      | Set `slave-method=resample` on the downstream audio sink (if at `skew`) |
+
+**`snapsink async=false`** is needed in one case: a sender and a receiver of the same
+server in **one** pipeline (a demo or test; normally they run in separate processes,
+usually on separate machines). With the default, nothing plays and Ctrl+C hangs: the
+pipeline waits for every sink to receive its first buffer, but the receiver's sink only
+gets data once `snapsink` plays. The same applies to any setup where another sink's
+first buffer depends on `snapsink` playing. Details:
+[docs/pipelines.md](docs/pipelines.md#preroll-and-async-false).
 
 `snapsrc` outputs F32LE, timestamped so that the sound leaves the speaker at the
 Snapcast play-out time (the pipeline latency is compensated). The audio sink follows the

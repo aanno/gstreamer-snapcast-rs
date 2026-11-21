@@ -260,7 +260,9 @@ log, so `GST_DEBUG` controls everything (L9, 2026-11-21).
 ### Elements
 
 `snapsink` and `snapsrc`, with the properties listed in the [README](../README.md#element-properties)
-(or `gst-inspect-1.0 snapsink`). Planned with the control plane (P2): a `control-port`
+(or `gst-inspect-1.0 snapsink`). `snapsink` keeps GstBaseSink's `sync` and `async`;
+`async=false` is needed only when the same pipeline also receives from its server
+([pipelines.md](pipelines.md#preroll-and-async-false), L14). Planned with the control plane (P2): a `control-port`
 property, JSON-RPC over TCP and WebSocket, and `Stream.Control` as a bus message.
 
 ### Environment variables

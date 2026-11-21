@@ -43,7 +43,11 @@ gst-launch-1.0 -e audiotestsrc is-live=true wave=ticks ! audio/x-raw,rate=48000,
   `snapsrc host='""'` (the single quotes are for the shell). Without them, the next
   property becomes the value.
 - **Several chains in one command:** just write them one after the other, separated by a
-  space (see 5.3).
+  space (see 4.5).
+- **Preroll:** before a pipeline plays, every sink waits for its first buffer, so that
+  playback starts without a gap. A sink with `async=false` (a GstBaseSink property, which
+  `snapsink` has) skips that wait. This matters when one sink's data depends on another
+  sink already playing; see [Preroll and `async=false`](#preroll-and-async-false).
 - **Seeing what happens:**
   - `-v` prints the negotiated caps of every link;
   - `GST_DEBUG=snapsrc:5,snapcast*:4` shows the logs of our elements and of snapcast-rs
@@ -60,6 +64,9 @@ gst-launch-1.0 -e audiotestsrc is-live=true wave=ticks ! audio/x-raw,rate=48000,
   `codec`: `pcm` or `flac` (both work with every Snapcast client); `buffer-ms`: the
   end-to-end delay; `mdns-name`: announced via mDNS under this name (`""`: not at all).
 - Any Snapcast client can connect: `snapsrc`, the C++ `snapclient`, Snapdroid, …
+- From GstBaseSink: `sync` (default `true`; with `false`, `snapsink` still paces files to
+  real time) and `async` (default `true`; set `async=false` when the same pipeline also
+  receives from this server, see [5.4](#preroll-and-async-false)).
 
 **`snapsrc`** (receiver) runs an embedded Snapcast client.
 - Output: F32LE, timestamped so that the sound is heard at the Snapcast play-out time.
@@ -150,8 +157,12 @@ gst-launch-1.0 -e snapsrc ! audioconvert ! equalizer-10bands band0=6 band1=4 \
 gst-launch-1.0 -e snapsrc ! audioconvert ! wavenc ! filesink location=room.wav
 ```
 
-**5.4 Sender and receiver in one pipeline** (tested): this needs `async=false` on one of
-the sinks, e.g. on `snapsink` (`autoaudiosink` has no such property; a plain sink such as
+<a id="preroll-and-async-false"></a>
+
+**5.4 Sender and receiver in one pipeline: preroll and `async=false`** (tested). Rare in
+practice (sender and receivers normally run in separate processes, usually on separate
+machines), but handy for demos and tests. It needs `async=false` on one of the sinks,
+best on `snapsink` (`autoaudiosink` has no such property; a plain sink such as
 `alsasink` or `filesink` does):
 
 ```sh
@@ -166,6 +177,11 @@ every sink has received its first buffer ("preroll"). `snapsink` prerolls and th
 for PLAYING, but the receiver's sink gets data only once `snapsink` sends, which it only
 does in PLAYING. `async=false` lets one sink skip the preroll wait. Two separate
 `gst-launch-1.0` processes (like `make listen-all`) don't have this problem.
+
+The same applies to your own applications: whenever one sink's first buffer depends on
+another sink already playing (here through the network), give that other sink
+`async=false`. Leaving the default `async=true` on `snapsink` costs nothing in the usual
+setups.
 
 ## 6. From gst-launch to your own program
 
