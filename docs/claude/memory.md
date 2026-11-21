@@ -269,10 +269,11 @@ Not blocking, left over from P3:
   The debug category stays `snapcast-engine`, so `GST_DEBUG=snapcast*` covers everything.
 - 2026-11-21 (with the user): **two plugin crates stay** (not one `gst-plugin-snapcast` with
   features): the sender/receiver split stays explicit.
-- 2026-11-21: **licence stays GPL-3.0-only** for now (the binaries are GPL-3.0 anyway
-  because snapcast-rs is linked in; LGPL for our code would gain nothing and would not get
-  us into gst-plugins-rs, which takes only MPL-2.0/Apache-2.0/MIT). Open: MPL-2.0 for our
-  own source, to make it reusable. Analysis: `docs/architecture.md`, "Licence".
+- 2026-11-21 (user): **licence stays GPL-3.0-only**, also for our own source (the binaries
+  are GPL-3.0 anyway because snapcast-rs is linked in; LGPL for our code would gain
+  nothing and would not get us into gst-plugins-rs, which takes only
+  MPL-2.0/Apache-2.0/MIT; MPL-2.0 for our code was considered and rejected). Analysis:
+  `docs/architecture.md`, "Licence".
 - 2026-11-21: **not ready for crates.io** (in principle; no publishing planned): blocked
   by unreleased snapcast-rs fork commits, plus maturity and housekeeping. List:
   `docs/architecture.md`, "Publishing".

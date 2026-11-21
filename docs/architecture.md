@@ -361,8 +361,8 @@ ever share one subscriber, the loop guards (above) stop the cycle.
 | Our source under MPL-2.0 (or MIT/Apache-2.0) | still GPL-3.0 | Only gain: our glue and timing code becomes reusable in non-GPL projects, and the plugins could follow if a non-GPL Snapcast implementation ever appears. MPL-2.0 is GPL-compatible and gst-plugins-rs's main licence. Costs: a mixed-licence explanation |
 | Own Snapcast protocol implementation under a permissive licence | could be non-GPL | Contradicts the project's premise (no own wire protocol); snapcast-rs's libraries are ~11,000 lines |
 
-**Status:** GPL-3.0-only. Whether to put our own source under MPL-2.0 is open. If at all,
-it is easiest to decide early, while there is one author.
+**Decision (2026-11-21, user): GPL-3.0-only**, also for our own source. MPL-2.0 for our
+code was considered and rejected: it would gain nothing while snapcast-rs is linked in.
 
 ### Publishing (crates.io and packages)
 
