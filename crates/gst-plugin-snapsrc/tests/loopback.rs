@@ -118,3 +118,70 @@ fn pcm_loopback_is_continuous_and_scheduled_by_buffer_ms() {
         "buffers arrived {min}..{max} ms ahead, expected about {buffer_ms} ms"
     );
 }
+
+/// Downstream elements that configure themselves once (here `wavenc`) must see the
+/// stream's real format first. Before snapsrc overrode `negotiate()`, basesrc
+/// negotiated at start-up with the template fixated to `rate=1, channels=1`; wavenc
+/// took that, and the real 48 kHz stereo then failed with not-negotiated.
+#[test]
+fn first_caps_are_the_stream_format() {
+    init();
+
+    let sender = gst::parse::launch(
+        "audiotestsrc is-live=true ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
+         ! snapsink name=sink port=0 buffer-ms=300",
+    )
+    .unwrap()
+    .downcast::<gst::Pipeline>()
+    .unwrap();
+    sender.set_state(gst::State::Playing).unwrap();
+    let port = wait_for_port(&sender.by_name("sink").unwrap());
+
+    let receiver = gst::parse::launch(&format!(
+        "snapsrc name=src port={port} ! audioconvert ! wavenc ! appsink name=out sync=false"
+    ))
+    .unwrap()
+    .downcast::<gst::Pipeline>()
+    .unwrap();
+    // Every caps event leaving snapsrc, in order.
+    let caps_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<gst::Caps>::new()));
+    let seen = std::sync::Arc::clone(&caps_seen);
+    receiver
+        .by_name("src")
+        .unwrap()
+        .static_pad("src")
+        .unwrap()
+        .add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_, info| {
+            if let Some(gst::EventView::Caps(c)) = info.event().map(|e| e.view()) {
+                seen.lock().unwrap().push(c.caps_owned());
+            }
+            gst::PadProbeReturn::Ok
+        });
+    let appsink = receiver
+        .by_name("out")
+        .unwrap()
+        .downcast::<gst_app::AppSink>()
+        .unwrap();
+    receiver.set_state(gst::State::Playing).unwrap();
+
+    let sample = appsink.try_pull_sample(gst::ClockTime::from_seconds(5));
+    let error = receiver
+        .bus()
+        .unwrap()
+        .pop_filtered(&[gst::MessageType::Error]);
+    receiver.set_state(gst::State::Null).unwrap();
+    sender.set_state(gst::State::Null).unwrap();
+
+    assert!(error.is_none(), "receiver failed: {error:?}");
+    assert!(
+        sample.is_some(),
+        "no WAV data from snapsrc ! audioconvert ! wavenc"
+    );
+    let caps = caps_seen.lock().unwrap();
+    let first = gst_audio::AudioInfo::from_caps(&caps[0]).unwrap();
+    assert_eq!(
+        (first.rate(), first.channels()),
+        (48000, 2),
+        "caps: {caps:?}"
+    );
+}

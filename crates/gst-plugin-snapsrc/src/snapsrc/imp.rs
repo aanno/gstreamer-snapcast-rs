@@ -524,6 +524,23 @@ impl BaseSrcImpl for SnapSrc {
         BaseSrcImplExt::parent_query(self, query)
     }
 
+    /// The stream decides the format, and it is known only once audio arrives:
+    /// `create()` then sets the caps. Before that, the default negotiation would
+    /// fixate the template to `rate=1, channels=1`, and elements that configure
+    /// themselves once (e.g. `wavenc`) could not follow the real format later
+    /// (`snapsrc ! audioconvert ! wavenc` failed with not-negotiated).
+    fn negotiate(&self) -> Result<(), gst::LoggableError> {
+        // The pad's caps, not `state`: `create()` holds that lock while it waits.
+        match self.obj().src_pad().current_caps() {
+            // Renegotiation (e.g. downstream asked for RECONFIGURE): same format.
+            Some(caps) => self
+                .obj()
+                .set_caps(&caps)
+                .map_err(|_| gst::loggable_error!(CAT, "Failed to set caps {caps}")),
+            None => Ok(()),
+        }
+    }
+
     fn event(&self, event: &gst::Event) -> bool {
         if let gst::EventView::Latency(e) = event.view() {
             gst::debug!(CAT, imp = self, "Pipeline latency {}", e.latency());
