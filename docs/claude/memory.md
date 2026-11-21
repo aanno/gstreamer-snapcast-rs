@@ -3,7 +3,7 @@
 Working memory for agents and humans continuing this project. Keep it current:
 update **State** and **Plan** when a step is finished, and add decisions with a date.
 
-Last updated: 2026-11-21 (P2 step 3 done: snapsink serves JSON-RPC and Snapweb, tags as metadata; next: browser check, `Stream.Control`).
+Last updated: 2026-11-21 (P2 done: control API, Snapweb, metadata, `controls` + `Stream.Control` bus message; browser check by the user; next: P4).
 
 ## Resume here (2026-11-21)
 
@@ -31,11 +31,13 @@ upstream PR candidate for `metaneutrons/snapcast-rs`; no PR opened yet.
 
 **Next, in this order:**
 1. Look at the pending results; fix what fails, record gotchas in `docs/testing*.md`.
-2. **P2, control plane** (see Plan; steps 1–3 are done). Next: the user checks Snapweb in
-   a browser on the host (`scripts/fetch-snapweb.sh`, then `CONTROL=1 make listen-send`
-   and receivers; F4), then decide how `Stream.Control` should work (bus message, and
-   how an application declares `canPlay`/`canGoNext`, …). Fork commits **not pushed
-   yet**: `9a4c2b4` feat(control), `152dce6` fix(proto), `7aede14` fix(server).
+2. **P2, control plane: done** (see Plan). The user checked Snapweb in a browser on
+   2026-11-21 (volume works, client visible and renamable; the empty client details led
+   to the `ClientInfo` fix). Open bits: OS shows `linux` (snapcast-client sends
+   `std::env::consts::OS`; C++ sends the distribution name; a small snapcast-client PR),
+   Snapweb's in-browser player (`/stream`), authentication. Fork commits **not pushed
+   yet**: `9a4c2b4` feat(control), `152dce6` fix(proto), `7aede14` fix(server),
+   `5b77ff7` fix(server) client info.
 3. P4, evaluation: F3 endurance (hours, memory/latency), F5 lifecycle
    (PLAYING→PAUSED→PLAYING, stop/restart; reconnect is done), F1 listening, write-up.
 
@@ -394,7 +396,22 @@ inter-process interface, contract = trait `SnapControl`. Already done before P2
    `fix(server)` `to_status` dropped stream properties. Tests: engine
    `control_api_runs_and_stops_with_the_server`, snapsrc `tests/control.rs` (JSON-RPC
    status with tags, `Client.SetVolume` reaches snapsrc, Snapweb files over HTTP).
-   `scripts/fetch-snapweb.sh`; `listen.sh` `CONTROL=1`. Original plan text:
+   `scripts/fetch-snapweb.sh`; `listen.sh` `CONTROL=1`.
+   **`Stream.Control` (2026-11-21, design agreed with the user: property plus bus
+   message):** snapsink flags property `controls` (`play+pause+next+previous+seek`,
+   mutable in PLAYING) → `canPlay`/… and `canControl`; `playbackStatus` follows the
+   element state (READY→PAUSED and PLAYING→PAUSED: paused, PAUSED→PLAYING: playing).
+   Engine: `StreamProperties` (metadata + `StreamControls` + `PlaybackStatus`) replaces
+   `set_metadata` (the server replaces the whole map, so they go together);
+   `StreamHandle::on_command` gets `StreamCommand { command, params_json }`, routed from
+   `ServerEvent::StreamControl` in the event loop. snapsink posts element message
+   `snapcast-stream-control` (`stream`, `command`, `params`); it does not act on it.
+   **Browser check findings (user, 2026-11-21):** "Unknown title/artist" with ticks
+   (no tags; `listen.sh` now adds `taginject` for ticks/sine); details Client, IP, OS
+   empty → snapcast-rs `fix(server)` `5b77ff7` (`state::ClientInfo` from the Hello and
+   the peer address); ID = MAC is right for instance 1 (C++ `getUniqueId`: `#n` only for
+   instance ≠ 1); snapsrc's `client-name` is the client *software* name (blurb fixed).
+   Original plan text:
    feature `control`; one control endpoint per shared server.
    The crate takes over the server's `mpsc::Receiver<ServerEvent>` (the engine only logs
    it today) and fans it out (notifications, engine, logging). `snapsink`: properties

@@ -97,8 +97,7 @@ pub struct StreamMetadata {
 }
 
 impl StreamMetadata {
-    /// The stream `properties` object of the Snapcast control API.
-    fn to_properties(&self) -> HashMap<String, serde_json::Value> {
+    fn to_json(&self) -> serde_json::Value {
         let mut metadata = serde_json::Map::new();
         if let Some(title) = &self.title {
             metadata.insert("title".into(), title.clone().into());
@@ -112,9 +111,103 @@ impl StreamMetadata {
         if let Some(duration) = self.duration_secs {
             metadata.insert("duration".into(), duration.into());
         }
-        HashMap::from([("metadata".to_owned(), metadata.into())])
+        metadata.into()
     }
 }
+
+/// Player commands a stream accepts from controllers (Snapcast `canPlay`,
+/// `canPause`, `canGoNext`, `canGoPrevious`, `canSeek`). Controllers such as
+/// Snapweb show the matching buttons; the commands arrive through
+/// [`StreamHandle::on_command`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StreamControls {
+    /// `play`.
+    pub play: bool,
+    /// `pause` (and `playPause`).
+    pub pause: bool,
+    /// `next`.
+    pub next: bool,
+    /// `previous`.
+    pub previous: bool,
+    /// `seek` / `setPosition`.
+    pub seek: bool,
+}
+
+impl StreamControls {
+    /// Whether any command is accepted (Snapcast `canControl`).
+    pub fn any(&self) -> bool {
+        self.play || self.pause || self.next || self.previous || self.seek
+    }
+}
+
+/// Playback state of a stream, as shown by controllers (`playbackStatus`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaybackStatus {
+    /// Playing.
+    Playing,
+    /// Paused.
+    Paused,
+    /// Stopped.
+    Stopped,
+}
+
+impl PlaybackStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Playing => "playing",
+            Self::Paused => "paused",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
+/// What controllers see of a stream (its Snapcast `properties`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StreamProperties {
+    /// Track information.
+    pub metadata: StreamMetadata,
+    /// Accepted player commands.
+    pub controls: StreamControls,
+    /// Playback state (`None`: not reported).
+    pub playback: Option<PlaybackStatus>,
+}
+
+impl StreamProperties {
+    /// The stream `properties` object of the Snapcast control API.
+    fn to_map(&self) -> HashMap<String, serde_json::Value> {
+        let c = &self.controls;
+        let mut map = HashMap::from([
+            ("metadata".to_owned(), self.metadata.to_json()),
+            ("canControl".to_owned(), c.any().into()),
+            ("canPlay".to_owned(), c.play.into()),
+            ("canPause".to_owned(), c.pause.into()),
+            ("canGoNext".to_owned(), c.next.into()),
+            ("canGoPrevious".to_owned(), c.previous.into()),
+            ("canSeek".to_owned(), c.seek.into()),
+        ]);
+        if let Some(playback) = self.playback {
+            map.insert("playbackStatus".to_owned(), playback.as_str().into());
+        }
+        map
+    }
+}
+
+/// A player command for a stream from a controller (JSON-RPC `Stream.Control`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamCommand {
+    /// The command: `play`, `pause`, `playPause`, `stop`, `next`, `previous`,
+    /// `seek`, `setPosition`, … (as the controller sent it).
+    pub command: String,
+    /// Its parameters as JSON text (`null` if none), e.g. `{"offset":30}` for
+    /// `seek` or `{"position":90}` for `setPosition`.
+    pub params_json: String,
+}
+
+/// Receives the commands for one stream; runs on the engine runtime, so it must
+/// not block.
+type CommandHandler = Arc<dyn Fn(StreamCommand) + Send + Sync>;
+/// Command handlers by stream name.
+type CommandHandlers = Arc<Mutex<HashMap<String, CommandHandler>>>;
 
 /// Per-stream options.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +244,8 @@ struct ServerEntry {
     control_ports: (Option<u16>, Option<u16>),
     /// Tasks to abort with the server (the control listeners).
     tasks: Vec<tokio::task::AbortHandle>,
+    /// Where `Stream.Control` commands go.
+    handlers: CommandHandlers,
 }
 
 impl Drop for ServerEntry {
@@ -214,22 +309,35 @@ impl StreamHandle {
         self.server.control_ports.1
     }
 
-    /// Publish track information for this stream (replaces the previous one).
+    /// Publish what controllers see of this stream (replaces the previous
+    /// properties as a whole).
     ///
     /// Does not block: fails with [`EngineError::Busy`] if the server's command
     /// queue is full.
-    pub fn set_metadata(&self, metadata: &StreamMetadata) -> Result<(), EngineError> {
+    pub fn set_properties(&self, properties: &StreamProperties) -> Result<(), EngineError> {
         use mpsc::error::TrySendError;
         self.server
             .cmd_tx
             .try_send(ServerCommand::SetStreamMeta {
                 stream_id: self.name.clone(),
-                metadata: metadata.to_properties(),
+                metadata: properties.to_map(),
             })
             .map_err(|e| match e {
                 TrySendError::Full(_) => EngineError::Busy,
                 TrySendError::Closed(_) => EngineError::ServerGone,
             })
+    }
+
+    /// Call `handler` for each player command a controller sends to this stream
+    /// (replaces a previous handler; removed when the handle is dropped). It runs
+    /// on the engine runtime and must not block. Controllers only offer the
+    /// commands announced in [`StreamProperties::controls`].
+    pub fn on_command(&self, handler: impl Fn(StreamCommand) + Send + Sync + 'static) {
+        self.server
+            .handlers
+            .lock()
+            .unwrap()
+            .insert(self.name.clone(), Arc::new(handler));
     }
 
     /// Submit interleaved little-endian PCM in the stream's format.
@@ -249,6 +357,7 @@ impl StreamHandle {
 
 impl Drop for StreamHandle {
     fn drop(&mut self) {
+        self.server.handlers.lock().unwrap().remove(&self.name);
         if let Some(slot) = self.server.streams.lock().unwrap().get_mut(&self.name) {
             slot.claimed = false;
         }
@@ -373,7 +482,8 @@ fn start_server(
     #[cfg(feature = "control")]
     let events = control.spawn(cmd_tx.clone(), events, &span, &mut tasks)?;
     // The event channel is bounded; drain it so the server never stalls.
-    rt.spawn(drain_events(events).instrument(span.clone()));
+    let handlers = CommandHandlers::default();
+    rt.spawn(drain_events(events, Arc::clone(&handlers)).instrument(span.clone()));
 
     let mut streams = HashMap::new();
     streams.insert(
@@ -411,13 +521,31 @@ fn start_server(
         #[cfg(feature = "control")]
         control_ports,
         tasks,
+        handlers,
     }))
 }
 
-/// Logs the server's events until it stops.
-async fn drain_events(mut events: mpsc::Receiver<ServerEvent>) {
+/// Logs the server's events until it stops, and hands `Stream.Control` commands
+/// to the handler of their stream.
+async fn drain_events(mut events: mpsc::Receiver<ServerEvent>, handlers: CommandHandlers) {
     while let Some(event) = events.recv().await {
         tracing::debug!(?event, "Snapcast server event");
+        if let ServerEvent::StreamControl {
+            stream_id,
+            command,
+            params,
+        } = event
+        {
+            // Clone the handler out of the lock: it may take a while.
+            let handler = handlers.lock().unwrap().get(&stream_id).cloned();
+            match handler {
+                Some(handler) => handler(StreamCommand {
+                    command,
+                    params_json: params.to_string(),
+                }),
+                None => tracing::info!(stream_id, command, "No handler for stream command"),
+            }
+        }
     }
 }
 
@@ -658,12 +786,23 @@ mod tests {
         assert_eq!(reply["result"]["server"]["streams"][0]["id"], "x");
 
         // Metadata shows up as the stream's properties.
-        a.set_metadata(&StreamMetadata {
-            title: Some("Song".into()),
-            artist: vec!["Band".into()],
-            ..StreamMetadata::default()
+        a.set_properties(&StreamProperties {
+            metadata: StreamMetadata {
+                title: Some("Song".into()),
+                artist: vec!["Band".into()],
+                ..StreamMetadata::default()
+            },
+            controls: StreamControls {
+                next: true,
+                ..StreamControls::default()
+            },
+            playback: Some(PlaybackStatus::Playing),
         })
         .unwrap();
+        let (command_tx, command_rx) = std::sync::mpsc::channel();
+        a.on_command(move |c| {
+            let _ = command_tx.send(c);
+        });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             let reply = rpc_over_tcp(
@@ -674,11 +813,27 @@ mod tests {
             let metadata = &reply["result"]["server"]["streams"][0]["properties"]["metadata"];
             if metadata["title"] == "Song" {
                 assert_eq!(metadata["artist"], serde_json::json!(["Band"]));
+                let properties = &reply["result"]["server"]["streams"][0]["properties"];
+                assert_eq!(properties["canControl"], true);
+                assert_eq!(properties["canGoNext"], true);
+                assert_eq!(properties["canPlay"], false);
+                assert_eq!(properties["playbackStatus"], "playing");
                 break;
             }
             assert!(std::time::Instant::now() < deadline, "metadata not applied");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+
+        // Stream.Control reaches the stream's handler.
+        rpc_over_tcp(
+            tcp,
+            r#"{"jsonrpc":"2.0","id":3,"method":"Stream.Control","params":{"id":"x","command":"next","params":{}}}"#,
+        );
+        let command = command_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("command");
+        assert_eq!(command.command, "next");
+        assert_eq!(command.params_json, "{}");
 
         // The control ports close with the server.
         drop(a);

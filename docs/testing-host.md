@@ -190,6 +190,56 @@ gst-launch-1.0 snapsrc ! audioconvert ! alsasink device=hw:0 \
                snapsrc ! audioconvert ! pulsesink device=bluez_output.XX_XX_XX_XX_XX_XX.1
 ```
 
+### Control with Snapweb (F4)
+
+snapsink can offer the Snapcast control API (`control-port`, `http-port`, off by
+default) and serve Snapweb (`snapweb-dir`). Automated tests (also run in the
+devcontainer):
+
+- `make test`: `crates/gst-plugin-snapsrc/tests/control.rs` drives a snapsink → snapsrc
+  pair over JSON-RPC like a controller: the receiver appears as a client, tags arrive as
+  stream metadata, `controls` and the playback status appear as stream properties,
+  `Client.SetVolume` changes snapsrc's `volume`, `Stream.Control` arrives as a
+  `snapcast-stream-control` bus message, and Snapweb's files are served over HTTP.
+  `gst-snapcast-engine` and snapcast-rs (`snapcast-tests/tests/control.rs`) have their
+  own control tests.
+- `make test-mdns`: snapsink announces `_snapcast-ctrl._tcp` and `_snapcast-http._tcp`
+  next to `_snapcast._tcp`.
+
+In a browser, by hand:
+
+```sh
+scripts/fetch-snapweb.sh                  # once: Snapweb into ~/.local/share/snapweb
+CONTROL=1 make listen-send                # terminal 1: sender with control-port=1705, http-port=1780
+make listen-recv                          # terminal 2: a receiver (and/or listen-cpp-client)
+xdg-open http://localhost:1780/           # or http://<host>:1780/ from another device
+```
+
+What to check, and what to expect:
+
+| In Snapweb | Expected |
+|---|---|
+| Stream | `default`, title "Ticks", artist "gstreamer-snapcast-rs" (from `taginject` in `listen.sh`; a file shows its own tags) |
+| Volume, mute | change the receiver; snapsrc's `volume`/`mute` follow |
+| Client name | the host name until you rename it in the client's details |
+| Details: Client | `gst-snapsrc` and the snapcast-rs version (C++: `Snapclient 0.31.0`) |
+| Details: ID | the MAC address for the first instance on a host, `<MAC>#2` for the second (as the C++ server: `#n` only for instance ≠ 1) |
+| Details: IP, OS | the receiver's address and `linux` (C++ snapclient: the distribution name) |
+| Groups | moving a client to another group, and a group to another stream (needs a second stream, i.e. a second server port, L1) |
+
+Player buttons appear only for streams that announce them (`controls`). Each press
+arrives as an element message for the application; `gst-launch-1.0 -m` prints them:
+
+```sh
+gst-launch-1.0 -m -e audiotestsrc is-live=true wave=ticks ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
+    ! snapsink http-port=1780 snapweb-dir=$HOME/.local/share/snapweb controls=play+pause+next \
+  | grep snapcast-stream-control
+```
+
+Open ports for others on the network: 1705/tcp and 1780/tcp besides the stream port
+(`sudo firewall-cmd --add-port=1705/tcp --add-port=1780/tcp`). The control API has no
+authentication.
+
 ### Music through snapsink → snapsrc
 
 The quickest way to hear how well the plugins work with real music:

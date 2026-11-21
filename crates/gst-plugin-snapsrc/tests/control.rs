@@ -92,7 +92,8 @@ fn snapweb_style_control_of_a_snapsink_server() {
          ! taginject tags=\"title=Song,artist=Band,album=Record\" \
          ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
          ! snapsink name=sink port=0 mdns-name=\"\" buffer-ms=300 \
-           control-port={control_port} http-port={http_port} snapweb-dir={}",
+           control-port={control_port} http-port={http_port} snapweb-dir={} \
+           controls=play+pause+next",
         snapweb.display()
     ))
     .unwrap();
@@ -136,6 +137,42 @@ fn snapweb_style_control_of_a_snapsink_server() {
     });
     assert_eq!(metadata["artist"], json!(["Band"]));
     assert_eq!(metadata["album"], "Record");
+
+    // The controls and the playback status are stream properties too.
+    let status = ctl.call("Server.GetStatus", json!({}));
+    let properties = &status["server"]["streams"][0]["properties"];
+    assert_eq!(properties["canControl"], true, "{properties}");
+    assert_eq!(properties["canPlay"], true);
+    assert_eq!(properties["canPause"], true);
+    assert_eq!(properties["canGoNext"], true);
+    assert_eq!(properties["canGoPrevious"], false);
+    assert_eq!(properties["canSeek"], false);
+    assert_eq!(properties["playbackStatus"], "playing");
+
+    // `controls` can change while playing.
+    sink.set_property_from_str("controls", "play+pause+next+seek");
+    wait_until("canSeek after changing controls", || {
+        let status = ctl.call("Server.GetStatus", json!({}));
+        (status["server"]["streams"][0]["properties"]["canSeek"] == true).then_some(())
+    });
+
+    // Stream.Control arrives as an element message on the sender's bus.
+    ctl.call(
+        "Stream.Control",
+        json!({"id": "default", "command": "next", "params": {}}),
+    );
+    let bus = sender.bus().unwrap();
+    let message = bus
+        .timed_pop_filtered(
+            gst::ClockTime::from_seconds(10),
+            &[gst::MessageType::Element],
+        )
+        .expect("no snapcast-stream-control message");
+    let structure = message.structure().unwrap();
+    assert_eq!(structure.name(), "snapcast-stream-control");
+    assert_eq!(structure.get::<&str>("command").unwrap(), "next");
+    assert_eq!(structure.get::<&str>("stream").unwrap(), "default");
+    assert_eq!(structure.get::<&str>("params").unwrap(), "{}");
 
     // Changing the volume reaches snapsrc.
     let result = ctl.call(

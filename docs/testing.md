@@ -12,11 +12,11 @@ to do when something doesn't work, is in:
 
 | Command | What it tests | Needs | Part of `make check` |
 |---|---|---|---|
-| `make test` | Unit and integration tests: properties, `snapsink → snapsrc` loopback over TCP (signal, PTS continuity, scheduling), the control API (JSON-RPC over TCP, metadata from tags, volume reaching snapsrc, Snapweb files over HTTP) | GStreamer base/good plugins | yes |
+| `make test` | Unit and integration tests: properties, `snapsink → snapsrc` loopback over TCP (signal, PTS continuity, scheduling), the control API (JSON-RPC over TCP, metadata from tags, `controls` and `Stream.Control` as a bus message, volume reaching snapsrc, Snapweb files over HTTP) | GStreamer base/good plugins | yes |
 | `make check` | `fmt` + `clippy -D warnings` + `test` + `doc -D warnings` | as above | — |
 | `make test-interop` | `snapsink` → C++ `snapclient`, and C++ `snapserver` → `snapsrc`, for `pcm` and `flac` | C++ `snapclient`/`snapserver` (`SNAPCLIENT=`/`SNAPSERVER=`) | no (`#[ignore]`) |
 | `make test-aloop` | Timing on a (virtual) sound card: offset between two receivers, and following a drifting card (F2) | `snd-aloop`, `amixer`, `alsasrc`/`alsasink`, C++ `snapclient` for two of the four tests | no (`#[ignore]`) |
-| `make test-mdns` | snapsrc without a host finds a snapsink via mDNS; a missing server gives a clear error within 5 s | multicast on the network (works in the devcontainer and on the host) | no (`#[ignore]`) |
+| `make test-mdns` | snapsrc without a host finds a snapsink via mDNS; a missing server gives a clear error within 5 s; snapsink announces its control ports | multicast on the network (works in the devcontainer and on the host) | no (`#[ignore]`) |
 | `make listen-*` | By ear: sender, receivers, combinations with the C++ peers | speakers (host), installed plugins or `LOCAL=1` | no |
 | `make doctor` | Not a test: reports tools, elements, plugins and sound devices | — | — |
 

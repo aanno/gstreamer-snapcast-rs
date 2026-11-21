@@ -66,13 +66,14 @@ publishing: [docs/architecture.md](docs/architecture.md).
 |            | `mdns-name`   | `gst-snapsink` | Announce the server via mDNS (`_snapcast._tcp`) under this name; empty: don't (never for `port=0`) |
 |            | `control-port` | `0` (off)  | Snapcast JSON-RPC control API over TCP (Snapcast uses 1705), for Snapdroid, Home Assistant, scripts. **No authentication** |
 |            | `http-port`   | `0` (off)   | The same over HTTP and WebSocket (Snapcast uses 1780), plus `snapweb-dir`. **No authentication** |
+|            | `controls`    | (none)      | Player commands the stream accepts (`play+pause+next+previous+seek`); Snapweb shows those buttons, and each press arrives as element message `snapcast-stream-control` (fields `stream`, `command`, `params`) for the application. Changeable while playing |
 |            | `snapweb-dir` | (empty)     | Snapweb's files, served on `http-port` (`scripts/fetch-snapweb.sh` downloads them; Debian's package has only a placeholder) |
 |            | `bound-port`  | (read-only) | Port actually listened on |
 |            | `async`       | `true`      | (from GstBaseSink) Wait for the first buffer ("preroll") before the pipeline counts as PAUSED. Set `false` when the same pipeline also contains a `snapsrc` (see below) |
 |            | `sync`        | `true`      | (from GstBaseSink) Render on the pipeline clock. With `false`, `snapsink` still paces non-live sources (files) to real time itself |
 | `snapsrc`  | `host`/`port` | `127.0.0.1`/`1704` | Server to connect to; empty `host`: find one via mDNS (its port is used) |
 |            | `mdns-name`   | (empty)     | With an empty `host`: only the server announced under this name |
-|            | `client-name` | `gst-snapsrc` | Name shown in Snapcast controllers |
+|            | `client-name` | `gst-snapsrc` | Client software name reported to the server (Snapweb: "Client"); controllers show the host name until you rename the client there |
 |            | `instance`    | `0` (auto)  | Tells several clients on one host apart (the server sees `<host-id>#<instance>`); `0` picks the lowest number no other snapsrc on this host uses |
 |            | `latency-ms`  | `0`         | Extra local output latency to compensate |
 |            | `host-id`     | (MAC address) | Unique client id towards the server, like snapclient's `--hostID` |

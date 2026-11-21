@@ -146,9 +146,12 @@ gst-launch-1.0 -e uridecodebin uri=file:///path/to/music.flac \
 
 Then open `http://<this host>:1780/` (or `CONTROL=1 make listen-send`). Snapdroid and
 Home Assistant use port 1705. Title, artist and album from the file's tags show up in
-Snapweb. Not supported yet: playing in the browser (Snapweb's own player), and the
-play/pause/next buttons (they appear only for streams that declare them). The control
-API has **no authentication**: only enable it on a network you trust.
+Snapweb. Player buttons appear for the commands in `controls` (e.g.
+`controls=play+pause+next`); snapsink doesn't act on them itself, it posts each one as
+an element message `snapcast-stream-control` (fields `stream`, `command`, `params` as
+JSON text), and your application decides what to do (see section 6). `gst-launch-1.0 -m`
+prints them. Not supported yet: playing in the browser (Snapweb's own player). The
+control API has **no authentication**: only enable it on a network you trust.
 
 ## 5. Receivers
 
@@ -235,7 +238,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-(Compiled against gstreamer-rs 0.25, 2026-11-21.) Python's `Gst.parse_launch()` takes the
+Reacting to Snapweb's player buttons (with `snapsink … controls=play+pause`): handle the
+element message in the same loop, e.g.
+
+```rust
+gst::MessageView::Element(e) => {
+    if let Some(s) = e.structure().filter(|s| s.name() == "snapcast-stream-control") {
+        match s.get::<&str>("command").unwrap_or_default() {
+            "pause" => { pipeline.set_state(gst::State::Paused)?; }
+            "play" => { pipeline.set_state(gst::State::Playing)?; }
+            other => eprintln!("unhandled command {other}"),
+        }
+    }
+}
+```
+
+(Both compiled against gstreamer-rs 0.25, 2026-11-21.) Python's `Gst.parse_launch()` takes the
 same text. Our integration tests (`crates/gst-plugin-*/tests/`) are further examples:
 they build pipelines this way, read properties such as `bound-port`, and pull buffers
 with `appsink`.

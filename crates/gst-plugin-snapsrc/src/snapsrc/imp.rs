@@ -313,7 +313,10 @@ impl ObjectImpl for SnapSrc {
                     .build(),
                 glib::ParamSpecString::builder("client-name")
                     .nick("Client name")
-                    .blurb("Client name shown in Snapcast controllers")
+                    .blurb(
+                        "Client software name reported to the server (Snapweb shows it with \
+                         the version as 'Client'). The display name is set in the controller",
+                    )
                     .default_value(Some(DEFAULT_CLIENT_NAME))
                     .mutable_ready()
                     .build(),

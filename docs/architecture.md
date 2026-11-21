@@ -267,8 +267,10 @@ JSON-RPC control API over TCP (`control-port`) and HTTP/WebSocket (`http-port`),
 Snapweb's files (`snapweb-dir`) as the user interface; no D-Bus. The API comes from the
 snapcast-rs crate `snapcast-control` (contract: trait `SnapControl`); the engine owns it
 per shared server (feature `control`, `server::ControlOptions`), and its listeners and
-the event loop run on the engine runtime and stop with the server. Tags become stream
-metadata (`StreamHandle::set_metadata`). Open: `Stream.Control` as a bus message. Plan:
+the event loop run on the engine runtime and stop with the server. Tags, `controls` and the
+playback status become stream properties (`StreamHandle::set_properties`);
+`Stream.Control` reaches the element through `StreamHandle::on_command` and becomes the
+element message `snapcast-stream-control`. Plan:
 [claude/memory.md](claude/memory.md), P2.
 
 ### Environment variables

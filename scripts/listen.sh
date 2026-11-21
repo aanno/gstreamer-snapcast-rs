@@ -143,15 +143,24 @@ note_line() {
 # ---------------------------------------------------------------------------
 # The commands.
 
+# Test sources have no tags; give them a title, so that controllers (Snapweb) show
+# something. Files and web radio bring their own tags.
+add_test_tags() {
+    part "taginject tags=\"title=$1,artist=gstreamer-snapcast-rs\"" \
+        "adds track tags; snapsink passes title, artist, album on to controllers (Snapweb)"
+}
+
 add_source() {
     case "$SRC" in
         ticks)
             part "audiotestsrc is-live=true wave=ticks volume=0.5" \
                 "test source, a click every second; is-live: paced like a real device.
-In sync, several receivers sound like one click, out of sync like a double click" ;;
+In sync, several receivers sound like one click, out of sync like a double click"
+            add_test_tags Ticks ;;
         sine)
             part "audiotestsrc is-live=true wave=sine freq=440 volume=0.2" \
-                "test source, a 440 Hz tone; is-live: paced like a real device" ;;
+                "test source, a 440 Hz tone; is-live: paced like a real device"
+            add_test_tags Sine ;;
         desktop)
             part 'pipewiresrc stream-properties="props,stream.capture.sink=true"' \
                 "captures what the desktop plays (the monitor of PipeWire's default output)"

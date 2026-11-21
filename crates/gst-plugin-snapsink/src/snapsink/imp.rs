@@ -32,8 +32,12 @@
 //! `control-port` / `http-port` make the (shared) server offer the Snapcast
 //! JSON-RPC control API, `snapweb-dir` serves Snapweb with it; all are set by the
 //! first snapsink of a server. Tag events become the stream's metadata (title,
-//! artist, album, duration), shown by controllers; it is republished only when one
-//! of these changes, not for every tag event (decoders send bitrate updates).
+//! artist, album, duration), shown by controllers. `controls` announces which player
+//! commands the stream accepts (Snapweb shows those buttons); each command arrives as
+//! an element message `snapcast-stream-control` (fields `stream`, `command`,
+//! `params`) on the bus, and the application acts on it. The playback status follows
+//! the element's state. These stream properties are republished only when they
+//! change, not for every tag event (decoders send bitrate updates).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -45,7 +49,8 @@ use gst::subclass::prelude::*;
 use gst_base::prelude::*;
 use gst_base::subclass::prelude::*;
 use gst_snapcast_engine::server::{
-    self, ControlOptions, ServerOptions, StreamHandle, StreamMetadata, StreamOptions,
+    self, ControlOptions, PlaybackStatus, ServerOptions, StreamControls, StreamHandle,
+    StreamMetadata, StreamOptions, StreamProperties,
 };
 use gst_snapcast_engine::{PcmFormat, now_usec};
 
@@ -66,6 +71,33 @@ const CODECS: &[&str] = &["pcm", "flac"];
 /// Chunks are sent at most this far ahead of their server timestamp ("Pacing").
 const MAX_AHEAD_USEC: i64 = 200_000;
 
+/// Player commands the stream accepts from controllers (property `controls`).
+#[glib::flags(name = "GstSnapSinkControls")]
+pub enum Controls {
+    #[flags_value(name = "Play", nick = "play")]
+    PLAY = 1 << 0,
+    #[flags_value(name = "Pause (and play/pause)", nick = "pause")]
+    PAUSE = 1 << 1,
+    #[flags_value(name = "Next track", nick = "next")]
+    NEXT = 1 << 2,
+    #[flags_value(name = "Previous track", nick = "previous")]
+    PREVIOUS = 1 << 3,
+    #[flags_value(name = "Seek", nick = "seek")]
+    SEEK = 1 << 4,
+}
+
+impl Controls {
+    fn to_stream_controls(self) -> StreamControls {
+        StreamControls {
+            play: self.contains(Self::PLAY),
+            pause: self.contains(Self::PAUSE),
+            next: self.contains(Self::NEXT),
+            previous: self.contains(Self::PREVIOUS),
+            seek: self.contains(Self::SEEK),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Settings {
     stream: String,
@@ -76,6 +108,7 @@ struct Settings {
     control_port: u32,
     http_port: u32,
     snapweb_dir: String,
+    controls: Controls,
 }
 
 impl Default for Settings {
@@ -89,6 +122,7 @@ impl Default for Settings {
             control_port: 0,
             http_port: 0,
             snapweb_dir: String::new(),
+            controls: Controls::empty(),
         }
     }
 }
@@ -118,8 +152,8 @@ struct Active {
     stream: StreamHandle,
     /// Timestamping without a clock: anchor + sample count.
     fallback: Option<Fallback>,
-    /// Metadata last published for the stream.
-    published: Option<StreamMetadata>,
+    /// Stream properties last published.
+    published: Option<StreamProperties>,
 }
 
 #[derive(Default)]
@@ -128,6 +162,8 @@ pub struct SnapSink {
     state: Mutex<Option<Active>>,
     /// All tags received so far (merged), also before the stream is acquired.
     tags: Mutex<Option<gst::TagList>>,
+    /// Playback status reported to controllers, from the element's state.
+    playback: Mutex<Option<PlaybackStatus>>,
     /// Set by `unlock()` to interrupt the pacing wait in `render()`.
     flushing: AtomicBool,
 }
@@ -148,18 +184,39 @@ fn metadata_from_tags(tags: &gst::TagListRef) -> StreamMetadata {
 }
 
 impl SnapSink {
-    /// Publishes the metadata of the tags received so far, if it changed.
-    fn publish_metadata(&self, active: &mut Active) {
-        let Some(metadata) = self.tags.lock().unwrap().as_deref().map(metadata_from_tags) else {
-            return;
+    /// Publishes the stream properties (metadata from the tags received so far,
+    /// controls, playback status), if they changed. Lock order: state, then
+    /// settings, then tags.
+    fn publish_properties(&self, active: &mut Active) {
+        let properties = StreamProperties {
+            metadata: self
+                .tags
+                .lock()
+                .unwrap()
+                .as_deref()
+                .map(metadata_from_tags)
+                .unwrap_or_default(),
+            controls: self.settings.lock().unwrap().controls.to_stream_controls(),
+            playback: *self.playback.lock().unwrap(),
         };
-        if active.published.as_ref() == Some(&metadata) {
+        if active.published.as_ref() == Some(&properties) {
             return;
         }
-        gst::debug!(CAT, imp = self, "Publishing metadata {metadata:?}");
-        match active.stream.set_metadata(&metadata) {
-            Ok(()) => active.published = Some(metadata),
-            Err(e) => gst::warning!(CAT, imp = self, "Cannot publish metadata: {e}"),
+        gst::debug!(
+            CAT,
+            imp = self,
+            "Publishing stream properties {properties:?}"
+        );
+        match active.stream.set_properties(&properties) {
+            Ok(()) => active.published = Some(properties),
+            Err(e) => gst::warning!(CAT, imp = self, "Cannot publish stream properties: {e}"),
+        }
+    }
+
+    /// Republishes the stream properties if a stream is active.
+    fn republish(&self) {
+        if let Some(active) = self.state.lock().unwrap().as_mut() {
+            self.publish_properties(active);
         }
     }
 
@@ -285,6 +342,16 @@ impl ObjectImpl for SnapSink {
                     )
                     .mutable_ready()
                     .build(),
+                glib::ParamSpecFlags::builder::<Controls>("controls")
+                    .nick("Controls")
+                    .blurb(
+                        "Player commands this stream accepts from controllers (Snapweb shows \
+                         those buttons). Each command is posted as element message \
+                         'snapcast-stream-control' (fields stream, command, params as JSON) \
+                         for the application to act on",
+                    )
+                    .mutable_playing()
+                    .build(),
                 glib::ParamSpecUInt::builder("bound-port")
                     .nick("Bound port")
                     .blurb("Port the server actually listens on (0 while not running)")
@@ -297,6 +364,12 @@ impl ObjectImpl for SnapSink {
     }
 
     fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
+        if pspec.name() == "controls" {
+            self.settings.lock().unwrap().controls = value.get().expect("type checked upstream");
+            // Without holding the settings lock (see publish_properties).
+            self.republish();
+            return;
+        }
         let mut settings = self.settings.lock().unwrap();
         match pspec.name() {
             "stream" => {
@@ -361,6 +434,7 @@ impl ObjectImpl for SnapSink {
                     "control-port" => settings.control_port.to_value(),
                     "http-port" => settings.http_port.to_value(),
                     "snapweb-dir" => settings.snapweb_dir.to_value(),
+                    "controls" => settings.controls.to_value(),
                     _ => unimplemented!(),
                 }
             }
@@ -371,6 +445,24 @@ impl ObjectImpl for SnapSink {
 impl GstObjectImpl for SnapSink {}
 
 impl ElementImpl for SnapSink {
+    fn change_state(
+        &self,
+        transition: gst::StateChange,
+    ) -> Result<gst::StateChangeSuccess, gst::StateChangeError> {
+        let ret = self.parent_change_state(transition)?;
+        let playback = match transition {
+            gst::StateChange::ReadyToPaused | gst::StateChange::PlayingToPaused => {
+                Some(PlaybackStatus::Paused)
+            }
+            gst::StateChange::PausedToPlaying => Some(PlaybackStatus::Playing),
+            gst::StateChange::PausedToReady => None,
+            _ => return Ok(ret),
+        };
+        *self.playback.lock().unwrap() = playback;
+        self.republish();
+        Ok(ret)
+    }
+
     fn metadata() -> Option<&'static gst::subclass::ElementMetadata> {
         static METADATA: LazyLock<gst::subclass::ElementMetadata> = LazyLock::new(|| {
             gst::subclass::ElementMetadata::new(
@@ -439,9 +531,7 @@ impl BaseSinkImpl for SnapSink {
                 };
                 *tags = Some(merged);
             }
-            if let Some(active) = self.state.lock().unwrap().as_mut() {
-                self.publish_metadata(active);
-            }
+            self.republish();
         }
         self.parent_event(event)
     }
@@ -491,13 +581,37 @@ impl BaseSinkImpl for SnapSink {
             stream.control_tcp_port(),
             stream.control_http_port()
         );
+        let element = self.obj().downgrade();
+        let stream_name = settings.stream.clone();
+        stream.on_command(move |command| {
+            let Some(element) = element.upgrade() else {
+                return;
+            };
+            gst::info!(
+                CAT,
+                obj = element,
+                "Stream command '{}' {}",
+                command.command,
+                command.params_json
+            );
+            let structure = gst::Structure::builder("snapcast-stream-control")
+                .field("stream", &stream_name)
+                .field("command", &command.command)
+                .field("params", &command.params_json)
+                .build();
+            let _ = element.post_message(
+                gst::message::Element::builder(structure)
+                    .src(&element)
+                    .build(),
+            );
+        });
         let active = state.insert(Active {
             info,
             stream,
             fallback: None,
             published: None,
         });
-        self.publish_metadata(active);
+        self.publish_properties(active);
         drop(state);
         self.obj().notify("bound-port");
         Ok(())
