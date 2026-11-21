@@ -2,7 +2,7 @@
 //!
 //! # Timing
 //!
-//! `snapcast-engine` hands out frames with a *local play-out time* in the
+//! `gst-snapcast-engine` hands out frames with a *local play-out time* in the
 //! monotonic Snapcast clock domain (server timestamp corrected by Snapcast's
 //! time sync plus the configured buffer): the moment the sound must come out of
 //! the speaker. A sink renders a buffer at `PTS + pipeline latency` (and audio
@@ -82,8 +82,8 @@ use gst::subclass::prelude::*;
 use gst_base::prelude::*;
 use gst_base::subclass::base_src::CreateSuccess;
 use gst_base::subclass::prelude::*;
-use snapcast_engine::client::{self, ClientHandle, ClientOptions};
-use snapcast_engine::{now_usec, runtime};
+use gst_snapcast_engine::client::{self, ClientHandle, ClientOptions};
+use gst_snapcast_engine::{now_usec, runtime};
 
 use super::align::{self, Aligner};
 use tokio::sync::watch;

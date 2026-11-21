@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/snapcast-engine",
+    "crates/gst-snapcast-engine",
     "crates/gst-snapcast-common",
     "crates/gst-plugin-snapsink",
     "crates/gst-plugin-snapsrc",
@@ -22,7 +22,7 @@ authors = ["aanno"]
 
 [workspace.dependencies]
 # Internal
-snapcast-engine = { path = "crates/snapcast-engine" }
+gst-snapcast-engine = { path = "crates/gst-snapcast-engine" }
 gst-snapcast-common = { path = "crates/gst-snapcast-common" }
 
 # snapcast-rs (git submodule). Keep `version` in sync with the submodule so we

@@ -12,7 +12,7 @@ publish = false
 [dependencies]
 # v1_22: gst_debug_log_id, to tag log lines with an element name from a span.
 gst = { workspace = true, features = ["v1_22"] }
-snapcast-engine = { workspace = true }
+gst-snapcast-engine = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 log = { workspace = true }

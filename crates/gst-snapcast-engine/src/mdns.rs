@@ -100,7 +100,7 @@ impl std::fmt::Debug for Announcement {
 pub(crate) fn announce(name: &str, port: u16) -> Result<Announcement, EngineError> {
     let daemon = daemon()?;
     // The host label only has to be unique; the addresses come from the interfaces.
-    let host = format!("snapcast-engine-{}-{port}.local.", std::process::id());
+    let host = format!("gst-snapcast-engine-{}-{port}.local.", std::process::id());
     let info = mdns_sd::ServiceInfo::new(SERVICE_TYPE, name, &host, "", port, None)
         .map_err(|e| EngineError::Mdns(e.to_string()))?
         .enable_addr_auto();

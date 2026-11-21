@@ -176,7 +176,7 @@ Several `snapsrc` on one machine are fine, e.g. line-out and a Bluetooth speaker
 A server identifies a client as `<host-id>#<instance>` (`host-id` defaults to the MAC
 address), so each receiver needs its own instance number. snapsrc picks one
 automatically (`instance=0`, the default): the lowest number no other snapsrc on this host
-uses, coordinated through lock files in `$XDG_RUNTIME_DIR/snapcast-engine`. The C++
+uses, coordinated through lock files in `$XDG_RUNTIME_DIR/gst-snapcast-engine`. The C++
 snapclient doesn't take part; start it with `--instance` above the snapsrc numbers
 (e.g. `--instance 9`) next to them, or give each receiver its own `host-id`.
 

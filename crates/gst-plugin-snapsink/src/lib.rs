@@ -2,7 +2,7 @@
 //!
 //! Provides the `snapsink` element, a [`gst_base::BaseSink`] that accepts raw
 //! interleaved PCM and submits it to a named stream of an embedded Snapcast
-//! server (see `snapcast-engine`). All `snapsink` instances in a process share
+//! server (see `gst-snapcast-engine`). All `snapsink` instances in a process share
 //! one server; each element feeds exactly one stream.
 //!
 //! ```text

@@ -1,5 +1,5 @@
 [package]
-name = "snapcast-engine"
+name = "gst-snapcast-engine"
 description = "GStreamer-agnostic glue around snapcast-rs: runtime, lifecycle and shared server/client instances"
 version.workspace = true
 edition.workspace = true

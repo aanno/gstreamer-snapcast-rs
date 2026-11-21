@@ -64,7 +64,7 @@ Not blocking, left over from P3:
 
 ## State
 
-- **Workspace:** `snapcast-engine` (no GStreamer dependency), `gst-snapcast-common`
+- **Workspace:** `gst-snapcast-engine` (no GStreamer dependency), `gst-snapcast-common`
   (GStreamer-side code shared by both plugins, so far the logging bridge),
   `gst-plugin-snapsink` (`libgstsnapsink.so`) and `gst-plugin-snapsrc` (`libgstsnapsrc.so`).
   snapcast-rs is a submodule (fork `aanno/snapcast-rs`, branch `aanno/fixes`), excluded
@@ -157,8 +157,8 @@ Not blocking, left over from P3:
   (an empty file). **Host fully green** since 2026-11-19 10:36: `make check` and all four
   `make test-interop` tests (with 0.35). Host `make check` needed `dnf install rustfmt clippy`.
 - **Timing design** (details in the module docs of `snapsink/imp.rs`, `snapsrc/imp.rs` and
-  `snapcast-engine/src/client.rs`). All engine times are µs of `CLOCK_MONOTONIC`
-  (`snapcast_engine::now_usec`).
+  `gst-snapcast-engine/src/client.rs`). All engine times are µs of `CLOCK_MONOTONIC`
+  (`gst_snapcast_engine::now_usec`).
   - **Sink:** server timestamp = `now_usec() + (base_time + running_time + latency − clock.time())`,
     which works with any pipeline clock. Without a clock it falls back to counting samples.
   - **Source:** play-out = `server_ts − diff_to_server + (buffer − server_latency − client_latency)`,
@@ -183,7 +183,7 @@ Not blocking, left over from P3:
   - keep each change a small, self-contained PR candidate developed in the fork;
   - avoid project-specific hacks in snapcast-rs.
 - 2026-11-07: **Android is a near-term target for the sender** (`snapsink`, i.e. the
-  embedded server). The server half of `snapcast-engine` and its dependencies must stay
+  embedded server). The server half of `gst-snapcast-engine` and its dependencies must stay
   Android-buildable: no Linux-only APIs and no system C libraries beyond what GStreamer
   for Android provides. (2026-11-21: this is *not* why the engine is GStreamer-free;
   see that decision.)
@@ -200,7 +200,7 @@ Not blocking, left over from P3:
   - **Multiple streams per server are postponed** until further notice (L1 stays).
   - **Android stays important but is not a prototype target.** Keep the portability rule;
     there is no Android build or CI in the prototype.
-  - **The control plane goes into `snapcast-engine`.** ~~For the prototype, copying code from
+  - **The control plane goes into `gst-snapcast-engine`.** ~~For the prototype, copying code from
     `snapserver-rs` is fine; refactoring snapcast-rs (e.g. a library crate for control) comes later.~~
     Superseded on 2026-11-19: no copying, a control library crate in snapcast-rs instead (see below).
   - The prototype needs a sane way to test both plugins: Makefile targets for install,
@@ -226,9 +226,9 @@ Not blocking, left over from P3:
 - 2026-11-19: the devcontainer mounts the host's `/run/udev` read-only, so that WirePlumber
   may discover the sound card (not tested yet; low priority). No PulseAudio in the
   container: redundant with `pipewire-pulse` (reasons in `docs/testing-devcontainer.md`).
-- 2026-11-19: **snapsrc adjusts the downstream audio sink** (`adjust-sink`, opt-out):
-  `slave-method=resample`, because `autoaudiosink` cannot pass properties to its child and
-  the default `skew` breaks sync (L12). snapsrc no longer provides a clock.
+- 2026-11-19: **snapsrc adjusts the downstream audio sink** (`adjust-sink`, opt-out) and
+  no longer provides a clock (L12). What that means and why:
+  `docs/architecture.md`, "Audio sink slaving (`adjust-sink`)".
 - 2026-11-19 (user): **the MAC must not be the only client id**: several snapsrc on one
   host are normal (synchronized line-out together with a Bluetooth speaker). So
   `instance` defaults to automatic, coordinated host-wide by lock files (C++ snapclients
@@ -241,11 +241,11 @@ Not blocking, left over from P3:
 - 2026-11-19 (user): **L10 / P2: we do not copy anything from `snapserver-rs`.** The JSON-RPC
   control plane becomes a **control library crate in snapcast-rs** (developed in the fork,
   meant for upstream, following snapcast-rs's conventions). `snapserver-rs` and
-  `snapcast-engine` both use it, so there is one implementation. This replaces the
+  `gst-snapcast-engine` both use it, so there is one implementation. This replaces the
   2026-11-10 "copying is fine for the prototype".
 - 2026-11-19: Claude Code's config in the devcontainer lives on a named volume
   (`claude-code-config-${devcontainerId}`, `CLAUDE_CONFIG_DIR`).
-- 2026-11-21 (with the user): **`snapcast-engine` stays GStreamer-free, but not because
+- 2026-11-21 (with the user): **`gst-snapcast-engine` stays GStreamer-free, but not because
   of Android** (GStreamer for Android exists, and `snapsink` needs it there). Reasons:
   the path upstream into snapcast-rs, one timing boundary (the engine speaks only
   `CLOCK_MONOTONIC` µs), tests without GStreamer, gstreamer-rs churn stays in the plugins.
@@ -258,6 +258,24 @@ Not blocking, left over from P3:
   variable `GST_SNAPCAST_TRACING=0`. Element names via spans with `log_id`, now (not later).
   Our own `log::Log` instead of `tracing-log`, so mdns-sd's daemon thread needs no tracing
   context. `tracing-gstreamer` is not used (other direction; stuck on gstreamer-rs 0.24).
+- 2026-11-21 (with the user): **motivation, pros/cons, comparison with snapcast-rs,
+  licence and publishing** are written down in `docs/architecture.md` (part 0 and 3), the
+  motivation in short in the README. In short: the gain is for users and integrators (any
+  source/sink, processing, one element instead of a FIFO plus daemon, e.g. Mopidy), not
+  simpler code.
+- 2026-11-21 (with the user): **the engine is renamed `gst-snapcast-engine`** (was
+  `snapcast-engine`, which looked like part of snapcast-rs on crates.io), including its
+  thread name and the instance lock directory (`$XDG_RUNTIME_DIR/gst-snapcast-engine`).
+  The debug category stays `snapcast-engine`, so `GST_DEBUG=snapcast*` covers everything.
+- 2026-11-21 (with the user): **two plugin crates stay** (not one `gst-plugin-snapcast` with
+  features): the sender/receiver split stays explicit.
+- 2026-11-21: **licence stays GPL-3.0-only** for now (the binaries are GPL-3.0 anyway
+  because snapcast-rs is linked in; LGPL for our code would gain nothing and would not get
+  us into gst-plugins-rs, which takes only MPL-2.0/Apache-2.0/MIT). Open: MPL-2.0 for our
+  own source, to make it reusable. Analysis: `docs/architecture.md`, "Licence".
+- 2026-11-21: **not ready for crates.io** (in principle; no publishing planned): blocked
+  by unreleased snapcast-rs fork commits, plus maturity and housekeeping. List:
+  `docs/architecture.md`, "Publishing".
 
 ## Known limitations
 
@@ -272,7 +290,7 @@ Not blocking, left over from P3:
 | L7 | ~~`sync=false` with a non-live source floods clients~~ | `snapsink` | — | **Fixed 2026-11-19**: snapsink paces itself, sending a chunk at most 200 ms ahead of its server timestamp (interruptible wait). Test `paces_a_non_live_source_without_sync` (before: 1.07 s of audio in 3 ms) |
 | L8 | ~~No reconnect handling, server volume/mute, mDNS or client id in `snapsrc`~~ | `snapsrc` | — | **Done 2026-11-19**: reconnect (verified), client id (`host-id`, automatic `instance`, server appends `#instance`), server volume/mute (linear gain, read-only properties), **mDNS** via the pure-Rust `mdns-sd`: snapsink announces (`mdns-name`, not for `port=0`), snapsrc with an empty `host` discovers (optional `mdns-name` filter, 5 s, skips IPv6 link-local). Tests: `make test-mdns` (devcontainer: passes; the C++ peers need `avahi-daemon`, host only) |
 | L9 | ~~snapcast-rs `tracing` output is not visible in GStreamer logs~~ | engine | — | **Fixed 2026-11-21**: `gst-snapcast-common::log` bridges `tracing` and `log` into the GStreamer debug log (`snapcast-*` categories, element names via `log_id` spans); fork commit for the server's tasks and encoder threads (upstream PR candidate). See `docs/architecture.md` |
-| L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | **Changed 2026-11-19 (user): nothing is copied.** Create a control library crate in snapcast-rs (fork first, upstream PR candidate) that both `snapserver-rs` and `snapcast-engine` use |
+| L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | **Changed 2026-11-19 (user): nothing is copied.** Create a control library crate in snapcast-rs (fork first, upstream PR candidate) that both `snapserver-rs` and `gst-snapcast-engine` use |
 | L11 | snapcast-rs cannot serve **audio** over WebSocket (C++ snapserver: `/stream` on port 1780, used by Snapweb's player). Its WebSocket endpoint carries only JSON-RPC | snapcast-rs server | — | Only if a WebSocket audio client must work with `snapsink` (open question) |
 | L12 | ~~`snapsrc` → `alsasink` (`skew`, 40 ms tolerance) follows a drifting card, not the server~~ | `snapsrc` + audio sink | — | **Fixed 2026-11-19**: snapsrc sets `slave-method=resample` on the downstream audio sink (`adjust-sink`); rate error −17…+4 ppm (was +300) on a −300 ppm card, ~1 ms from the server timeline |
 | L13 | ~~`snapsrc` plays late by its pipeline latency~~ (+62 ms with 65 ms latency) | `snapsrc` PTS | — | **Fixed 2026-11-19**: `pts = playout − pipeline latency`; now −3…+1 ms, in sync with the C++ snapclient (+0.4 ms) |
@@ -311,7 +329,7 @@ because of the C++ reference). F3 not started. F4 needs P2. F5: reconnect done
   and without card drift). Limitation: both receivers share one card, so it emulates "card
   drifts against the server", not two cards against each other.
 
-**P2. Control plane** in `snapcast-engine` (feature `control`), built on a **new control
+**P2. Control plane** in `gst-snapcast-engine` (feature `control`), built on a **new control
 library crate in snapcast-rs** (2026-11-19: nothing is copied from `snapserver-rs`; the
 crate is extracted there, `snapserver-rs` uses it too, upstream PR candidate, L10):
 JSON-RPC over TCP (1705) and WebSocket (1780 `/jsonrpc`), started with the server; `snapsink`

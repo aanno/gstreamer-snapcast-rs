@@ -433,10 +433,10 @@ version = "0.1.0"
 dependencies = [
  "gst-plugin-version-helper",
  "gst-snapcast-common",
+ "gst-snapcast-engine",
  "gstreamer",
  "gstreamer-audio",
  "gstreamer-base",
- "snapcast-engine",
 ]
 
 [[package]]
@@ -446,11 +446,11 @@ dependencies = [
  "gst-plugin-snapsink",
  "gst-plugin-version-helper",
  "gst-snapcast-common",
+ "gst-snapcast-engine",
  "gstreamer",
  "gstreamer-app",
  "gstreamer-audio",
  "gstreamer-base",
- "snapcast-engine",
  "tokio",
 ]
 
@@ -468,11 +468,24 @@ dependencies = [
 name = "gst-snapcast-common"
 version = "0.1.0"
 dependencies = [
+ "gst-snapcast-engine",
  "gstreamer",
  "log",
- "snapcast-engine",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "gst-snapcast-engine"
+version = "0.1.0"
+dependencies = [
+ "mdns-sd",
+ "snapcast-client",
+ "snapcast-proto",
+ "snapcast-server",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1096,19 +1109,6 @@ dependencies = [
  "serde",
  "snapcast-proto",
  "symphonia",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "snapcast-engine"
-version = "0.1.0"
-dependencies = [
- "mdns-sd",
- "snapcast-client",
- "snapcast-proto",
- "snapcast-server",
- "thiserror",
  "tokio",
  "tracing",
 ]

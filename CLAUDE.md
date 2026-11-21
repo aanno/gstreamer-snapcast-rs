@@ -9,7 +9,7 @@ built on the embeddable engines of the `snapcast-rs` submodule:
 
 - `snapsink` (`crates/gst-plugin-snapsink`, `GstBaseSink`): PCM in, embedded Snapcast **server** stream out.
 - `snapsrc` (`crates/gst-plugin-snapsrc`, live `GstPushSrc`): embedded Snapcast **client** in, timestamped PCM out.
-- `snapcast-engine` (`crates/snapcast-engine`): GStreamer-free glue (tokio runtime,
+- `gst-snapcast-engine` (`crates/gst-snapcast-engine`): GStreamer-free glue (tokio runtime,
   servers shared per port, client lifecycle). Features `server` / `client`.
 - `gst-snapcast-common` (`crates/gst-snapcast-common`): GStreamer-side code shared by both
   plugins (so far the `tracing`/`log` → GStreamer debug log bridge).
@@ -46,7 +46,7 @@ Run `make check` before declaring work done.
 
 ## Architecture rules
 
-- **`snapcast-engine` must never depend on GStreamer.** Plugin crates only translate
+- **`gst-snapcast-engine` must never depend on GStreamer.** Plugin crates only translate
   buffers/caps/events to engine calls. Reasons (2026-11-21; *not* Android, which has
   GStreamer): the path upstream into snapcast-rs, one timing boundary (the engine speaks
   only `CLOCK_MONOTONIC` µs), tests without GStreamer, and gstreamer-rs churn stays in the
@@ -55,10 +55,10 @@ Run `make check` before declaring work done.
   feature). Keep that path portable: no Linux-only APIs and no extra system C libraries.
   The receiver (`snapsrc`, `client` feature) is desktop-only. Android already has a
   websocket-based Snapcast client app.
-- **One shared embedded `SnapServer` per port**, owned by `snapcast-engine`
+- **One shared embedded `SnapServer` per port**, owned by `gst-snapcast-engine`
   (`server::acquire_stream`). Each `snapsink` feeds one named stream (`stream` property).
   Do not create servers anywhere else.
-- Async work runs on `snapcast_engine::runtime()`. Never block a GStreamer streaming
+- Async work runs on `gst_snapcast_engine::runtime()`. Never block a GStreamer streaming
   thread on async code without a bound or timeout, and never create ad-hoc runtimes.
 - **Timing:** `snapsrc` must derive PTS from Snapcast server time, never from network
   arrival time. `snapsink` must map buffer PTS/running time onto the server timeline.
@@ -77,7 +77,7 @@ Run `make check` before declaring work done.
   own `make check`, conventional commits, its git hooks), and keep project-specific hacks
   out of it. Develop in the fork (submodule) and commit there separately. Afterwards,
   commit the updated submodule pointer in this repo as its own commit.
-- Prefer working around a limitation in `snapcast-engine` if that stays clean. Change
+- Prefer working around a limitation in `gst-snapcast-engine` if that stays clean. Change
   snapcast-rs when the right fix belongs in the library (e.g. runtime `add_stream`/`remove_stream`).
 - Keep the `version` of the path deps in sync with `snapcast-rs/Cargo.toml`.
 
@@ -88,7 +88,7 @@ Run `make check` before declaring work done.
   `glib::wrapper!` and `register()`, and `src/<element>/imp.rs` holds the subclass implementation.
   Use `LazyLock` statics for the debug category, properties, metadata and pad templates.
 - Logging inside elements: `gst::{error,warning,info,debug,trace}!(CAT, imp = self, ...)`.
-  In `snapcast-engine`, use `tracing` (as snapcast-rs does); never install a subscriber
+  In `gst-snapcast-engine`, use `tracing` (as snapcast-rs does); never install a subscriber
   there. The plugins bridge it into the GStreamer debug log (`gst_snapcast_common::log`,
   categories `snapcast-*`); engine work that belongs to an element runs in a span with a
   `log_id` field. Do not use `println!`.
@@ -97,7 +97,7 @@ Run `make check` before declaring work done.
   in property setters are fine.
 - Properties that cannot change while running use `.mutable_ready()`.
 - Lints are configured in the root `Cargo.toml` (`[workspace.lints]`). Every crate has
-  `[lints] workspace = true`. Public items of `snapcast-engine` need docs.
+  `[lints] workspace = true`. Public items of `gst-snapcast-engine` need docs.
 - License: GPL-3.0-only (matches snapcast-rs). `plugin_define!` uses `"GPL"`, because
   GStreamer only accepts fixed license names.
 

@@ -21,6 +21,25 @@ All `snapsink` elements in one process share a single embedded server; each
 element feeds one stream. Standard Snapcast clients (C++ `snapclient`,
 Snapdroid, ...) can connect to it, provided you use the PCM or FLAC codec.
 
+### Why Snapcast as a GStreamer element?
+
+Snapcast as a pipeline element: any GStreamer source becomes a multiroom stream, and any
+sink a synchronized room, without FIFOs or extra daemons.
+
+- **Sources:** desktop audio (`pipewiresrc`), files and web radio in any codec
+  (`uridecodebin`), RTSP, WebRTC, a DLNA renderer.
+- **Outputs:** PipeWire, PulseAudio, ALSA, Bluetooth via PipeWire, files, other streams.
+- **Processing** in the same pipeline, per room or before sending: EQ, room correction,
+  crossovers, resampling.
+- **Applications that already use GStreamer** get multiroom with one element. Mopidy, for
+  example, usually feeds Snapcast through a FIFO (`… ! filesink location=/tmp/snapfifo`)
+  and a separate `snapserver`; here it is `… ! snapsink`.
+
+When not to use it: a plain receiver (e.g. a Raspberry Pi on an amplifier) is simpler with
+`snapclient`, and a ready multiroom server with sources, groups and persistence is
+`snapserver`. Pros and cons, the comparison with snapcast-rs, licence (GPL-3.0) and
+publishing: [docs/architecture.md](docs/architecture.md).
+
 > **Status: feasibility prototype.** `snapsink → embedded server → snapsrc` works for
 > `pcm` and `flac`, and interoperates with the C++ Snapcast in both directions
 > (`snapsink` → `snapclient`, `snapserver` → `snapsrc`; `make test-interop`). Measured on
@@ -70,7 +89,7 @@ first).
 ├── scripts/                   # doctor.sh, listen.sh (used by the Makefile), host test/play helpers
 ├── assets/audio/              # CC0 music for listening tests (see its README)
 ├── crates/
-│   ├── snapcast-engine/       # GStreamer-free glue: tokio runtime, shared server/client lifecycle
+│   ├── gst-snapcast-engine/   # GStreamer-free glue: tokio runtime, shared server/client lifecycle
 │   ├── gst-snapcast-common/   # GStreamer-side code shared by both plugins (logging bridge)
 │   ├── gst-plugin-snapsink/   # -> libgstsnapsink.so  (element: snapsink)
 │   └── gst-plugin-snapsrc/    # -> libgstsnapsrc.so   (element: snapsrc)

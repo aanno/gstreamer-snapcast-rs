@@ -36,8 +36,8 @@ use gst::prelude::*;
 use gst::subclass::prelude::*;
 use gst_base::prelude::*;
 use gst_base::subclass::prelude::*;
-use snapcast_engine::server::{self, ServerOptions, StreamHandle, StreamOptions};
-use snapcast_engine::{PcmFormat, now_usec};
+use gst_snapcast_engine::server::{self, ServerOptions, StreamHandle, StreamOptions};
+use gst_snapcast_engine::{PcmFormat, now_usec};
 
 static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
     gst::DebugCategory::new(

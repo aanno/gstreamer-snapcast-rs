@@ -30,7 +30,7 @@ folder, which it can't from the container.
 ## Tools that work well
 
 - **`xerj_def`**: finds a symbol's definition across both indices. Example:
-  `xerj_def symbol=acquire_stream` → `crates/snapcast-engine/src/server.rs:144`.
+  `xerj_def symbol=acquire_stream` → `crates/gst-snapcast-engine/src/server.rs:144`.
 - **`xerj_search`** with a plain-string `query` does definition-first code search. Example:
   `query="SnapServer add_stream" index=ax-snapcast-rs-docs` →
   `snapcast-rs/crates/snapcast-server/src/lib.rs:489` / `:577`. Cite `path:match_line`.

@@ -1,6 +1,6 @@
 //! Bridge from `tracing` and `log` to the GStreamer debug log (L9).
 //!
-//! snapcast-rs and `snapcast-engine` log with [`tracing`]; some of their
+//! snapcast-rs and `gst-snapcast-engine` log with [`tracing`]; some of their
 //! dependencies (`mdns-sd`, `symphonia`) with [`log`]. Without a subscriber
 //! all of that is lost. [`init`] installs, once per process (or per plugin
 //! `.so`, which links its own copy of `tracing`):
@@ -24,7 +24,7 @@
 //! # Element names
 //!
 //! An event inside a span with a `log_id` field
-//! ([`snapcast_engine::LOG_ID_FIELD`]) is logged with that id
+//! ([`gst_snapcast_engine::LOG_ID_FIELD`]) is logged with that id
 //! (`gst_debug_log_id`), so the line shows e.g. `<snapsrc0>`; the innermost
 //! such span wins. The engine opens these spans around its tasks.
 //!
@@ -70,7 +70,7 @@ static ENGINE: LazyLock<DebugCategory> = LazyLock::new(|| {
     DebugCategory::new(
         "snapcast-engine",
         DebugColorFlags::empty(),
-        Some("snapcast-engine glue (tracing) and the logging bridge itself"),
+        Some("gst-snapcast-engine glue (tracing) and the logging bridge itself"),
     )
 });
 static MDNS: LazyLock<DebugCategory> = LazyLock::new(|| {
@@ -96,14 +96,14 @@ static DEPS: LazyLock<DebugCategory> = LazyLock::new(|| {
 /// |---|---|
 /// | `snapcast_client` | `snapcast-client` |
 /// | `snapcast_server` | `snapcast-server` |
-/// | `snapcast_engine` | `snapcast-engine` |
+/// | `gst_snapcast_engine` | `snapcast-engine` |
 /// | `mdns_sd` | `snapcast-mdns` |
 /// | anything else | `snapcast-deps` |
 pub fn category_for(target: &str) -> DebugCategory {
     match target.split("::").next().unwrap_or(target) {
         "snapcast_client" => *CLIENT,
         "snapcast_server" => *SERVER,
-        "snapcast_engine" => *ENGINE,
+        "gst_snapcast_engine" => *ENGINE,
         "mdns_sd" => *MDNS,
         _ => *DEPS,
     }
@@ -145,7 +145,7 @@ pub fn init() {
         for target in [
             "snapcast_client",
             "snapcast_server",
-            "snapcast_engine",
+            "gst_snapcast_engine",
             "mdns_sd",
             "",
         ] {
@@ -201,13 +201,13 @@ struct LogIdVisitor(Option<String>);
 
 impl tracing::field::Visit for LogIdVisitor {
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        if field.name() == snapcast_engine::LOG_ID_FIELD {
+        if field.name() == gst_snapcast_engine::LOG_ID_FIELD {
             self.0 = Some(value.to_owned());
         }
     }
 
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
-        if field.name() == snapcast_engine::LOG_ID_FIELD {
+        if field.name() == gst_snapcast_engine::LOG_ID_FIELD {
             self.0 = Some(format!("{value:?}"));
         }
     }
@@ -383,7 +383,7 @@ mod tests {
             // would remove the capturing function above as well.
             gst::log::add_log_function(|_cat, _level, _file, _function, _line, _obj, msg| {
                 if msg.get().is_some_and(|m| m.starts_with("t-loop")) {
-                    log::warn!(target: "snapcast_engine::echo", "t-loop-echo");
+                    log::warn!(target: "gst_snapcast_engine::echo", "t-loop-echo");
                 }
             });
             gst::log::set_active(true);
@@ -418,7 +418,7 @@ mod tests {
         with_layer(|| {
             tracing::warn!(target: "snapcast_client::controller", "t-cat-client");
             tracing::warn!(target: "snapcast_server::session", "t-cat-server");
-            tracing::warn!(target: "snapcast_engine::client", "t-cat-engine");
+            tracing::warn!(target: "gst_snapcast_engine::client", "t-cat-engine");
             tracing::warn!(target: "mdns_sd::service_daemon", "t-cat-mdns");
             tracing::warn!(target: "symphonia_core::probe", "t-cat-deps");
         });
@@ -437,13 +437,13 @@ mod tests {
     fn levels_fields_and_location_are_kept() {
         let mut line = 0;
         with_layer(|| {
-            tracing::error!(target: "snapcast_engine::t", "t-lvl-error");
-            tracing::warn!(target: "snapcast_engine::t", "t-lvl-warn");
-            tracing::info!(target: "snapcast_engine::t", "t-lvl-info");
-            tracing::debug!(target: "snapcast_engine::t", "t-lvl-debug");
-            tracing::trace!(target: "snapcast_engine::t", "t-lvl-trace");
+            tracing::error!(target: "gst_snapcast_engine::t", "t-lvl-error");
+            tracing::warn!(target: "gst_snapcast_engine::t", "t-lvl-warn");
+            tracing::info!(target: "gst_snapcast_engine::t", "t-lvl-info");
+            tracing::debug!(target: "gst_snapcast_engine::t", "t-lvl-debug");
+            tracing::trace!(target: "gst_snapcast_engine::t", "t-lvl-trace");
             line = line!() + 1;
-            tracing::info!(target: "snapcast_engine::t", peer = "10.0.0.1:1704", count = 3, "t-fields");
+            tracing::info!(target: "gst_snapcast_engine::t", peer = "10.0.0.1:1704", count = 3, "t-fields");
         });
         for (prefix, level) in [
             ("t-lvl-error", DebugLevel::Error),
@@ -477,16 +477,16 @@ mod tests {
     #[test]
     fn the_innermost_log_id_tags_the_line() {
         with_layer(|| {
-            tracing::warn!(target: "snapcast_engine::t", "t-id-none");
+            tracing::warn!(target: "gst_snapcast_engine::t", "t-id-none");
             let outer = tracing::info_span!("outer", log_id = "snapsrc7");
             let _outer = outer.enter();
             let plain = tracing::info_span!("plain", stream = "default");
             let _plain = plain.enter();
-            tracing::warn!(target: "snapcast_engine::t", "t-id-outer");
+            tracing::warn!(target: "gst_snapcast_engine::t", "t-id-outer");
             let server = tracing::info_span!("server", log_id = %"snapserver:1704");
             server.in_scope(|| tracing::warn!(target: "snapcast_server::t", "t-id-inner"));
             let empty = tracing::info_span!("empty", log_id = "");
-            empty.in_scope(|| tracing::warn!(target: "snapcast_engine::t", "t-id-empty"));
+            empty.in_scope(|| tracing::warn!(target: "gst_snapcast_engine::t", "t-id-empty"));
         });
         assert_eq!(only("t-id-none").id, None);
         assert_eq!(only("t-id-outer").id.as_deref(), Some("snapsrc7"));
@@ -500,8 +500,8 @@ mod tests {
         init(); // the `log` bridge is global
         // The echo log function from `setup` turns each of these lines into a
         // `log` record; without the guard it would be forwarded, echoed, ...
-        with_layer(|| tracing::warn!(target: "snapcast_engine::t", "t-loop-start"));
-        log::warn!(target: "snapcast_engine::t", "t-loop-log");
+        with_layer(|| tracing::warn!(target: "gst_snapcast_engine::t", "t-loop-start"));
+        log::warn!(target: "gst_snapcast_engine::t", "t-loop-log");
         only("t-loop-start");
         only("t-loop-log");
         assert!(lines("t-loop-echo").is_empty());

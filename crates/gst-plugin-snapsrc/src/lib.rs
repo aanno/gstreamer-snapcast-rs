@@ -2,7 +2,7 @@
 //!
 //! Provides the `snapsrc` element, a live [`gst_base::PushSrc`] that connects
 //! to a Snapcast server via an embedded Snapcast client (see
-//! `snapcast-engine`) and pushes decoded, correctly timestamped raw PCM
+//! `gst-snapcast-engine`) and pushes decoded, correctly timestamped raw PCM
 //! downstream.
 //!
 //! ```text

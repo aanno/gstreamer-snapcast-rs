@@ -57,10 +57,10 @@ pub fn runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
-            .thread_name("snapcast-engine")
+            .thread_name("gst-snapcast-engine")
             .enable_all()
             .build()
-            .expect("failed to create snapcast-engine tokio runtime")
+            .expect("failed to create gst-snapcast-engine tokio runtime")
     })
 }
 

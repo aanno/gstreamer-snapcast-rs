@@ -68,7 +68,7 @@ use std::time::{Duration, Instant};
 
 use gst::prelude::*;
 use gst_base::prelude::*;
-use snapcast_engine::now_usec;
+use gst_snapcast_engine::now_usec;
 
 const RATE: u32 = 48_000;
 const BUFFER_MS: u32 = 1000;
