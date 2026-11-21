@@ -7,6 +7,21 @@ Last updated: 2026-11-21 (P2 done: control API, Snapweb, metadata, `controls` + 
 
 ## Resume here (2026-11-21)
 
+**End of 2026-11-21 — start next session here:**
+1. **Browser re-test of Snapweb** with the user (after `make install` on the host;
+   `docs/testing-host.md`, "Control with Snapweb (F4)", has the checklist). Expect the
+   client details filled in now: Client `gst-snapsrc <version>`, IP, OS as the
+   distribution name (e.g. "Fedora Linux 45 …"), ID = MAC for instance 1. With
+   `controls=play+pause+next` on snapsink, Snapweb's player buttons and
+   `snapcast-stream-control` messages (`gst-launch-1.0 -m`). The user's first check
+   looked fine.
+2. Then P4 (evaluation).
+3. **Unpushed fork commits** (`aanno/fixes`, each an upstream PR candidate): `9a4c2b4`
+   feat(control) snapcast-control crate, `152dce6` fix(proto) stream properties
+   camelCase, `7aede14` fix(server) stream properties in the status, `5b77ff7`
+   fix(server) client info in the status, `4f8cb71` feat(client) distribution name as
+   OS. The user pushes; this repo's pointer commits are on `main`.
+
 **2026-11-21:** devcontainer rebuilt and checked: `make doctor`, `make check`,
 `make test-interop` green; xerj and memory MCP up. **L9 done** (logging bridge, see
 `docs/architecture.md`, which is new). Two new fork commits, **not pushed yet**:
@@ -33,9 +48,8 @@ upstream PR candidate for `metaneutrons/snapcast-rs`; no PR opened yet.
 1. Look at the pending results; fix what fails, record gotchas in `docs/testing*.md`.
 2. **P2, control plane: done** (see Plan). The user checked Snapweb in a browser on
    2026-11-21 (volume works, client visible and renamable; the empty client details led
-   to the `ClientInfo` fix). Open bits: OS shows `linux` (snapcast-client sends
-   `std::env::consts::OS`; C++ sends the distribution name; a small snapcast-client PR),
-   Snapweb's in-browser player (`/stream`), authentication. Fork commits **not pushed
+   to the `ClientInfo` fix). Open bits: ~~OS shows `linux`~~ (fixed 2026-11-21, fork `4f8cb71`:
+   PRETTY_NAME from /etc/os-release, as C++), Snapweb's in-browser player (`/stream`), authentication. Fork commits **not pushed
    yet**: `9a4c2b4` feat(control), `152dce6` fix(proto), `7aede14` fix(server),
    `5b77ff7` fix(server) client info.
 3. P4, evaluation: F3 endurance (hours, memory/latency), F5 lifecycle

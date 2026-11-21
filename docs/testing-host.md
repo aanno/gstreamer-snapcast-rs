@@ -224,7 +224,7 @@ What to check, and what to expect:
 | Client name | the host name until you rename it in the client's details |
 | Details: Client | `gst-snapsrc` and the snapcast-rs version (C++: `Snapclient 0.31.0`) |
 | Details: ID | the MAC address for the first instance on a host, `<MAC>#2` for the second (as the C++ server: `#n` only for instance ≠ 1) |
-| Details: IP, OS | the receiver's address and `linux` (C++ snapclient: the distribution name) |
+| Details: IP, OS | the receiver's address and its distribution name (e.g. `Fedora Linux 45 …`, from `/etc/os-release`, as the C++ snapclient) |
 | Groups | moving a client to another group, and a group to another stream (needs a second stream, i.e. a second server port, L1) |
 
 Player buttons appear only for streams that announce them (`controls`). Each press
