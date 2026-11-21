@@ -31,6 +31,10 @@
 #   CODEC      pcm (default) | flac
 #   BUFFER_MS  end-to-end buffer (default 1000)
 #   LATENCY_MS extra output latency for snapsrc/snapclient (default 0)
+#   CONTROL    1: the sender also offers the control API: JSON-RPC on 1705 (Snapdroid,
+#              Home Assistant) and Snapweb on http://<host>:1780/ (needs SNAPWEB_DIR)
+#   SNAPWEB_DIR Snapweb's files (default ~/.local/share/snapweb; get them with
+#              scripts/fetch-snapweb.sh)
 #   QUIET      1: print the commands without the notes
 #   GST_DEBUG  e.g. snapsink:5,snapsrc:5,snapcast*:4
 set -euo pipefail
@@ -43,6 +47,8 @@ STREAM=${STREAM:-default}
 CODEC=${CODEC:-pcm}
 BUFFER_MS=${BUFFER_MS:-1000}
 LATENCY_MS=${LATENCY_MS:-0}
+CONTROL=${CONTROL:-0}
+SNAPWEB_DIR=${SNAPWEB_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/snapweb}
 SOUNDCARD=${SOUNDCARD:-default}
 SNAPCLIENT=${SNAPCLIENT:-snapclient}
 SNAPSERVER=${SNAPSERVER:-snapserver}
@@ -175,10 +181,26 @@ build_send() {
         "-e: on Ctrl+C, end the stream first, so that everything stops cleanly"
     add_source
     add_caps
-    part "snapsink stream=$STREAM port=$PORT codec=$CODEC buffer-ms=$BUFFER_MS" \
-        "embedded Snapcast server on port $PORT (shared by all snapsinks on that port),
+    local sink="snapsink stream=$STREAM port=$PORT codec=$CODEC buffer-ms=$BUFFER_MS"
+    local note="embedded Snapcast server on port $PORT (shared by all snapsinks on that port),
 feeding stream \"$STREAM\"; announced via mDNS. Any Snapcast client can connect.
 codec: pcm or flac. buffer-ms: how far ahead of play-out the audio is sent"
+    if [ "$CONTROL" = 1 ]; then
+        sink+=" control-port=1705 http-port=1780"
+        note+="
+control-port: JSON-RPC control API (Snapdroid, Home Assistant, scripts).
+http-port: the same over HTTP/WebSocket, plus Snapweb: open http://<this host>:1780/.
+No authentication: anyone on the network can control the server"
+        if [ -f "$SNAPWEB_DIR/index.html" ]; then
+            sink+=" snapweb-dir=$SNAPWEB_DIR"
+            note+="
+snapweb-dir: Snapweb's files (scripts/fetch-snapweb.sh)"
+        else
+            note+="
+(no Snapweb in $SNAPWEB_DIR: run scripts/fetch-snapweb.sh, or set SNAPWEB_DIR)"
+        fi
+    fi
+    part "$sink" "$note"
 }
 
 build_recv() {

@@ -60,6 +60,8 @@ gst-launch-1.0 -e audiotestsrc is-live=true wave=ticks ! audio/x-raw,rate=48000,
 - Input: S16LE or S32LE, any rate and channel count (they become the stream's format);
   put `audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2`
   in front if the source delivers something else.
+- `control-port` / `http-port` (off by default): the Snapcast control API, so that
+  Snapweb, Snapdroid or Home Assistant can manage clients, groups and volumes; see 4.7.
 - `port` (1704): all `snapsink`s on one port share one server; `stream`: the stream name;
   `codec`: `pcm` or `flac` (both work with every Snapcast client); `buffer-ms`: the
   end-to-end delay; `mdns-name`: announced via mDNS under this name (`""`: not at all).
@@ -130,6 +132,23 @@ becomes:
 [audio]
 output = audioresample ! audioconvert ! audio/x-raw,rate=48000,channels=2,format=S16LE ! snapsink
 ```
+
+**4.7 With Snapweb and other controllers** (tested here with Snapweb's files and
+JSON-RPC; not yet in a browser): the control API lets controllers list clients and
+groups, change volumes, mute, rename, and move groups between streams.
+
+```sh
+scripts/fetch-snapweb.sh       # once: Snapweb v0.9.3 into ~/.local/share/snapweb
+gst-launch-1.0 -e uridecodebin uri=file:///path/to/music.flac \
+    ! audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
+    ! snapsink control-port=1705 http-port=1780 snapweb-dir=$HOME/.local/share/snapweb
+```
+
+Then open `http://<this host>:1780/` (or `CONTROL=1 make listen-send`). Snapdroid and
+Home Assistant use port 1705. Title, artist and album from the file's tags show up in
+Snapweb. Not supported yet: playing in the browser (Snapweb's own player), and the
+play/pause/next buttons (they appear only for streams that declare them). The control
+API has **no authentication**: only enable it on a network you trust.
 
 ## 5. Receivers
 

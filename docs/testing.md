@@ -12,7 +12,7 @@ to do when something doesn't work, is in:
 
 | Command | What it tests | Needs | Part of `make check` |
 |---|---|---|---|
-| `make test` | Unit and integration tests: properties, `snapsink → snapsrc` loopback over TCP (signal, PTS continuity, scheduling) | GStreamer base/good plugins | yes |
+| `make test` | Unit and integration tests: properties, `snapsink → snapsrc` loopback over TCP (signal, PTS continuity, scheduling), the control API (JSON-RPC over TCP, metadata from tags, volume reaching snapsrc, Snapweb files over HTTP) | GStreamer base/good plugins | yes |
 | `make check` | `fmt` + `clippy -D warnings` + `test` + `doc -D warnings` | as above | — |
 | `make test-interop` | `snapsink` → C++ `snapclient`, and C++ `snapserver` → `snapsrc`, for `pcm` and `flac` | C++ `snapclient`/`snapserver` (`SNAPCLIENT=`/`SNAPSERVER=`) | no (`#[ignore]`) |
 | `make test-aloop` | Timing on a (virtual) sound card: offset between two receivers, and following a drifting card (F2) | `snd-aloop`, `amixer`, `alsasrc`/`alsasink`, C++ `snapclient` for two of the four tests | no (`#[ignore]`) |

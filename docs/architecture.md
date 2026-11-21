@@ -262,11 +262,13 @@ log, so `GST_DEBUG` controls everything (L9, 2026-11-21).
 `snapsink` and `snapsrc`, with the properties listed in the [README](../README.md#element-properties)
 (or `gst-inspect-1.0 snapsink`). `snapsink` keeps GstBaseSink's `sync` and `async`;
 `async=false` is needed only when the same pipeline also receives from its server
-([pipelines.md](pipelines.md#preroll-and-async-false), L14). Planned with the control plane (P2): a `control-port`
-property, JSON-RPC over TCP and WebSocket (the only inter-process control interface; no
-D-Bus), a `snapweb-dir` property so that Snapweb serves as the user interface, and
-`Stream.Control` as a bus message. The contract behind it is the Rust trait
-`SnapControl` in a new snapcast-rs control crate. Plan and gap list:
+([pipelines.md](pipelines.md#preroll-and-async-false), L14). Control plane (P2): `snapsink` can serve the Snapcast
+JSON-RPC control API over TCP (`control-port`) and HTTP/WebSocket (`http-port`), with
+Snapweb's files (`snapweb-dir`) as the user interface; no D-Bus. The API comes from the
+snapcast-rs crate `snapcast-control` (contract: trait `SnapControl`); the engine owns it
+per shared server (feature `control`, `server::ControlOptions`), and its listeners and
+the event loop run on the engine runtime and stop with the server. Tags become stream
+metadata (`StreamHandle::set_metadata`). Open: `Stream.Control` as a bus message. Plan:
 [claude/memory.md](claude/memory.md), P2.
 
 ### Environment variables

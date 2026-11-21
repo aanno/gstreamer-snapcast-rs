@@ -46,10 +46,12 @@ publishing: [docs/architecture.md](docs/architecture.md).
 > a loopback sound card, receivers play within about 1 ms of each other and of the
 > server timeline, also on a drifting card (`make test-aloop`). snapsink announces itself
 > via mDNS and snapsrc finds it; snapsrc reconnects after a server restart and applies
-> the server's volume and mute. snapcast-rs logs into the GStreamer debug log.
+> the server's volume and mute. snapcast-rs logs into the GStreamer debug log. snapsink
+> can offer the Snapcast JSON-RPC control API and serve Snapweb (`control-port`,
+> `http-port`, `snapweb-dir`; opt-in), and passes track tags on as stream metadata.
 > Limitations: one stream per server port (snapcast-rs cannot add streams at runtime
-> yet), S16LE/S32LE input only, no control plane yet (JSON-RPC for Snapweb/Snapdroid;
-> next step, P2). The current state, decisions, all known limitations and the plan are
+> yet), S16LE/S32LE input only, no authentication on the control API, Snapweb's
+> in-browser player is not supported (P2). The current state, decisions, all known limitations and the plan are
 > in [docs/claude/memory.md](docs/claude/memory.md); the architecture in
 > [docs/architecture.md](docs/architecture.md).
 
@@ -62,6 +64,9 @@ publishing: [docs/architecture.md](docs/architecture.md).
 |            | `codec`       | `pcm`       | `pcm` or `flac` |
 |            | `buffer-ms`   | `1000`      | End-to-end buffer announced to clients |
 |            | `mdns-name`   | `gst-snapsink` | Announce the server via mDNS (`_snapcast._tcp`) under this name; empty: don't (never for `port=0`) |
+|            | `control-port` | `0` (off)  | Snapcast JSON-RPC control API over TCP (Snapcast uses 1705), for Snapdroid, Home Assistant, scripts. **No authentication** |
+|            | `http-port`   | `0` (off)   | The same over HTTP and WebSocket (Snapcast uses 1780), plus `snapweb-dir`. **No authentication** |
+|            | `snapweb-dir` | (empty)     | Snapweb's files, served on `http-port` (`scripts/fetch-snapweb.sh` downloads them; Debian's package has only a placeholder) |
 |            | `bound-port`  | (read-only) | Port actually listened on |
 |            | `async`       | `true`      | (from GstBaseSink) Wait for the first buffer ("preroll") before the pipeline counts as PAUSED. Set `false` when the same pipeline also contains a `snapsrc` (see below) |
 |            | `sync`        | `true`      | (from GstBaseSink) Render on the pipeline clock. With `false`, `snapsink` still paces non-live sources (files) to real time itself |
@@ -73,6 +78,12 @@ publishing: [docs/architecture.md](docs/architecture.md).
 |            | `host-id`     | (MAC address) | Unique client id towards the server, like snapclient's `--hostID` |
 |            | `volume`/`mute` | (read-only) | The server's volume (0–100) and mute for this client, applied to the audio |
 |            | `adjust-sink` | `true`      | Set `slave-method=resample` on the downstream audio sink (if at `skew`) |
+
+`port`, `buffer-ms`, `mdns-name` and the control properties belong to the server, which
+all snapsinks on one port share: the first snapsink to start sets them. With
+`mdns-name`, the control ports are announced too (`_snapcast-ctrl._tcp`,
+`_snapcast-http._tcp`). Track tags (title, artist, album, duration) become the stream's
+metadata, which Snapweb and other controllers show.
 
 **`snapsink async=false`** is needed in one case: a sender and a receiver of the same
 server in **one** pipeline (a demo or test; normally they run in separate processes,

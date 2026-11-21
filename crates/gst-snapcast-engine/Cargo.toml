@@ -12,7 +12,9 @@ publish = false
 [features]
 default = []
 # Embedded Snapcast server (used by snapsink)
-server = ["dep:snapcast-server", "dep:mdns-sd"]
+server = ["dep:snapcast-server", "dep:mdns-sd", "dep:serde_json"]
+# JSON-RPC control API (TCP, HTTP/WebSocket, Snapweb) for the embedded server
+control = ["server", "dep:snapcast-control"]
 # Embedded Snapcast client (used by snapsrc)
 client = ["dep:snapcast-client", "dep:mdns-sd"]
 
@@ -24,6 +26,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 mdns-sd = { workspace = true, optional = true }
+snapcast-control = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [lints]
 workspace = true

@@ -30,6 +30,7 @@ gst-snapcast-common = { path = "crates/gst-snapcast-common" }
 snapcast-server = { path = "snapcast-rs/crates/snapcast-server", version = "0.18.0" }
 snapcast-client = { path = "snapcast-rs/crates/snapcast-client", version = "0.18.0", default-features = false }
 snapcast-proto = { path = "snapcast-rs/crates/snapcast-proto", version = "0.18.0" }
+snapcast-control = { path = "snapcast-rs/crates/snapcast-control", version = "0.18.0" }
 
 # GStreamer bindings (https://gitlab.freedesktop.org/gstreamer/gstreamer-rs)
 gst = { package = "gstreamer", version = "0.25" }
@@ -46,6 +47,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 log = "0.4"
 thiserror = "2"
+serde_json = "1"
 # mDNS / DNS-SD, pure Rust (same crate and version as snapcast-rs's snapclient-rs)
 mdns-sd = "0.12"
 

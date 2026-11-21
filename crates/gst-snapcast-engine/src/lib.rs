@@ -8,6 +8,8 @@
 //! * the shared tokio runtime that drives the `snapcast-rs` engines,
 //! * (feature `server`) embedded servers shared by all senders in a process,
 //!   see [`server::acquire_stream`],
+//! * (feature `control`) the Snapcast JSON-RPC control API and Snapweb for those
+//!   servers, see [`server::ControlOptions`],
 //! * (feature `client`) embedded clients producing frames with a local
 //!   play-out time, see [`client::connect`].
 //!
@@ -115,6 +117,9 @@ pub enum EngineError {
     /// The server terminated.
     #[error("Snapcast server is gone")]
     ServerGone,
+    /// The server's command queue is full; try again later.
+    #[error("Snapcast server is busy")]
+    Busy,
     /// Invalid configuration.
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),

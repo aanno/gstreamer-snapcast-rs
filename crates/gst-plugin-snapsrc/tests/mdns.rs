@@ -1,4 +1,4 @@
-//! L8: `snapsrc` without a host finds a `snapsink` via mDNS.
+//! L8: `snapsrc` without a host finds a `snapsink` via mDNS; snapsink announces its control ports.
 //!
 //! Ignored by default because it needs multicast on the local network (it works in
 //! the devcontainer and on the host). Run it with `make test-mdns`.
@@ -105,4 +105,52 @@ fn snapsrc_reports_when_no_server_is_found() {
         "error does not name the server: {text}"
     );
     assert!(elapsed < Duration::from_secs(9), "took {elapsed:?}");
+}
+
+/// The port announced for `service_type` under the instance `name`, if any within 10 s.
+fn browse_port(service_type: &str, name: &str) -> Option<u16> {
+    let mdns = mdns_sd::ServiceDaemon::new().unwrap();
+    let receiver = mdns.browse(service_type).unwrap();
+    let wanted = format!("{name}.{service_type}");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut port = None;
+    while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+        match receiver.recv_timeout(remaining) {
+            Ok(mdns_sd::ServiceEvent::ServiceResolved(info)) if info.get_fullname() == wanted => {
+                port = Some(info.get_port());
+                break;
+            }
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+    let _ = mdns.shutdown();
+    port
+}
+
+#[test]
+#[ignore = "needs multicast (make test-mdns)"]
+fn snapsink_announces_its_control_ports() {
+    init();
+    let name = format!("gst-snapcast-ctl-test-{}", std::process::id());
+    let (port, control_port, http_port) = (free_port(), free_port(), free_port());
+    let sender = gst::parse::launch(&format!(
+        "audiotestsrc is-live=true ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
+         ! snapsink port={port} mdns-name={name} buffer-ms=300 \
+           control-port={control_port} http-port={http_port}"
+    ))
+    .unwrap();
+    sender.set_state(gst::State::Playing).unwrap();
+
+    // As the C++ snapserver: the same instance name under each service type.
+    assert_eq!(browse_port("_snapcast._tcp.local.", &name), Some(port));
+    assert_eq!(
+        browse_port("_snapcast-ctrl._tcp.local.", &name),
+        Some(control_port)
+    );
+    assert_eq!(
+        browse_port("_snapcast-http._tcp.local.", &name),
+        Some(http_port)
+    );
+    sender.set_state(gst::State::Null).unwrap();
 }

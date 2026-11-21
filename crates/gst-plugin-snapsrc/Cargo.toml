@@ -28,6 +28,8 @@ tokio = { workspace = true }
 # Loopback tests: snapsink -> embedded server -> snapsrc
 gst-plugin-snapsink = { path = "../gst-plugin-snapsink" }
 gst-app = { workspace = true }
+serde_json = { workspace = true }
+mdns-sd = { workspace = true }
 
 [build-dependencies]
 gst-plugin-version-helper = { workspace = true }

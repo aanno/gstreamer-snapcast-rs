@@ -11,12 +11,20 @@
 //! `add_stream`/`remove_stream`, a running server only has the stream it was
 //! created with, so a second, *different* stream on the same port fails with
 //! [`EngineError::StreamsFixed`]. Use different ports for now.
+//!
+//! # Control API (feature `control`)
+//!
+//! With [`ServerOptions::control`], the server also serves the Snapcast JSON-RPC
+//! control API (`snapcast-control`): over TCP, and over HTTP/WebSocket together with
+//! Snapweb's files, so that Snapweb, Snapdroid or Home Assistant can manage clients,
+//! groups and volumes. It belongs to the shared server: the first acquirer of a port
+//! configures it, and it stops with the server.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use snapcast_server::{
-    AudioData, AudioFrame, ServerCommand, ServerConfig, SnapServer, StreamConfig,
+    AudioData, AudioFrame, ServerCommand, ServerConfig, ServerEvent, SnapServer, StreamConfig,
 };
 use tokio::sync::mpsc;
 use tracing::Instrument;
@@ -39,6 +47,9 @@ pub struct ServerOptions {
     /// clients find it without a host name (`None`: don't). Servers on an ephemeral
     /// port (`port == 0`) are never announced.
     pub mdns_name: Option<String>,
+    /// The JSON-RPC control API (default: off).
+    #[cfg(feature = "control")]
+    pub control: ControlOptions,
 }
 
 impl Default for ServerOptions {
@@ -47,7 +58,61 @@ impl Default for ServerOptions {
             port: snapcast_server::DEFAULT_STREAM_PORT,
             buffer_ms: 1000,
             mdns_name: None,
+            #[cfg(feature = "control")]
+            control: ControlOptions::default(),
         }
+    }
+}
+
+/// Where the server offers the JSON-RPC control API. Ports are bound on all
+/// interfaces and need no authentication: anyone who can reach them controls the
+/// server. With [`ServerOptions::mdns_name`], they are announced too
+/// (`_snapcast-ctrl._tcp`, `_snapcast-http._tcp`, as the C++ snapserver does).
+#[cfg(feature = "control")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ControlOptions {
+    /// JSON-RPC over TCP (Snapcast's default is 1705). `None`: off; `Some(0)`: an
+    /// ephemeral port (see [`StreamHandle::control_tcp_port`]).
+    pub tcp_port: Option<u16>,
+    /// JSON-RPC over HTTP POST and WebSocket at `/jsonrpc`, plus `snapweb_dir`
+    /// (Snapcast's default is 1780). `None`: off; `Some(0)`: an ephemeral port.
+    pub http_port: Option<u16>,
+    /// Static files served over HTTP for every other path, normally Snapweb's
+    /// release files (Debian's `/usr/share/snapserver/snapweb` is only a placeholder).
+    pub snapweb_dir: Option<std::path::PathBuf>,
+}
+
+/// Track information of a stream, shown by controllers such as Snapweb
+/// (Snapcast stream property `metadata`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StreamMetadata {
+    /// Track title.
+    pub title: Option<String>,
+    /// Artists.
+    pub artist: Vec<String>,
+    /// Album.
+    pub album: Option<String>,
+    /// Track length in seconds.
+    pub duration_secs: Option<f64>,
+}
+
+impl StreamMetadata {
+    /// The stream `properties` object of the Snapcast control API.
+    fn to_properties(&self) -> HashMap<String, serde_json::Value> {
+        let mut metadata = serde_json::Map::new();
+        if let Some(title) = &self.title {
+            metadata.insert("title".into(), title.clone().into());
+        }
+        if !self.artist.is_empty() {
+            metadata.insert("artist".into(), self.artist.clone().into());
+        }
+        if let Some(album) = &self.album {
+            metadata.insert("album".into(), album.clone().into());
+        }
+        if let Some(duration) = self.duration_secs {
+            metadata.insert("duration".into(), duration.into());
+        }
+        HashMap::from([("metadata".to_owned(), metadata.into())])
     }
 }
 
@@ -81,11 +146,19 @@ struct ServerEntry {
     streams: Mutex<HashMap<String, StreamSlot>>,
     /// The mDNS announcement, withdrawn together with the server.
     _announcement: Option<crate::mdns::Announcement>,
+    /// Bound control ports (TCP, HTTP).
+    #[cfg(feature = "control")]
+    control_ports: (Option<u16>, Option<u16>),
+    /// Tasks to abort with the server (the control listeners).
+    tasks: Vec<tokio::task::AbortHandle>,
 }
 
 impl Drop for ServerEntry {
     fn drop(&mut self) {
         let _ = self.cmd_tx.try_send(ServerCommand::Stop);
+        for task in &self.tasks {
+            task.abort();
+        }
         let mut registry = REGISTRY.lock().unwrap();
         // Only remove our own (now dead) entry, not a newer replacement.
         if registry
@@ -126,6 +199,37 @@ impl StreamHandle {
     /// Stream name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Port of the JSON-RPC control API over TCP, if the server offers it.
+    #[cfg(feature = "control")]
+    pub fn control_tcp_port(&self) -> Option<u16> {
+        self.server.control_ports.0
+    }
+
+    /// Port of the JSON-RPC control API over HTTP/WebSocket (and Snapweb), if the
+    /// server offers it.
+    #[cfg(feature = "control")]
+    pub fn control_http_port(&self) -> Option<u16> {
+        self.server.control_ports.1
+    }
+
+    /// Publish track information for this stream (replaces the previous one).
+    ///
+    /// Does not block: fails with [`EngineError::Busy`] if the server's command
+    /// queue is full.
+    pub fn set_metadata(&self, metadata: &StreamMetadata) -> Result<(), EngineError> {
+        use mpsc::error::TrySendError;
+        self.server
+            .cmd_tx
+            .try_send(ServerCommand::SetStreamMeta {
+                stream_id: self.name.clone(),
+                metadata: metadata.to_properties(),
+            })
+            .map_err(|e| match e {
+                TrySendError::Full(_) => EngineError::Busy,
+                TrySendError::Closed(_) => EngineError::ServerGone,
+            })
     }
 
     /// Submit interleaved little-endian PCM in the stream's format.
@@ -223,6 +327,8 @@ fn start_server(
         .local_addr()
         .map_err(|e| EngineError::Bind(server.port, e))?
         .port();
+    #[cfg(feature = "control")]
+    let control = ControlListeners::bind(&server.control)?;
 
     let config = ServerConfig {
         buffer_ms: server.buffer_ms,
@@ -230,7 +336,7 @@ fn start_server(
         sample_format: stream.format.to_string(),
         ..ServerConfig::default()
     };
-    let (mut snap, mut events) = SnapServer::new(config);
+    let (mut snap, events) = SnapServer::new(config);
     let tx = snap.add_stream_with_config(
         &stream.name,
         StreamConfig {
@@ -260,15 +366,14 @@ fn start_server(
         }
         .instrument(span.clone()),
     );
+    #[cfg_attr(not(feature = "control"), allow(unused_mut))]
+    let mut tasks = Vec::new();
+    #[cfg(feature = "control")]
+    let control_ports = control.ports();
+    #[cfg(feature = "control")]
+    let events = control.spawn(cmd_tx.clone(), events, &span, &mut tasks)?;
     // The event channel is bounded; drain it so the server never stalls.
-    rt.spawn(
-        async move {
-            while let Some(event) = events.recv().await {
-                tracing::debug!(?event, "Snapcast server event");
-            }
-        }
-        .instrument(span.clone()),
-    );
+    rt.spawn(drain_events(events).instrument(span.clone()));
 
     let mut streams = HashMap::new();
     streams.insert(
@@ -283,7 +388,15 @@ fn start_server(
     let announcement = match &server.mdns_name {
         Some(name) if server.port != 0 && !name.is_empty() => {
             let _entered = span.enter();
-            crate::mdns::announce(name, local_port)
+            #[allow(unused_mut)]
+            let mut services = vec![(crate::mdns::SERVICE_TYPE, local_port)];
+            #[cfg(feature = "control")]
+            {
+                let (tcp, http) = control_ports;
+                services.extend(tcp.map(|p| (crate::mdns::CONTROL_SERVICE_TYPE, p)));
+                services.extend(http.map(|p| (crate::mdns::HTTP_SERVICE_TYPE, p)));
+            }
+            crate::mdns::announce(name, &services)
                 .inspect_err(|e| tracing::warn!(error = %e, "Server runs without mDNS"))
                 .ok()
         }
@@ -295,7 +408,117 @@ fn start_server(
         cmd_tx,
         streams: Mutex::new(streams),
         _announcement: announcement,
+        #[cfg(feature = "control")]
+        control_ports,
+        tasks,
     }))
+}
+
+/// Logs the server's events until it stops.
+async fn drain_events(mut events: mpsc::Receiver<ServerEvent>) {
+    while let Some(event) = events.recv().await {
+        tracing::debug!(?event, "Snapcast server event");
+    }
+}
+
+/// Bound, not yet served control listeners.
+#[cfg(feature = "control")]
+struct ControlListeners {
+    tcp: Option<std::net::TcpListener>,
+    http: Option<std::net::TcpListener>,
+    snapweb_dir: Option<std::path::PathBuf>,
+}
+
+#[cfg(feature = "control")]
+impl ControlListeners {
+    /// Binds the configured ports, so that a taken port fails the acquisition.
+    fn bind(options: &ControlOptions) -> Result<Self, EngineError> {
+        let bind = |port: Option<u16>| {
+            port.map(|port| {
+                let listener = bind_with_retry(port)?;
+                listener
+                    .set_nonblocking(true)
+                    .map_err(|e| EngineError::Bind(port, e))?;
+                Ok(listener)
+            })
+            .transpose()
+        };
+        Ok(Self {
+            tcp: bind(options.tcp_port)?,
+            http: bind(options.http_port)?,
+            snapweb_dir: options.snapweb_dir.clone(),
+        })
+    }
+
+    fn ports(&self) -> (Option<u16>, Option<u16>) {
+        let port = |l: &Option<std::net::TcpListener>| {
+            l.as_ref()
+                .and_then(|l| l.local_addr().ok())
+                .map(|a| a.port())
+        };
+        (port(&self.tcp), port(&self.http))
+    }
+
+    /// Serves the control API on the listeners. Returns the server's events,
+    /// passed through once they became notifications (`events` itself without any
+    /// listener).
+    fn spawn(
+        self,
+        cmd_tx: mpsc::Sender<ServerCommand>,
+        events: mpsc::Receiver<ServerEvent>,
+        span: &tracing::Span,
+        tasks: &mut Vec<tokio::task::AbortHandle>,
+    ) -> Result<mpsc::Receiver<ServerEvent>, EngineError> {
+        if self.tcp.is_none() && self.http.is_none() {
+            return Ok(events);
+        }
+        let rt = runtime();
+        let to_tokio = |l: std::net::TcpListener| {
+            let port = l.local_addr().map_or(0, |a| a.port());
+            let _guard = rt.enter();
+            tokio::net::TcpListener::from_std(l).map_err(|e| EngineError::Bind(port, e))
+        };
+        let control = snapcast_control::ControlServer::new(cmd_tx);
+
+        if let Some(listener) = self.tcp {
+            let listener = to_tokio(listener)?;
+            let control = control.clone();
+            let task = rt.spawn(
+                async move {
+                    if let Err(e) = control.serve_tcp(listener).await {
+                        tracing::error!(error = %e, "JSON-RPC control (TCP) failed");
+                    }
+                }
+                .instrument(span.clone()),
+            );
+            tasks.push(task.abort_handle());
+        }
+        if let Some(listener) = self.http {
+            let listener = to_tokio(listener)?;
+            let control = control.clone();
+            let snapweb_dir = self.snapweb_dir;
+            if let Some(dir) = snapweb_dir.as_ref().filter(|d| !d.is_dir()) {
+                let _entered = span.enter();
+                tracing::warn!(dir = %dir.display(), "Snapweb directory not found");
+            }
+            let task = rt.spawn(
+                async move {
+                    if let Err(e) = control.serve_http(listener, snapweb_dir).await {
+                        tracing::error!(error = %e, "JSON-RPC control (HTTP) failed");
+                    }
+                }
+                .instrument(span.clone()),
+            );
+            tasks.push(task.abort_handle());
+        }
+
+        let (passthrough_tx, passthrough_rx) = mpsc::channel(64);
+        rt.spawn(
+            async move { control.forward_events(events, Some(passthrough_tx)).await }
+                .instrument(span.clone()),
+        );
+        Ok(passthrough_rx)
+    }
 }
 
 /// Bind `0.0.0.0:port`, retrying briefly on `AddrInUse`: a server stopped
@@ -389,6 +612,86 @@ mod tests {
             acquire_stream(&opts, &other),
             Err(EngineError::StreamMismatch { .. })
         ));
+    }
+
+    /// One JSON-RPC request over TCP; returns the first reply line.
+    #[cfg(feature = "control")]
+    fn rpc_over_tcp(port: u16, request: &str) -> String {
+        use std::io::{BufRead, Write};
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        writeln!(stream, "{request}").unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(stream)
+            .read_line(&mut line)
+            .unwrap();
+        line
+    }
+
+    #[cfg(feature = "control")]
+    #[test]
+    fn control_api_runs_and_stops_with_the_server() {
+        let opts = ServerOptions {
+            port: 0,
+            buffer_ms: 500,
+            control: ControlOptions {
+                tcp_port: Some(0),
+                http_port: Some(0),
+                snapweb_dir: None,
+            },
+            ..ServerOptions::default()
+        };
+        let a = acquire_stream(&opts, &stream("x")).unwrap();
+        let tcp = a.control_tcp_port().expect("TCP control port");
+        let http = a.control_http_port().expect("HTTP control port");
+        assert_ne!(tcp, 0);
+        assert_ne!(http, 0);
+
+        let reply = rpc_over_tcp(
+            tcp,
+            r#"{"jsonrpc":"2.0","id":1,"method":"Server.GetStatus"}"#,
+        );
+        let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert_eq!(reply["id"], 1);
+        assert_eq!(reply["result"]["server"]["streams"][0]["id"], "x");
+
+        // Metadata shows up as the stream's properties.
+        a.set_metadata(&StreamMetadata {
+            title: Some("Song".into()),
+            artist: vec!["Band".into()],
+            ..StreamMetadata::default()
+        })
+        .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let reply = rpc_over_tcp(
+                tcp,
+                r#"{"jsonrpc":"2.0","id":2,"method":"Server.GetStatus"}"#,
+            );
+            let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+            let metadata = &reply["result"]["server"]["streams"][0]["properties"]["metadata"];
+            if metadata["title"] == "Song" {
+                assert_eq!(metadata["artist"], serde_json::json!(["Band"]));
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "metadata not applied");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        // The control ports close with the server.
+        drop(a);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::net::TcpStream::connect(("127.0.0.1", tcp)).is_ok()
+            || std::net::TcpStream::connect(("127.0.0.1", http)).is_ok()
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "control ports still open"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     #[test]

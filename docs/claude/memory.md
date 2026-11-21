@@ -3,7 +3,7 @@
 Working memory for agents and humans continuing this project. Keep it current:
 update **State** and **Plan** when a step is finished, and add decisions with a date.
 
-Last updated: 2026-11-21 (P2 step 2 done: `snapcast-control` crate in the fork; next: engine and snapsink).
+Last updated: 2026-11-21 (P2 step 3 done: snapsink serves JSON-RPC and Snapweb, tags as metadata; next: browser check, `Stream.Control`).
 
 ## Resume here (2026-11-21)
 
@@ -31,11 +31,11 @@ upstream PR candidate for `metaneutrons/snapcast-rs`; no PR opened yet.
 
 **Next, in this order:**
 1. Look at the pending results; fix what fails, record gotchas in `docs/testing*.md`.
-2. **P2, control plane** (see Plan; steps 1 and 2 are done). Next, step 3: wire
-   `snapcast-control` into `gst-snapcast-engine` (feature `control`) and `snapsink`
-   (`control-port`, `snapweb-dir`). Fork commit `9a4c2b4` (`feat(control): …`) is **not
-   pushed yet**; add `snapcast-control` to the root `[workspace.dependencies]` when the
-   engine starts using it.
+2. **P2, control plane** (see Plan; steps 1–3 are done). Next: the user checks Snapweb in
+   a browser on the host (`scripts/fetch-snapweb.sh`, then `CONTROL=1 make listen-send`
+   and receivers; F4), then decide how `Stream.Control` should work (bus message, and
+   how an application declares `canPlay`/`canGoNext`, …). Fork commits **not pushed
+   yet**: `9a4c2b4` feat(control), `152dce6` fix(proto), `7aede14` fix(server).
 3. P4, evaluation: F3 endurance (hours, memory/latency), F5 lifecycle
    (PLAYING→PAUSED→PLAYING, stop/restart; reconnect is done), F1 listening, write-up.
 
@@ -287,7 +287,7 @@ Not blocking, left over from P3:
   `docs/architecture.md`, "Publishing".
 - 2026-11-21 (with the user): **P2 direction.**
   - **Snapweb is the user-facing control UI.** It is only served as static files
-    (`snapweb-dir`; Debian ships it in `/usr/share/snapserver/snapweb`), never vendored.
+    (`snapweb-dir`), never vendored. ~~Debian ships it~~: Debian's `/usr/share/snapserver/snapweb` is only a placeholder page (found 2026-11-21); `scripts/fetch-snapweb.sh` downloads the release (v0.9.3, checksum pinned).
   - **No separate control application, no D-Bus.** JSON-RPC (TCP and WebSocket) is the
     inter-process interface: it is network-capable, language-neutral, and already spoken
     by Snapweb, Snapdroid and Home Assistant. D-Bus has no session bus on Android and is
@@ -380,7 +380,22 @@ inter-process interface, contract = trait `SnapControl`. Already done before P2
    (pure Rust, off by default). `snapcast-server` unchanged; `snapserver-rs` behaves as
    before (smoke-tested: TCP, HTTP POST, Snapweb from `doc_root`). New end-to-end tests
    `snapcast-tests/tests/control.rs` (TCP with a real client, WebSocket, POST, static files).
-3. **Engine and snapsink:** feature `control`; one control endpoint per shared server.
+3. **Engine and snapsink: done 2026-11-21** (except `Stream.Control`, see below). Engine
+   feature `control`: `ServerOptions::control` (`ControlOptions`: `tcp_port`, `http_port`,
+   `Some(0)` = ephemeral, `snapweb_dir`), bound in `acquire_stream` (a taken port fails
+   it), served on the engine runtime, aborted with the server;
+   `StreamHandle::control_tcp_port`/`control_http_port`; mDNS announces
+   `_snapcast-ctrl._tcp`/`_snapcast-http._tcp` with the stream port (one daemon).
+   `StreamHandle::set_metadata(StreamMetadata)` (try_send, never blocks). `snapsink`:
+   `control-port`, `http-port` (0 = off, default: opt-in because there is no auth and
+   tests/C++ peers use 1705/1780), `snapweb-dir`; tag events → metadata, republished only
+   on change. Needed two snapcast-rs fixes (fork, PR candidates): `fix(proto)`
+   `StreamProperties` camelCase and no `null`s (Snapweb crashes on `"metadata": null`),
+   `fix(server)` `to_status` dropped stream properties. Tests: engine
+   `control_api_runs_and_stops_with_the_server`, snapsrc `tests/control.rs` (JSON-RPC
+   status with tags, `Client.SetVolume` reaches snapsrc, Snapweb files over HTTP).
+   `scripts/fetch-snapweb.sh`; `listen.sh` `CONTROL=1`. Original plan text:
+   feature `control`; one control endpoint per shared server.
    The crate takes over the server's `mpsc::Receiver<ServerEvent>` (the engine only logs
    it today) and fans it out (notifications, engine, logging). `snapsink`: properties
    `control-port` (`0` = off) and `snapweb-dir`; GStreamer tags as stream metadata;

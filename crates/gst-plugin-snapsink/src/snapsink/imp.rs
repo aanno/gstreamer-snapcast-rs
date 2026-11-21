@@ -26,6 +26,14 @@
 //!
 //! The stream is acquired in `set_caps`, because snapcast-rs fixes a stream's
 //! sample format when the server starts.
+//!
+//! # Control API and metadata
+//!
+//! `control-port` / `http-port` make the (shared) server offer the Snapcast
+//! JSON-RPC control API, `snapweb-dir` serves Snapweb with it; all are set by the
+//! first snapsink of a server. Tag events become the stream's metadata (title,
+//! artist, album, duration), shown by controllers; it is republished only when one
+//! of these changes, not for every tag event (decoders send bitrate updates).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -36,7 +44,9 @@ use gst::prelude::*;
 use gst::subclass::prelude::*;
 use gst_base::prelude::*;
 use gst_base::subclass::prelude::*;
-use gst_snapcast_engine::server::{self, ServerOptions, StreamHandle, StreamOptions};
+use gst_snapcast_engine::server::{
+    self, ControlOptions, ServerOptions, StreamHandle, StreamMetadata, StreamOptions,
+};
 use gst_snapcast_engine::{PcmFormat, now_usec};
 
 static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
@@ -63,6 +73,9 @@ struct Settings {
     codec: String,
     buffer_ms: u32,
     mdns_name: String,
+    control_port: u32,
+    http_port: u32,
+    snapweb_dir: String,
 }
 
 impl Default for Settings {
@@ -73,6 +86,22 @@ impl Default for Settings {
             codec: server::DEFAULT_CODEC.to_owned(),
             buffer_ms: DEFAULT_BUFFER_MS,
             mdns_name: DEFAULT_MDNS_NAME.to_owned(),
+            control_port: 0,
+            http_port: 0,
+            snapweb_dir: String::new(),
+        }
+    }
+}
+
+impl Settings {
+    fn control_options(&self) -> ControlOptions {
+        let port = |p: u32| (p != 0).then_some(p as u16);
+        ControlOptions {
+            tcp_port: port(self.control_port),
+            http_port: port(self.http_port),
+            snapweb_dir: Some(self.snapweb_dir.as_str())
+                .filter(|d| !d.is_empty())
+                .map(Into::into),
         }
     }
 }
@@ -89,17 +118,51 @@ struct Active {
     stream: StreamHandle,
     /// Timestamping without a clock: anchor + sample count.
     fallback: Option<Fallback>,
+    /// Metadata last published for the stream.
+    published: Option<StreamMetadata>,
 }
 
 #[derive(Default)]
 pub struct SnapSink {
     settings: Mutex<Settings>,
     state: Mutex<Option<Active>>,
+    /// All tags received so far (merged), also before the stream is acquired.
+    tags: Mutex<Option<gst::TagList>>,
     /// Set by `unlock()` to interrupt the pacing wait in `render()`.
     flushing: AtomicBool,
 }
 
+/// The Snapcast metadata in `tags`.
+fn metadata_from_tags(tags: &gst::TagListRef) -> StreamMetadata {
+    StreamMetadata {
+        title: tags.get::<gst::tags::Title>().map(|v| v.get().to_owned()),
+        artist: tags
+            .iter_tag::<gst::tags::Artist>()
+            .map(|v| v.get().to_owned())
+            .collect(),
+        album: tags.get::<gst::tags::Album>().map(|v| v.get().to_owned()),
+        duration_secs: tags
+            .get::<gst::tags::Duration>()
+            .map(|v| v.get().nseconds() as f64 / 1e9),
+    }
+}
+
 impl SnapSink {
+    /// Publishes the metadata of the tags received so far, if it changed.
+    fn publish_metadata(&self, active: &mut Active) {
+        let Some(metadata) = self.tags.lock().unwrap().as_deref().map(metadata_from_tags) else {
+            return;
+        };
+        if active.published.as_ref() == Some(&metadata) {
+            return;
+        }
+        gst::debug!(CAT, imp = self, "Publishing metadata {metadata:?}");
+        match active.stream.set_metadata(&metadata) {
+            Ok(()) => active.published = Some(metadata),
+            Err(e) => gst::warning!(CAT, imp = self, "Cannot publish metadata: {e}"),
+        }
+    }
+
     /// Snapcast server time (µs) of the first sample in `buffer`.
     fn server_timestamp(&self, buffer: &gst::BufferRef, active: &mut Active) -> i64 {
         let obj = self.obj();
@@ -191,6 +254,37 @@ impl ObjectImpl for SnapSink {
                     .default_value(Some(DEFAULT_MDNS_NAME))
                     .mutable_ready()
                     .build(),
+                glib::ParamSpecUInt::builder("control-port")
+                    .nick("Control port")
+                    .blurb(
+                        "TCP port for the Snapcast JSON-RPC control API (Snapcast's default \
+                         is 1705; 0 = off). No authentication: anyone who can reach it \
+                         controls the server (set by the first snapsink of a server)",
+                    )
+                    .maximum(u16::MAX.into())
+                    .default_value(0)
+                    .mutable_ready()
+                    .build(),
+                glib::ParamSpecUInt::builder("http-port")
+                    .nick("HTTP port")
+                    .blurb(
+                        "HTTP port for the JSON-RPC control API over HTTP and WebSocket, and \
+                         for snapweb-dir (Snapcast's default is 1780; 0 = off). No \
+                         authentication (set by the first snapsink of a server)",
+                    )
+                    .maximum(u16::MAX.into())
+                    .default_value(0)
+                    .mutable_ready()
+                    .build(),
+                glib::ParamSpecString::builder("snapweb-dir")
+                    .nick("Snapweb directory")
+                    .blurb(
+                        "Directory with Snapweb's files, served on http-port (e.g. \
+                         ~/.local/share/snapweb from scripts/fetch-snapweb.sh); empty: none \
+                         (set by the first snapsink of a server)",
+                    )
+                    .mutable_ready()
+                    .build(),
                 glib::ParamSpecUInt::builder("bound-port")
                     .nick("Bound port")
                     .blurb("Port the server actually listens on (0 while not running)")
@@ -235,6 +329,14 @@ impl ObjectImpl for SnapSink {
                     .expect("type checked upstream")
                     .unwrap_or_default();
             }
+            "control-port" => settings.control_port = value.get().expect("type checked upstream"),
+            "http-port" => settings.http_port = value.get().expect("type checked upstream"),
+            "snapweb-dir" => {
+                settings.snapweb_dir = value
+                    .get::<Option<String>>()
+                    .expect("type checked upstream")
+                    .unwrap_or_default();
+            }
             _ => unimplemented!(),
         }
     }
@@ -256,6 +358,9 @@ impl ObjectImpl for SnapSink {
                     "codec" => settings.codec.to_value(),
                     "buffer-ms" => settings.buffer_ms.to_value(),
                     "mdns-name" => settings.mdns_name.to_value(),
+                    "control-port" => settings.control_port.to_value(),
+                    "http-port" => settings.http_port.to_value(),
+                    "snapweb-dir" => settings.snapweb_dir.to_value(),
                     _ => unimplemented!(),
                 }
             }
@@ -309,6 +414,7 @@ impl BaseSinkImpl for SnapSink {
     fn stop(&self) -> Result<(), gst::ErrorMessage> {
         // Dropping the handle releases the stream (and the server, if last).
         *self.state.lock().unwrap() = None;
+        *self.tags.lock().unwrap() = None;
         gst::info!(CAT, imp = self, "Stopped");
         Ok(())
     }
@@ -321,6 +427,23 @@ impl BaseSinkImpl for SnapSink {
     fn unlock_stop(&self) -> Result<(), gst::ErrorMessage> {
         self.flushing.store(false, Ordering::SeqCst);
         Ok(())
+    }
+
+    fn event(&self, event: gst::Event) -> bool {
+        if let gst::EventView::Tag(tag) = event.view() {
+            {
+                let mut tags = self.tags.lock().unwrap();
+                let merged = match tags.as_ref() {
+                    Some(old) => old.merge(tag.tag(), gst::TagMergeMode::Replace),
+                    None => tag.tag_owned(),
+                };
+                *tags = Some(merged);
+            }
+            if let Some(active) = self.state.lock().unwrap().as_mut() {
+                self.publish_metadata(active);
+            }
+        }
+        self.parent_event(event)
     }
 
     fn set_caps(&self, caps: &gst::Caps) -> Result<(), gst::LoggableError> {
@@ -346,6 +469,7 @@ impl BaseSinkImpl for SnapSink {
             port: settings.port as u16,
             buffer_ms: settings.buffer_ms,
             mdns_name: Some(settings.mdns_name.clone()).filter(|n| !n.is_empty()),
+            control: settings.control_options(),
         };
         let stream_opts = StreamOptions {
             name: settings.stream.clone(),
@@ -360,16 +484,20 @@ impl BaseSinkImpl for SnapSink {
         gst::info!(
             CAT,
             imp = self,
-            "Feeding stream '{}' ({} {format}) on port {}",
+            "Feeding stream '{}' ({} {format}) on port {}; control: TCP {:?}, HTTP {:?}",
             stream.name(),
             settings.codec,
-            stream.port()
+            stream.port(),
+            stream.control_tcp_port(),
+            stream.control_http_port()
         );
-        *state = Some(Active {
+        let active = state.insert(Active {
             info,
             stream,
             fallback: None,
+            published: None,
         });
+        self.publish_metadata(active);
         drop(state);
         self.obj().notify("bound-port");
         Ok(())

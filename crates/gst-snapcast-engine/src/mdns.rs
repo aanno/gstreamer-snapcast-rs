@@ -6,12 +6,18 @@
 //! still finds servers that announce themselves via Avahi (C++ snapserver), because
 //! it is the same protocol on the wire.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "client")]
+use std::time::Instant;
 
 use crate::EngineError;
 
 /// The service type Snapcast servers announce their stream port under.
 pub const SERVICE_TYPE: &str = snapcast_proto::DEFAULT_MDNS_SERVICE_TYPE;
+/// The service type of the JSON-RPC control port over TCP (as the C++ snapserver).
+pub const CONTROL_SERVICE_TYPE: &str = "_snapcast-ctrl._tcp.local.";
+/// The service type of the HTTP port (JSON-RPC, WebSocket, Snapweb; as the C++ snapserver).
+pub const HTTP_SERVICE_TYPE: &str = "_snapcast-http._tcp.local.";
 
 fn daemon() -> Result<mdns_sd::ServiceDaemon, EngineError> {
     mdns_sd::ServiceDaemon::new().map_err(|e| EngineError::Mdns(e.to_string()))
@@ -79,45 +85,61 @@ pub fn discover(timeout: Duration, name: Option<&str>) -> Result<(String, u16), 
     result
 }
 
-/// A running mDNS announcement of a server's stream port; withdrawn when dropped.
+/// A running mDNS announcement of a server's ports; withdrawn when dropped.
 #[cfg(feature = "server")]
 pub(crate) struct Announcement {
     daemon: mdns_sd::ServiceDaemon,
-    fullname: String,
+    fullnames: Vec<String>,
 }
 
 #[cfg(feature = "server")]
 impl std::fmt::Debug for Announcement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Announcement")
-            .field("fullname", &self.fullname)
+            .field("fullnames", &self.fullnames)
             .finish()
     }
 }
 
-/// Announces a Snapcast server's stream `port` under the instance `name`.
+/// Announces a Snapcast server's ports under the instance `name`: each
+/// `(service type, port)` of `services`, the stream port ([`SERVICE_TYPE`]) first.
 #[cfg(feature = "server")]
-pub(crate) fn announce(name: &str, port: u16) -> Result<Announcement, EngineError> {
+pub(crate) fn announce(name: &str, services: &[(&str, u16)]) -> Result<Announcement, EngineError> {
     let daemon = daemon()?;
     // The host label only has to be unique; the addresses come from the interfaces.
-    let host = format!("gst-snapcast-engine-{}-{port}.local.", std::process::id());
-    let info = mdns_sd::ServiceInfo::new(SERVICE_TYPE, name, &host, "", port, None)
-        .map_err(|e| EngineError::Mdns(e.to_string()))?
-        .enable_addr_auto();
-    let fullname = info.get_fullname().to_owned();
-    daemon
-        .register(info)
-        .map_err(|e| EngineError::Mdns(e.to_string()))?;
-    tracing::info!(%fullname, port, "Announcing Snapcast server via mDNS");
-    Ok(Announcement { daemon, fullname })
+    let stream_port = services.first().map_or(0, |&(_, port)| port);
+    let host = format!(
+        "gst-snapcast-engine-{}-{stream_port}.local.",
+        std::process::id()
+    );
+    let mut announcement = Announcement {
+        daemon,
+        fullnames: Vec::new(),
+    };
+    for &(service_type, port) in services {
+        let info = mdns_sd::ServiceInfo::new(service_type, name, &host, "", port, None)
+            .map_err(|e| EngineError::Mdns(e.to_string()))?
+            .enable_addr_auto();
+        let fullname = info.get_fullname().to_owned();
+        // On error, dropping `announcement` withdraws what was registered so far.
+        announcement
+            .daemon
+            .register(info)
+            .map_err(|e| EngineError::Mdns(e.to_string()))?;
+        tracing::info!(%fullname, port, "Announcing Snapcast server via mDNS");
+        announcement.fullnames.push(fullname);
+    }
+    Ok(announcement)
 }
 
 #[cfg(feature = "server")]
 impl Drop for Announcement {
     fn drop(&mut self) {
-        // Sends a goodbye packet, so clients forget us right away.
-        if let Ok(done) = self.daemon.unregister(&self.fullname) {
-            let _ = done.recv_timeout(Duration::from_millis(500));
+        // Sends goodbye packets, so clients forget us right away.
+        for fullname in &self.fullnames {
+            if let Ok(done) = self.daemon.unregister(fullname) {
+                let _ = done.recv_timeout(Duration::from_millis(500));
+            }
         }
         let _ = self.daemon.shutdown();
     }

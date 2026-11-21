@@ -25,8 +25,10 @@ a step is done, and record new decisions with a date.
 
 Short version (2026-11-21): goal is a **feasibility prototype**. Loopback, C++ interop in
 both directions (`make test-interop`), timing (`make test-aloop`, P3), mDNS, reconnect,
-volume/mute and logging (L9) work. Next: the control plane (P2), then the evaluation
-(P4). Multiple streams per server are postponed.
+volume/mute and logging (L9) work. Control plane (P2): `snapsink` serves the JSON-RPC
+API and Snapweb (crate `snapcast-control` in the fork); `Stream.Control` and a browser
+check with Snapweb are open. Then the evaluation (P4). Multiple streams per server are
+postponed.
 
 ## Commands
 
