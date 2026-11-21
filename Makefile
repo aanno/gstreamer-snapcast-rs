@@ -1,6 +1,6 @@
 .PHONY: check fmt fmt-fix clippy test doc build release inspect submodule \
 	install uninstall install-system uninstall-system test-interop test-aloop test-mdns doctor \
-	listen-send listen-recv listen-cpp-client listen-cpp-server listen-pair listen-all
+	listen-send listen-recv listen-cpp-client listen-cpp-server listen-pair listen-all listen-show
 
 PLUGIN_PATH := $(CURDIR)/target/debug
 PLUGINS := libgstsnapsink.so libgstsnapsrc.so
@@ -93,3 +93,7 @@ endif
 
 listen-send listen-recv listen-cpp-client listen-cpp-server listen-pair listen-all: $(LISTEN_DEPS)
 	$(LISTEN_ENV) scripts/listen.sh $(patsubst listen-%,%,$@)
+
+## Print the commands a listening test runs, with notes, without running them (WHAT=send|recv|...)
+listen-show:
+	@$(LISTEN_ENV) scripts/listen.sh show $(or $(WHAT),all)

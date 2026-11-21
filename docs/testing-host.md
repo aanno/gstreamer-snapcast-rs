@@ -56,7 +56,12 @@ make listen-recv HOST=192.168.1.10    # on another machine
 make listen-cpp-client HOST=...   # same, with the C++ snapclient
 make listen-pair HOST=...         # both receivers at once
 make listen-cpp-server            # C++ snapserver as sender; then listen-recv
+make listen-show WHAT=all         # only print the commands, with a note per element
 ```
+
+Each target first prints the commands it runs, ready to copy, with a short note per
+element (`QUIET=1` drops the notes; `scripts/listen.sh --help` for all settings). For
+writing your own pipelines see [pipelines.md](pipelines.md).
 
 The default source is `SRC=ticks`, a click every second. With two receivers on the same
 speakers, in sync sounds like a single click and out of sync like a double click.

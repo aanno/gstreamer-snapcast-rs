@@ -96,6 +96,7 @@ first).
 ├── snapcast-rs/               # git submodule (fork of metaneutrons/snapcast-rs), own Cargo workspace
 ├── docs/
 │   ├── architecture.md        # crates and their rules, threads, logging, interfaces
+│   ├── pipelines.md           # cookbook: your own pipelines with snapsink/snapsrc
 │   ├── testing*.md            # tests, host and devcontainer setup, gotchas
 │   ├── gstreamer-plugins/     # design discussion (background)
 │   └── claude/memory.md       # current state, decisions, limitations, plan
@@ -185,6 +186,10 @@ gst-launch-1.0 audiotestsrc is-live=true ! audio/x-raw,format=S16LE,rate=48000,c
 # terminal 2: receiver (or any Snapcast client, e.g. `snapclient -h 127.0.0.1`)
 gst-launch-1.0 snapsrc ! audioconvert ! audioresample ! autoaudiosink
 ```
+
+More recipes (desktop audio, files, several streams, devices, EQ, recording) and an
+introduction to `gst-launch-1.0`: [docs/pipelines.md](docs/pipelines.md).
+`make listen-show` prints the commands of the listening tests with a note per element.
 
 ### Sender and receivers on different machines
 

@@ -71,6 +71,13 @@ Not blocking, left over from P3:
   from our workspace, used via path deps. The fork carries our upstream PR candidates
   (L2, L3, L4, L8, the tracing context for L9, a rustdoc fix). Crates, rules, threads
   and logging: `docs/architecture.md`.
+- **listen.sh and cookbook (2026-11-21):** `scripts/listen.sh` prints every command it runs
+  (copyable, a note per element; `show <cmd>`, `--help`, `QUIET=1`, `make listen-show`).
+  New `docs/pipelines.md`: gst-launch introduction and recipes, each tested here unless
+  marked. Found while testing the recipes: **fixed** snapsrc negotiating `rate=1,
+  channels=1` before the stream format was known (`snapsrc ! audioconvert ! wavenc` failed
+  with not-negotiated; now `negotiate()` waits for the format; regression test
+  `first_caps_are_the_stream_format`), and **L14** (sender and receiver in one pipeline).
 - **Logging (L9, 2026-11-21):** snapcast-rs and engine `tracing` events and `log` records
   (mdns-sd, symphonia) go to the GStreamer debug log, categories `snapcast-client`,
   `-server`, `-engine`, `-mdns`, `-deps`, tagged `<snapsrc0>` / `<snapserver:<port>>` via
@@ -295,6 +302,7 @@ Not blocking, left over from P3:
 | L11 | snapcast-rs cannot serve **audio** over WebSocket (C++ snapserver: `/stream` on port 1780, used by Snapweb's player). Its WebSocket endpoint carries only JSON-RPC | snapcast-rs server | — | Only if a WebSocket audio client must work with `snapsink` (open question) |
 | L12 | ~~`snapsrc` → `alsasink` (`skew`, 40 ms tolerance) follows a drifting card, not the server~~ | `snapsrc` + audio sink | — | **Fixed 2026-11-19**: snapsrc sets `slave-method=resample` on the downstream audio sink (`adjust-sink`); rate error −17…+4 ppm (was +300) on a −300 ppm card, ~1 ms from the server timeline |
 | L13 | ~~`snapsrc` plays late by its pipeline latency~~ (+62 ms with 65 ms latency) | `snapsrc` PTS | — | **Fixed 2026-11-19**: `pts = playout − pipeline latency`; now −3…+1 ms, in sync with the C++ snapclient (+0.4 ms) |
+| L14 | `snapsink` and `snapsrc` **in one pipeline** never reach PLAYING (no audio; Ctrl+C with `-e` hangs): snapsink prerolls and waits for PLAYING, the receiver's sink waits for its first buffer, which needs snapsink to send | both elements, GStreamer preroll | `async=false` on one sink (e.g. `snapsink async=false`); separate processes are not affected. Documented in `docs/pipelines.md` 5.4 | Open (found 2026-11-21): decide whether `snapsink` should default to `async=false` (consequences for non-live sources and PAUSED) |
 
 ## Plan (2026-11-10, agreed)
 
