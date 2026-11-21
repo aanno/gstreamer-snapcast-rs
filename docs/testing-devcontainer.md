@@ -5,6 +5,30 @@ The devcontainer has everything for building, `make check`, `make test-interop` 
 the host's `snd-aloop` loopback card. Real listening tests belong on the host
 ([testing-host.md](testing-host.md)). Overview of all tests: [testing.md](testing.md).
 
+## Host preparation: the loopback card
+
+The container's sound card comes from the host's `snd-aloop` kernel module. Load it on the
+host (Fedora 45 here) **before** the container starts, and make that permanent:
+
+```sh
+# on the host, once:
+echo snd_aloop | sudo tee /etc/modules-load.d/snd_aloop.conf   # load it at every boot
+sudo modprobe snd_aloop                                        # and now, without a reboot
+aplay -l | grep Loopback                                       # card "Loopback" with 8 subdevices
+```
+
+(`snd_aloop` and `snd-aloop` are the same module name; the file name doesn't matter as
+long as it ends in `.conf`.)
+
+- The container gets the sound devices that exist **when it starts** (`--device=/dev/snd`).
+  If you load the module later, restart the container (in VS Code: *Dev Containers:
+  Rebuild Container*, or stop and start it).
+- Check inside the container: `aplay -l` lists `Loopback`, and `make doctor` reports it.
+  `make test-aloop` fails with `no 'Loopback' sound card` otherwise.
+- On a desktop host, PipeWire sees the loopback card as an ordinary sound card. Don't pick
+  it as your output. To hide it, see the WirePlumber snippet in
+  [testing-host.md](testing-host.md).
+
 ## What the container provides
 
 - Rust toolchain from `rust-toolchain.toml`, including `rust-analyzer` (for VS Code and
@@ -16,8 +40,8 @@ the host's `snd-aloop` loopback card. Real listening tests belong on the host
   The terminals get it, but agent tool shells may not (they don't get `containerEnv`): set
   it explicitly there.
 - `--device=/dev/snd`: the host's sound devices, in particular the loopback card. Load it on
-  the host first (`sudo modprobe snd-aloop`). On a host without `/dev/snd`, remove that line
-  from `.devcontainer/devcontainer.json`.
+  the host first ([Host preparation](#host-preparation-the-loopback-card)). On a host
+  without `/dev/snd`, remove that line from `.devcontainer/devcontainer.json`.
 
 ## Sound in the container: ALSA on the loopback card
 
