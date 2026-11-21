@@ -3,7 +3,7 @@
 Working memory for agents and humans continuing this project. Keep it current:
 update **State** and **Plan** when a step is finished, and add decisions with a date.
 
-Last updated: 2026-11-21 (P2 step 1 done: reference submodules, gap list; next: the control crate).
+Last updated: 2026-11-21 (P2 step 2 done: `snapcast-control` crate in the fork; next: engine and snapsink).
 
 ## Resume here (2026-11-21)
 
@@ -31,11 +31,11 @@ upstream PR candidate for `metaneutrons/snapcast-rs`; no PR opened yet.
 
 **Next, in this order:**
 1. Look at the pending results; fix what fails, record gotchas in `docs/testing*.md`.
-2. **P2, control plane** (see Plan; step 1, the analysis, is done). Next, step 2 in the
-   fork: extract the control code of `snapserver-rs` into a **new control library crate**
-   with the `SnapControl` trait. Clarify with the user first: the crate's name, and
-   whether HTTP/WebSocket (axum) is in it or behind a feature (server side = sender, so it
-   must stay Android-portable).
+2. **P2, control plane** (see Plan; steps 1 and 2 are done). Next, step 3: wire
+   `snapcast-control` into `gst-snapcast-engine` (feature `control`) and `snapsink`
+   (`control-port`, `snapweb-dir`). Fork commit `9a4c2b4` (`feat(control): …`) is **not
+   pushed yet**; add `snapcast-control` to the root `[workspace.dependencies]` when the
+   engine starts using it.
 3. P4, evaluation: F3 endurance (hours, memory/latency), F5 lifecycle
    (PLAYING→PAUSED→PLAYING, stop/restart; reconnect is done), F1 listening, write-up.
 
@@ -316,7 +316,7 @@ Not blocking, left over from P3:
 | L7 | ~~`sync=false` with a non-live source floods clients~~ | `snapsink` | — | **Fixed 2026-11-19**: snapsink paces itself, sending a chunk at most 200 ms ahead of its server timestamp (interruptible wait). Test `paces_a_non_live_source_without_sync` (before: 1.07 s of audio in 3 ms) |
 | L8 | ~~No reconnect handling, server volume/mute, mDNS or client id in `snapsrc`~~ | `snapsrc` | — | **Done 2026-11-19**: reconnect (verified), client id (`host-id`, automatic `instance`, server appends `#instance`), server volume/mute (linear gain, read-only properties), **mDNS** via the pure-Rust `mdns-sd`: snapsink announces (`mdns-name`, not for `port=0`), snapsrc with an empty `host` discovers (optional `mdns-name` filter, 5 s, skips IPv6 link-local). Tests: `make test-mdns` (devcontainer: passes; the C++ peers need `avahi-daemon`, host only) |
 | L9 | ~~snapcast-rs `tracing` output is not visible in GStreamer logs~~ | engine | — | **Fixed 2026-11-21**: `gst-snapcast-common::log` bridges `tracing` and `log` into the GStreamer debug log (`snapcast-*` categories, element names via `log_id` spans); fork commit for the server's tasks and encoder threads (upstream PR candidate). See `docs/architecture.md` |
-| L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | **Changed 2026-11-19 (user): nothing is copied.** Create a control library crate in snapcast-rs (fork first, upstream PR candidate) that both `snapserver-rs` and `gst-snapcast-engine` use. 2026-11-21: the event → notification loop is in `main.rs` too and must move as well; gap list in Plan, P2 |
+| L10 | JSON-RPC exists only in the `snapserver-rs` binary (`jsonrpc.rs`, `control.rs` for TCP, `http.rs` for HTTP/WS via axum, `auth.rs`). The library only has `ServerCommand`/`ServerEvent` | snapcast-rs | — | **Changed 2026-11-19 (user): nothing is copied.** Create a control library crate in snapcast-rs (fork first, upstream PR candidate) that both `snapserver-rs` and `gst-snapcast-engine` use. 2026-11-21: the event → notification loop is in `main.rs` too and must move as well; gap list in Plan, P2. **Fixed in the fork 2026-11-21** (`9a4c2b4`, crate `snapcast-control`); used by the engine from P2 step 3 |
 | L11 | snapcast-rs cannot serve **audio** over WebSocket (C++ snapserver: `/stream` on port 1780, used by Snapweb's player). Its WebSocket endpoint carries only JSON-RPC | snapcast-rs server | — | Only if a WebSocket audio client must work with `snapsink` (open question) |
 | L12 | ~~`snapsrc` → `alsasink` (`skew`, 40 ms tolerance) follows a drifting card, not the server~~ | `snapsrc` + audio sink | — | **Fixed 2026-11-19**: snapsrc sets `slave-method=resample` on the downstream audio sink (`adjust-sink`); rate error −17…+4 ppm (was +300) on a −300 ppm card, ~1 ms from the server timeline |
 | L13 | ~~`snapsrc` plays late by its pipeline latency~~ (+62 ms with 65 ms latency) | `snapsrc` PTS | — | **Fixed 2026-11-19**: `pts = playout − pipeline latency`; now −3…+1 ms, in sync with the C++ snapclient (+0.4 ms) |
@@ -364,11 +364,22 @@ inter-process interface, contract = trait `SnapControl`. Already done before P2
 (2026-11-19, L8): `snapsrc` applies the server's volume/mute (read-only `volume`/`mute`).
 
 1. **Analysis: done 2026-11-21.** Reference submodules added; gap list below.
-2. **Control crate in the fork:** extract from `snapserver-rs` the JSON-RPC dispatcher
-   (`jsonrpc.rs`), notification builders (`notify.rs`), the **event → notification loop
-   (now in `main.rs`)**, TCP control (`control.rs`, 1705) and HTTP/WS (`http.rs`, 1780,
-   `/jsonrpc` plus `doc_root`); `auth.rs` stays optional. Add the `SnapControl` trait.
-   `snapserver-rs` then uses the crate. One or two upstream PRs.
+2. **Control crate in the fork: done 2026-11-21** (fork commit `9a4c2b4`, one upstream PR
+   candidate). New library crate **`snapcast-control`** (name and `http` feature agreed
+   with the user): `jsonrpc.rs`, `notify.rs`, `tcp.rs` (was `control.rs`), `http.rs`,
+   `auth.rs` moved from `snapserver-rs` with `git mv`; the event → notification loop from
+   `main.rs` became `ControlServer::forward_events`. API: trait **`SnapControl`** (one
+   async method per `ServerCommand` the API needs; returns `impl Future + Send`, impl for
+   `mpsc::Sender<ServerCommand>`), **`ControlServer<C>`** (`new`, `with_auth`,
+   `with_extensions`, `notify`, `serve_tcp(listener)`, `serve_http(listener, doc_root)`,
+   `forward_events(events, passthrough)`), `ControlEvent`, `ControlError`, `auth`.
+   Differences from the 2026-11-21 sketch: events are **not** in the trait (they come
+   from `SnapServer::new`, not the command channel), and `ServerEvent` is not `Clone`, so
+   `forward_events` passes each event on through an optional channel instead of
+   broadcasting it. Feature `http` (default) gates axum/tower-http; auth is always in
+   (pure Rust, off by default). `snapcast-server` unchanged; `snapserver-rs` behaves as
+   before (smoke-tested: TCP, HTTP POST, Snapweb from `doc_root`). New end-to-end tests
+   `snapcast-tests/tests/control.rs` (TCP with a real client, WebSocket, POST, static files).
 3. **Engine and snapsink:** feature `control`; one control endpoint per shared server.
    The crate takes over the server's `mpsc::Receiver<ServerEvent>` (the engine only logs
    it today) and fans it out (notifications, engine, logging). `snapsink`: properties
