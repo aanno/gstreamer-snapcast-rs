@@ -12,10 +12,10 @@ to do when something doesn't work, is in:
 
 | Command | What it tests | Needs | Part of `make check` |
 |---|---|---|---|
-| `make test` | Unit and integration tests: properties, `snapsink → snapsrc` loopback over TCP (signal, PTS continuity, scheduling), the control API (JSON-RPC over TCP, metadata from tags, `controls` and `Stream.Control` as a bus message, volume reaching snapsrc, Snapweb files over HTTP) | GStreamer base/good plugins | yes |
+| `make test` | Unit and integration tests: properties, `snapsink → snapsrc` loopback over TCP (signal, PTS continuity, scheduling), the control API (JSON-RPC over TCP, metadata from tags, `controls` and `Stream.Control` as a bus message, volume reaching snapsrc, Snapweb files over HTTP), lifecycle (F5: a sender pause becomes silence on a continuous timeline, a receiver resumes on schedule after its own pause, a restarted snapsrc is the same client) | GStreamer base/good plugins | yes |
 | `make check` | `fmt` + `clippy -D warnings` + `test` + `doc -D warnings` | as above | — |
 | `make test-interop` | `snapsink` → C++ `snapclient`, and C++ `snapserver` → `snapsrc`, for `pcm` and `flac` | C++ `snapclient`/`snapserver` (`SNAPCLIENT=`/`SNAPSERVER=`) | no (`#[ignore]`) |
-| `make test-aloop` | Timing on a (virtual) sound card: offset between two receivers, and following a drifting card (F2) | `snd-aloop`, `amixer`, `alsasrc`/`alsasink`, C++ `snapclient` for two of the four tests | no (`#[ignore]`) |
+| `make test-aloop` | Timing on a (virtual) sound card: offset between two receivers, and following a drifting card (F2); a sender pause is silent and both receivers are in sync afterwards (F5) | `snd-aloop`, `amixer`, `alsasrc`/`alsasink`, C++ `snapclient` for two of the four tests | no (`#[ignore]`) |
 | `make test-mdns` | snapsrc without a host finds a snapsink via mDNS; a missing server gives a clear error within 5 s; snapsink announces its control ports | multicast on the network (works in the devcontainer and on the host) | no (`#[ignore]`) |
 | `make listen-*` | By ear: sender, receivers, combinations with the C++ peers | speakers (host), installed plugins or `LOCAL=1` | no |
 | `make doctor` | Not a test: reports tools, elements, plugins and sound devices | — | — |
@@ -56,9 +56,17 @@ audiotestsrc wave=ticks ! snapsink (embedded server)
   pipeline latency (150 ms) is larger than its `alsasink` buffer (40 ms), like `pulsesink`,
   and checks the recording for silent gaps. Before the 2026-11-19 fix it found 104 gaps of
   96 ms in 20 s.
+- **Sender pause (F5):** `aloop_sender_pause_is_silent_and_resumes_in_sync` pauses the
+  sender for 4 s, with snapsrc and the C++ snapclient as receivers. Both must play digital
+  silence meanwhile (peak 0), snapsrc's ticks keep 1 s spacing from 1.5 s after the resume,
+  and the pair is within `ALOOP_TOLERANCE_US` before the pause and from 4 s after the
+  resume. Between those, `ALOOP_TOLERANCE_SETTLE_US` (5000) applies: the C++ snapclient
+  is +2…+3.5 ms off for about 3 s after such a gap (measured 2026-11-22). The live test
+  source re-anchors its timestamps after a pause (a hole or overlap of a few ms), which is
+  why the first ticks after the resume are not checked.
 - The tests run one at a time (`--test-threads=1`) because they share subdevice 0. Each takes about 25 s.
 - Settings: `ALOOP_CARD` (default `Loopback`), `ALOOP_SECONDS` (20), `ALOOP_TOLERANCE_US`
-  (1000), `ALOOP_TOLERANCE_DRIFT_US` (2500, under emulated drift), `ALOOP_TOLERANCE_PPM` (100), `ALOOP_TOLERANCE_ABS_US` (5000), `SNAPCLIENT`.
+  (1000), `ALOOP_TOLERANCE_DRIFT_US` (2500, under emulated drift), `ALOOP_TOLERANCE_SETTLE_US` (5000, see sender pause), `ALOOP_TOLERANCE_PPM` (100), `ALOOP_TOLERANCE_ABS_US` (5000), `SNAPCLIENT`.
 
 Each test prints one line, e.g.:
 

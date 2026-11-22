@@ -27,8 +27,9 @@ Short version (2026-11-21): goal is a **feasibility prototype**. Loopback, C++ i
 both directions (`make test-interop`), timing (`make test-aloop`, P3), mDNS, reconnect,
 volume/mute and logging (L9) work. Control plane (P2): `snapsink` serves the JSON-RPC
 API and Snapweb (crate `snapcast-control` in the fork), tags as metadata, `controls` with
-`Stream.Control` as a bus message; checked in a browser by the user. Then the evaluation (P4). Multiple streams per server are
-postponed.
+`Stream.Control` as a bus message; checked in a browser by the user. Evaluation (P4) in
+progress: F5 lifecycle met (snapsrc fills gaps with silence). After P4: a per-user shared
+server daemon (needs L1, multiple streams per server).
 
 ## Commands
 

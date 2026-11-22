@@ -60,6 +60,20 @@
 //! The properties follow the client's events, not the audio: a C++ snapserver
 //! sends no audio at all to a muted client, so snapsrc then produces no buffers.
 //!
+//! # Gaps
+//!
+//! When the server sends nothing (the sender is paused, the server is gone, or a
+//! C++ snapserver mutes this client), snapsrc outputs silence buffers flagged GAP,
+//! so that downstream sees a live source whose time goes on: sinks play silence,
+//! recorders and mixers keep a continuous timeline. A slot is filled shortly
+//! (`GAP_LEAD_NS`, 50 ms) before it is rendered; real audio for it would have arrived
+//! about `buffer-ms` earlier. When audio returns, the hole up to its first frame is
+//! bridged with one more silence buffer, so the output stays contiguous (no resync, no
+//! DISCONT), and frames for slots already filled are dropped. A hole in the stream
+//! itself (a jump forward beyond the aligner's resync threshold, e.g. a live sender
+//! re-anchoring its timestamps after a pause) is bridged the same way. Before the
+//! first frame there is nothing to continue, so no silence.
+//!
 //! # Late frames
 //!
 //! Downstream decides when `create()` runs: an audio sink blocks the streaming
@@ -105,6 +119,20 @@ const DEFAULT_INSTANCE: u32 = 0;
 const DEFAULT_LATENCY_MS: i32 = 0;
 const DEFAULT_ADJUST_SINK: bool = true;
 
+/// How long `create()` waits for a frame before it checks for a gap to fill.
+const GAP_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+/// Silence for an open gap goes out this long before it is rendered.
+const GAP_LEAD_NS: i64 = 50_000_000;
+/// The longest silence buffer for a gap that is still open.
+const MAX_GAP_CHUNK_NS: i64 = 100_000_000;
+/// Jumps of the ideal PTS beyond this are bridged with silence (forward) or trimmed
+/// (backward) at once; smaller ones are the aligner's gradual correction. Well above
+/// the clock-reading jitter (a fraction of a millisecond).
+const JUMP_NS: i64 = 5_000_000;
+/// The longest jump that is bridged or trimmed; beyond that, the output resyncs
+/// (DISCONT) instead.
+const MAX_BRIDGE_NS: i64 = 5_000_000_000;
+
 #[derive(Debug, Clone)]
 struct Settings {
     host: String,
@@ -145,6 +173,10 @@ struct Active {
     buffers: u64,
     /// The gain applied at the end of the last buffer (start of the next ramp).
     gain: f32,
+    /// Silence was output since the last frame (see "Gaps" in the module docs).
+    filling: bool,
+    /// A frame held back while the silence up to it goes out first.
+    pending: Option<client::PlayoutFrame>,
 }
 
 pub struct SnapSrc {
@@ -505,6 +537,8 @@ impl BaseSrcImpl for SnapSrc {
             aligner: Aligner::default(),
             buffers: 0,
             gain: 1.0,
+            filling: false,
+            pending: None,
         });
         Ok(())
     }
@@ -564,6 +598,30 @@ impl BaseSrcImpl for SnapSrc {
     }
 }
 
+impl SnapSrc {
+    /// Silence from the aligner's next PTS up to `until_ns` (running time), flagged GAP,
+    /// or `None` if there is nothing to fill or no format yet.
+    fn silence(active: &mut Active, until_ns: i64) -> Option<gst::Buffer> {
+        let info = active.info.as_ref()?;
+        let next = active.aligner.next_pts()?;
+        let rate = info.rate();
+        let n_frames =
+            usize::try_from(i128::from(until_ns - next) * i128::from(rate) / 1_000_000_000)
+                .ok()
+                .filter(|&n| n > 0)?;
+        let pts_ns = u64::try_from(active.aligner.fill(n_frames)).ok()?;
+        active.filling = true;
+        let mut buffer = gst::Buffer::from_mut_slice(vec![0u8; n_frames * info.bpf() as usize]);
+        {
+            let buffer = buffer.get_mut().unwrap();
+            buffer.set_pts(gst::ClockTime::from_nseconds(pts_ns));
+            buffer.set_duration(gst::ClockTime::SECOND.mul_div_floor(n_frames as u64, rate.into()));
+            buffer.set_flags(gst::BufferFlags::GAP);
+        }
+        Some(buffer)
+    }
+}
+
 impl PushSrcImpl for SnapSrc {
     fn create(
         &self,
@@ -577,13 +635,40 @@ impl PushSrcImpl for SnapSrc {
         let mut flushing = self.flushing.subscribe();
 
         loop {
-            let frame = runtime().block_on(async {
-                tokio::select! {
-                    frame = active.client.recv() => Ok(frame),
-                    _ = flushing.wait_for(|f| *f) => Err(gst::FlowError::Flushing),
+            let was_pending = active.pending.is_some();
+            let frame = match active.pending.take() {
+                Some(frame) => Some(frame),
+                None => {
+                    let received = runtime().block_on(async {
+                        tokio::select! {
+                            frame = active.client.recv() => Ok(Some(frame)),
+                            _ = flushing.wait_for(|f| *f) => Err(gst::FlowError::Flushing),
+                            _ = tokio::time::sleep(GAP_POLL) => Ok(None),
+                        }
+                    })?;
+                    let Some(frame) = received else {
+                        // Nothing arrived: cover the slots that are due with silence.
+                        let (Some(clock), Some(base_time)) = (obj.clock(), obj.base_time()) else {
+                            continue;
+                        };
+                        // Fill the slots rendered (PTS + latency) within GAP_LEAD from now.
+                        let latency_ns = self.pipeline_latency_ns.load(Ordering::Relaxed) as i64;
+                        let due_ns = clock.time().nseconds() as i64 - base_time.nseconds() as i64
+                            + GAP_LEAD_NS
+                            - latency_ns;
+                        let until = active
+                            .aligner
+                            .next_pts()
+                            .map(|next| due_ns.min(next + MAX_GAP_CHUNK_NS));
+                        if let Some(buffer) = until.and_then(|u| Self::silence(active, u)) {
+                            return Ok(CreateSuccess::NewBuffer(buffer));
+                        }
+                        continue;
+                    };
+                    frame
                 }
-            })?;
-            let Some(frame) = frame else {
+            };
+            let Some(mut frame) = frame else {
                 let reason = active.client.last_error().unwrap_or_default();
                 gst::element_imp_error!(
                     self,
@@ -607,7 +692,8 @@ impl PushSrcImpl for SnapSrc {
                 continue;
             }
             let latency_usec = (self.pipeline_latency_ns.load(Ordering::Relaxed) / 1000) as i64;
-            if latency_usec != active.latency_usec {
+            let latency_changed = latency_usec != active.latency_usec;
+            if latency_changed {
                 // The PTS jumps by the difference: tell downstream.
                 gst::debug!(
                     CAT,
@@ -624,12 +710,57 @@ impl PushSrcImpl for SnapSrc {
             };
             // Signed: the PTS lies one latency before play-out, which may be before the
             // pipeline started.
-            let ideal_ns = clock.time().nseconds() as i64
+            let mut ideal_ns = clock.time().nseconds() as i64
                 + (frame.playout_usec - latency_usec - now) * 1000
                 - base_time.nseconds() as i64;
             if ideal_ns < 0 {
                 continue; // before pipeline start
             }
+            let same_format = active.info.as_ref().is_some_and(|i| {
+                i.rate() == frame.rate && i.channels() == u32::from(frame.channels)
+            });
+            if let Some(next) = active
+                .aligner
+                .next_pts()
+                .filter(|_| same_format && !was_pending && !latency_changed)
+            {
+                // Jumps beyond JUMP_NS (after a gap, or a sender re-anchoring its
+                // timestamps) are handled at once, so that the output stays both
+                // contiguous and on the timeline; smaller errors are the aligner's. A
+                // latency change resyncs instead: its DISCONT makes the audio sink
+                // re-align (without it, the drift tests got noisy, 2026-11-22).
+                let min_jump = if active.filling { 0 } else { JUMP_NS };
+                let hole = ideal_ns - next;
+                if hole > min_jump
+                    && hole <= MAX_BRIDGE_NS
+                    && let Some(buffer) = Self::silence(active, ideal_ns)
+                {
+                    // A hole before this frame: close it with silence, then play the
+                    // frame contiguously (no resync, no DISCONT).
+                    gst::debug!(CAT, imp = self, "Bridging {} µs with silence", hole / 1000);
+                    active.pending = Some(frame);
+                    return Ok(CreateSuccess::NewBuffer(buffer));
+                }
+                if -hole > min_jump && -hole <= MAX_BRIDGE_NS {
+                    // This frame starts before the output's end: drop the overlap.
+                    let channels = usize::from(frame.channels.max(1));
+                    let overlap =
+                        usize::try_from(i128::from(-hole) * i128::from(frame.rate) / 1_000_000_000)
+                            .unwrap_or(0);
+                    if overlap * channels >= frame.samples.len() {
+                        gst::debug!(CAT, imp = self, "Dropping frame, its slot is covered");
+                        continue;
+                    }
+                    gst::debug!(CAT, imp = self, "Dropping {overlap} overlapping frames");
+                    frame.samples.drain(..overlap * channels);
+                    ideal_ns += (overlap as i64) * 1_000_000_000 / i64::from(frame.rate);
+                    active.discont = false; // contiguous again
+                }
+            }
+            if was_pending {
+                active.discont = false; // bridged: contiguous
+            }
+            active.filling = false;
 
             let info = gst_audio::AudioInfo::builder(
                 gst_audio::AudioFormat::F32le,

@@ -849,3 +849,121 @@ fn aloop_snapsrc_plays_flac_on_the_server_timeline() {
 fn aloop_cpp_snapclient_plays_flac_on_the_server_timeline() {
     run_absolute(Kind::CppSnapclient, Side::Right, "flac");
 }
+
+/// F5: the sender pauses for 4 s. Both receivers must play digital silence meanwhile
+/// and be in sync again afterwards. snapsrc stays on the server timeline right away
+/// (its ticks keep 1 s spacing); the C++ snapclient is +2…+3.5 ms off for about 3 s
+/// after such a gap before it settles (measured 2026-11-22), so its pair offset gets
+/// `ALOOP_TOLERANCE_SETTLE_US` (default 5000 µs) until 4 s after the resume.
+#[test]
+#[ignore = "needs snd-aloop and the C++ snapclient (make test-aloop)"]
+fn aloop_sender_pause_is_silent_and_resumes_in_sync() {
+    init();
+    let card = card();
+    let tol_us: f64 = env_or("ALOOP_TOLERANCE_US", 1000.0);
+    let settle_us: f64 = env_or("ALOOP_TOLERANCE_SETTLE_US", 5000.0);
+    let _shift = RateShift::set(&card, RATE_SHIFT_NOMINAL);
+    let sender = start_sender();
+    let port = sender.port;
+    let mut left = Receiver::start(Kind::Snapsrc, Side::Left, port);
+    let mut right = Receiver::start(Kind::CppSnapclient, Side::Right, port);
+
+    // Pause 6 s into the measurement, for 4 s (CLOCK_MONOTONIC seconds recorded).
+    let pipeline = sender.running.0.clone();
+    let pauser = std::thread::spawn(move || {
+        std::thread::sleep(WARMUP + Duration::from_secs(6));
+        let paused_at = now_usec() as f64 / 1e6;
+        pipeline.set_state(gst::State::Paused).unwrap();
+        std::thread::sleep(Duration::from_secs(4));
+        let resumed_at = now_usec() as f64 / 1e6;
+        pipeline.set_state(gst::State::Playing).unwrap();
+        (paused_at, resumed_at)
+    });
+    let cap = capture(
+        &card,
+        20,
+        &mut [("snapsrc (left)", &mut left), ("C++ (right)", &mut right)],
+    );
+    let (paused_at, resumed_at) = pauser.join().unwrap();
+    drop((left, right));
+
+    let time_of = |frame: f64| cap.t0 + (cap.first_frame as f64 + frame) / cap.card_rate;
+    // Seconds after the pause reached the output (it does so `BUFFER_MS` later).
+    let buffer_s = f64::from(BUFFER_MS) / 1000.0;
+    let rel = |t: f64| t - paused_at - buffer_s;
+    let pause_s = resumed_at - paused_at;
+    for (name, channel) in [("snapsrc", &cap.left), ("C++", &cap.right)] {
+        let ticks: Vec<String> = onsets(channel)
+            .iter()
+            .map(|&f| format!("{:+.3}", rel(time_of(f))))
+            .collect();
+        eprintln!(
+            "aloop: {name} ticks (s after the pause): {}",
+            ticks.join(" ")
+        );
+        let window = 0.2..pause_s - 0.2;
+        let peak = channel
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| window.contains(&rel(time_of(*i as f64))))
+            .map(|(_, v)| v.unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        assert_eq!(peak, 0, "{name} is not silent during the pause");
+    }
+
+    // snapsrc: the ticks after the resume keep their 1 s spacing. The first two may be
+    // off: the live test source re-anchors its timestamps after a pause, by a hole or an
+    // overlap of a few ms; snapsrc bridges or trims jumps beyond 5 ms at once, smaller
+    // ones are corrected gradually by its aligner (within about a second).
+    let after: Vec<f64> = onsets(&cap.left)
+        .iter()
+        .map(|&f| rel(time_of(f)))
+        .filter(|&t| t > pause_s + 1.5)
+        .collect();
+    assert!(
+        after.len() >= 6,
+        "snapsrc: only {} ticks after the pause",
+        after.len()
+    );
+    for w in after.windows(2) {
+        let spacing_ms = (w[1] - w[0]) * 1000.0;
+        assert!(
+            (spacing_ms - 1000.0).abs() <= tol_us / 1000.0,
+            "snapsrc ticks {spacing_ms:.2} ms apart after the pause"
+        );
+    }
+
+    let (l, r) = (onsets(&cap.left), onsets(&cap.right));
+    let pairs: Vec<(f64, f64)> = l
+        .iter()
+        .filter_map(|&lt| {
+            r.iter()
+                .map(|&rt| rt - lt)
+                .min_by(|x, y| x.abs().total_cmp(&y.abs()))
+                .filter(|d| d.abs() < f64::from(RATE) / 2.0)
+                .map(|d| (rel(time_of(lt)), d * 1e6 / f64::from(RATE)))
+        })
+        .collect();
+    let list: Vec<String> = pairs
+        .iter()
+        .map(|(t, o)| format!("{t:+.1}s:{o:+.0}"))
+        .collect();
+    eprintln!("aloop: offset C++ − snapsrc (µs): {}", list.join(" "));
+    let settled = pause_s + 4.0;
+    assert!(
+        pairs.iter().filter(|(t, _)| *t > settled).count() >= 4,
+        "too few paired ticks after the pause"
+    );
+    for (t, o) in &pairs {
+        let bound = if (pause_s..settled).contains(t) {
+            settle_us
+        } else {
+            tol_us
+        };
+        assert!(
+            o.abs() <= bound,
+            "receivers {o:+.0} µs apart at {t:+.1} s (bound ±{bound} µs)"
+        );
+    }
+}

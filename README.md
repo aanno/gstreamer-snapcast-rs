@@ -46,7 +46,8 @@ publishing: [docs/architecture.md](docs/architecture.md).
 > a loopback sound card, receivers play within about 1 ms of each other and of the
 > server timeline, also on a drifting card (`make test-aloop`). snapsink announces itself
 > via mDNS and snapsrc finds it; snapsrc reconnects after a server restart and applies
-> the server's volume and mute. snapcast-rs logs into the GStreamer debug log. snapsink
+> the server's volume and mute; while the server sends nothing (sender paused, server gone)
+> it outputs silence (GAP buffers) on a continuous timeline. snapcast-rs logs into the GStreamer debug log. snapsink
 > can offer the Snapcast JSON-RPC control API and serve Snapweb (`control-port`,
 > `http-port`, `snapweb-dir`; opt-in), and passes track tags on as stream metadata.
 > Limitations: one stream per server port (snapcast-rs cannot add streams at runtime

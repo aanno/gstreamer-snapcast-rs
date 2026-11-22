@@ -16,7 +16,7 @@
 //!   to the ideal PTS once, and the caller marks the buffer DISCONT.
 
 /// Errors beyond this resync instead of being corrected gradually.
-const RESYNC_NS: i64 = 20_000_000;
+pub const RESYNC_NS: i64 = 20_000_000;
 /// Errors within this are left alone.
 const DEADBAND_NS: f64 = 250_000.0;
 /// At most this share of a buffer's frames is inserted or dropped (0.1 % = 1000 ppm,
@@ -64,6 +64,19 @@ impl Aligner {
 
     fn next_pts_ns(&self) -> i64 {
         self.origin_ns + (i128::from(self.frames) * 1_000_000_000 / i128::from(self.rate)) as i64
+    }
+
+    /// Where the next contiguous buffer goes (ns of running time), once synced.
+    pub fn next_pts(&self) -> Option<i64> {
+        self.synced.then(|| self.next_pts_ns())
+    }
+
+    /// Outputs `n_frames` of silence contiguously (gap filling) and returns its PTS.
+    /// The error estimate stays as it is: silence carries no timing information.
+    pub fn fill(&mut self, n_frames: usize) -> i64 {
+        let pts_ns = self.next_pts_ns();
+        self.frames += n_frames as i64;
+        pts_ns
     }
 
     /// Places a buffer of `n_frames` whose first frame ideally plays at `ideal_ns`.
@@ -237,5 +250,24 @@ mod tests {
             assert!(out.as_chunks::<2>().0.iter().map(|f| f[0]).is_sorted());
         }
         assert_eq!(stretch(&samples, 2, 0), samples);
+    }
+
+    #[test]
+    fn filled_silence_keeps_the_output_contiguous() {
+        let mut a = Aligner::default();
+        assert_eq!(
+            a.next_pts(),
+            None,
+            "nothing to continue before the first buffer"
+        );
+        a.place(0, N, RATE);
+        let gap_start = buffer_ns(N as i64) as i64;
+        assert_eq!(a.next_pts(), Some(gap_start));
+        assert_eq!(a.fill(480), gap_start); // 10 ms of silence
+        // A buffer that ideally starts right after the silence is contiguous.
+        let after = buffer_ns(N as i64 + 480) as i64;
+        assert_eq!(a.next_pts(), Some(after));
+        let p = a.place(after + 30_000, N, RATE);
+        assert_eq!((p.pts_ns, p.correction, p.resync), (after, 0, false));
     }
 }
