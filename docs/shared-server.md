@@ -1,6 +1,6 @@
 # Design: a shared Snapcast server across processes
 
-Status: **agreed** (2026-11-22), implementation in progress: steps 1 to 4 done. The outline was
+Status: **implemented** (2026-11-22, steps 1 to 5 below). The outline was
 agreed with the project owner on 2026-11-22 (`docs/claude/memory.md`, Decisions); the
 open questions are answered at the end; the build-feature split of `snapsink` is a
 confirmed too.
@@ -170,7 +170,8 @@ in the Android build.
   (left by a crashed daemon) is removed by the daemon that holds the lock.
 - **Connect or spawn** (in the engine, at `acquire_stream`):
   1. connect; on success, done;
-  2. otherwise spawn the daemon and retry connecting for up to 2 s (50 ms steps);
+  2. otherwise spawn the daemon and retry connecting for up to 5 s (20 ms steps;
+     the daemon normally listens within ms, but under load it took almost 2 s);
   3. if several sinks spawn at once, the lock lets one daemon win; the others' spawns
      exit, and all sinks connect to the winner.
 - **Spawning:** the daemon is started detached (`setsid`, stdin/stdout to `/dev/null`).
@@ -337,7 +338,17 @@ the other gets the usual "cannot listen on port" error.
    as `Command`), `snapsink` end to end (tags from `taginject` and `controls=next` shown
    through the daemon, the command as `snapcast-stream-control` on the bus), autospawn
    (the title survives `kill -9` of the daemon).
-5. Plugin and aloop tests; `make install`, `make doctor`, `scripts/listen.sh`, docs.
+5. ~~Plugin and aloop tests; `make install`, `make doctor`, `scripts/listen.sh`, docs.~~
+   Done 2026-11-22. `make test-aloop-shared` runs the aloop suite with the sender in the
+   daemon (`ALOOP_SENDER_MODE=shared`, the daemon from `target/debug`, its own runtime
+   directory `target/aloop-runtime`): all 10 tests pass with the same numbers as
+   embedded (receivers +0.1…+0.9 ms from the server timeline, the pair within 0.7 ms,
+   ±300 ppm drift followed; one daemon for the whole run, gone 5 s after it).
+   `make install` puts the daemon into `BIN_DIR` (`~/.local/bin`, with a note if that is
+   not on `PATH`) and builds the lean `snapsink` (`SNAPSINK_FEATURES=control` adds the
+   control API for mode embedded); `install-system` uses `/usr/local/bin`. `make doctor`
+   reports the daemon binary and whether one runs; `listen.sh` has `MODE` and, with
+   `LOCAL=1`, uses the daemon from the tree.
 
 Each step ends with `make check` green and a commit. No snapcast-rs change is expected.
 

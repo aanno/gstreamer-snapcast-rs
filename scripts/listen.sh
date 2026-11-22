@@ -11,7 +11,7 @@
 #        scripts/listen.sh -h | --help      this help
 #
 # Commands:
-#   send         sender: SRC ! snapsink (embedded server on PORT)
+#   send         sender: SRC ! snapsink (server on PORT, in the shared daemon or embedded)
 #   recv         receiver: snapsrc ! SINK
 #   cpp-client   receiver: C++ snapclient (SNAPCLIENT)
 #   cpp-server   sender: C++ snapserver (SNAPSERVER) fed by SRC through a pipe
@@ -31,6 +31,8 @@
 #   CODEC      pcm (default) | flac
 #   BUFFER_MS  end-to-end buffer (default 1000)
 #   LATENCY_MS extra output latency for snapsrc/snapclient (default 0)
+#   MODE       where snapsink's server runs: auto (default: the shared server daemon,
+#              started if needed, else embedded) | shared | embedded
 #   CONTROL    1: the sender also offers the control API: JSON-RPC on 1705 (Snapdroid,
 #              Home Assistant) and Snapweb on http://<host>:1780/ (needs SNAPWEB_DIR)
 #   SNAPWEB_DIR Snapweb's files (default ~/.local/share/snapweb; get them with
@@ -48,6 +50,7 @@ CODEC=${CODEC:-pcm}
 BUFFER_MS=${BUFFER_MS:-1000}
 LATENCY_MS=${LATENCY_MS:-0}
 CONTROL=${CONTROL:-0}
+MODE=${MODE:-auto}
 SNAPWEB_DIR=${SNAPWEB_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/snapweb}
 SOUNDCARD=${SOUNDCARD:-default}
 SNAPCLIENT=${SNAPCLIENT:-snapclient}
@@ -190,10 +193,12 @@ build_send() {
         "-e: on Ctrl+C, end the stream first, so that everything stops cleanly"
     add_source
     add_caps
-    local sink="snapsink stream=$STREAM port=$PORT codec=$CODEC buffer-ms=$BUFFER_MS"
-    local note="embedded Snapcast server on port $PORT (shared by all snapsinks on that port),
-feeding stream \"$STREAM\"; announced via mDNS. Any Snapcast client can connect.
-codec: pcm or flac. buffer-ms: how far ahead of play-out the audio is sent"
+    local sink="snapsink stream=$STREAM port=$PORT codec=$CODEC buffer-ms=$BUFFER_MS mode=$MODE"
+    local note="Snapcast server on port $PORT, feeding stream \"$STREAM\"; announced via mDNS.
+Any Snapcast client can connect. codec: pcm or flac. buffer-ms: how far ahead of
+play-out the audio is sent. mode: auto runs the server in the user's shared daemon
+(gst-snapcast-daemon, started by the first snapsink, shared by all pipelines; log in
+\$XDG_RUNTIME_DIR/gst-snapcast/daemon.log), or embedded in this process if there is none"
     if [ "$CONTROL" = 1 ]; then
         sink+=" control-port=1705 http-port=1780"
         note+="

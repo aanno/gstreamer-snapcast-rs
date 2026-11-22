@@ -8,7 +8,8 @@
 //! # Setup
 //!
 //! ```text
-//! audiotestsrc wave=ticks ! snapsink (embedded server, port=0)
+//! audiotestsrc wave=ticks ! snapsink (embedded server, port=0; with
+//!                                   ALOOP_SENDER_MODE=shared: in the daemon)
 //!     ├─ receiver A ─▶ ALSA "snaptest_left"  ─┐
 //!     └─ receiver B ─▶ ALSA "snaptest_right" ─┤ dmix ─▶ hw:Loopback,0,0
 //!                                             └─ capture: alsasrc hw:Loopback,1,0
@@ -86,6 +87,24 @@ fn env_or<T: std::str::FromStr>(name: &str, default: T) -> T {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
+}
+
+/// Where the sender's server runs: `ALOOP_SENDER_MODE` `embedded` (default: in the
+/// test process, on an ephemeral port) or `shared` (the user's shared server
+/// daemon, autospawned; `make test-aloop-shared`). The snapsink properties for it.
+fn sender_server() -> String {
+    match std::env::var("ALOOP_SENDER_MODE").as_deref() {
+        Ok("shared") => {
+            let port = std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            format!("port={port} mode=shared")
+        }
+        Ok("embedded") | Err(_) => "port=0".into(),
+        Ok(other) => panic!("ALOOP_SENDER_MODE must be embedded or shared, not {other}"),
+    }
 }
 
 fn card() -> String {
@@ -220,10 +239,12 @@ fn start_sender() -> Sender {
 /// Starts `source ! S16LE 48 kHz stereo ! snapsink`, with a `tee` that keeps a
 /// reference copy of what was sent.
 fn start_sender_with(source: &str, codec: &str) -> Sender {
+    let server = sender_server();
     let p = pipeline(&format!(
         "{source} \
          ! audio/x-raw,format=S16LE,rate={RATE},channels=2 ! tee name=t \
-         t. ! queue ! snapsink name=sink port=0 buffer-ms={BUFFER_MS} codec={codec} \
+         t. ! queue ! snapsink name=sink {server} buffer-ms={BUFFER_MS} codec={codec} \
+           mdns-name=\"\" \
          t. ! queue ! appsink name=reference sync=false"
     ));
     let reference = Arc::new(Mutex::new(Reference::default()));
@@ -260,6 +281,11 @@ fn start_sender_with(source: &str, codec: &str) -> Sender {
     loop {
         let port = sink.property::<u32>("bound-port");
         if port != 0 {
+            if server.contains("mode=shared") {
+                let mode = sink.property_value("active-mode");
+                let mode = mode.get::<&gst::glib::EnumValue>().unwrap();
+                assert_eq!(mode.nick(), "shared", "the sender runs in the daemon");
+            }
             return Sender {
                 running: sender,
                 port,

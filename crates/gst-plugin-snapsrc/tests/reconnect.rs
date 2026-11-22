@@ -48,10 +48,13 @@ fn pull_for(appsink: &gst_app::AppSink, receiver: &gst::Pipeline, duration: Dura
             panic!("receiver failed: {msg:?}");
         }
         if let Some(sample) = appsink.try_pull_sample(gst::ClockTime::from_mseconds(100)) {
-            let pts = sample
-                .buffer()
-                .and_then(|b| b.pts())
-                .expect("buffer without PTS");
+            let buffer = sample.buffer().expect("sample without buffer");
+            // Silence that snapsrc makes while no server sends (F5 gap filling) is
+            // scheduled just ahead of render, not by the server: only audio counts.
+            if buffer.flags().contains(gst::BufferFlags::GAP) {
+                continue;
+            }
+            let pts = buffer.pts().expect("buffer without PTS");
             let playout = receiver.base_time().unwrap() + pts;
             let now = receiver.clock().unwrap().time();
             ahead.push((playout.nseconds() as i64 - now.nseconds() as i64) / 1_000_000);

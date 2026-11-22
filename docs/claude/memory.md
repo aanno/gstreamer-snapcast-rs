@@ -7,7 +7,7 @@ the prototype (P1–P4 in detail, every decision with its reasons, the fixed lim
 L2–L13, all measurements) is in [memory-old-2026-11-22.md](memory-old-2026-11-22.md),
 frozen; the evaluation in [../evaluation.md](../evaluation.md).
 
-Last updated: 2026-11-22 (daemon steps 1–4 done: IPC, daemon, snapsink `mode`, lean build, autospawn, properties and commands; next: step 5).
+Last updated: 2026-11-22 (shared server daemon done, steps 1–5; next: the user's host test).
 
 ## Resume here (2026-11-22)
 
@@ -34,15 +34,17 @@ Last updated: 2026-11-22 (daemon steps 1–4 done: IPC, daemon, snapsink `mode`,
    working); drop `SNAPSINK_FEATURES ?= control` then. **Step 3 done (2026-11-22):** autospawn (default
    mode `auto` really shares now), lock-file singleton, 5 s grace period, one reconnect
    after a daemon crash (checked by hand with `kill -9` under two `gst-launch-1.0`).
-   **Step 4 done (2026-11-22):** metadata,
-   `controls` and `Stream.Control` through the daemon (protocol version 2; properties
-   are resent after a reconnect). **Next: step 5** (plugin and aloop tests in shared
-   mode, `make install` with the daemon, `make doctor`, `listen.sh`, docs; drop
-   `SNAPSINK_FEATURES ?= control`). Later: fork
+   **Steps 4 and 5 done (2026-11-22): the daemon is
+   complete** (`docs/shared-server.md`): metadata and `Stream.Control` through it,
+   `make test-aloop-shared` (all 10 aloop tests pass in shared mode, same numbers as
+   embedded), `make install` installs it into `~/.local/bin` and the lean `snapsink`,
+   `make doctor` and `listen.sh` (`MODE`) know it. **Next:** the user tries it on the
+   host (`make install`, `make doctor`, `CONTROL=1 make listen-send` twice with
+   different `STREAM`s in two terminals, Snapweb). Later: fork
    PR candidate "make `snapcast-control`'s auth an optional feature" (agreed in principle).
 3. **Alongside:** the snapsrc wander experiment (Open items), measured as usual.
 4. **Pushed** by the user on 2026-11-22: the fork up to `1b5b3b5` and this repo up to
-   `e601646`. No
+   `1f20989`. No
    upstream PR is open yet; 13 fork commits are PR candidates.
 5. **Housekeeping:** the xerj index (`ax-docs`, `ax-snapcast-rs-docs`) is a snapshot from
    before 2026-11-21; reindex on the host before relying on it (`docs/claude/mcp-xerj.md`).
@@ -184,10 +186,11 @@ Fixed ones (L2–L5, L7–L10, L12, L13) are in the archive.
 
 1. ~~**L1 in the fork**~~ done 2026-11-22 (see Resume here).
 2. ~~**Design doc for the shared-server daemon**~~ agreed 2026-11-22 (`docs/shared-server.md`).
-3. **The daemon**, in the doc's five steps (step 1 done): engine client and `snapsink`
-   `mode` (step 2), autospawn and lifetime (3), properties and commands (4), tests and
-   install (5).
-4. **Alongside:** the wander experiment (Open items).
+3. ~~**The daemon**~~ done 2026-11-22 (all five steps of the design doc). Left: the
+   user's test on the host.
+4. **Next candidates** (the user's choice): the wander experiment (Open items); the fork
+   PR candidate "make `snapcast-control`'s auth an optional feature" (agreed in
+   principle); upstream PRs for the fork commits.
 
 **After that** (not scheduled): upstream PRs for the fork commits; finishing `snapsink`
 (L6, Android build and CI); infrastructure (CI, packaging); L11 if a WebSocket audio client

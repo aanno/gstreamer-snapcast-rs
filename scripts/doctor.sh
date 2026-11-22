@@ -53,6 +53,21 @@ if [ -n "$plugin_dir" ]; then
     done
 fi
 
+section "Shared server daemon (snapsink mode auto/shared)"
+daemon="${GST_SNAPCAST_DAEMON:-gst-snapcast-daemon}"
+if command -v "$daemon" >/dev/null; then
+    ok "$("$daemon" --version 2>&1 | head -1) ($(command -v "$daemon"))"
+else
+    warn "$daemon not found: snapsink falls back to embedded (make install puts it into ~/.local/bin; is that on PATH?)"
+fi
+if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+    warn "XDG_RUNTIME_DIR not set: no shared server"
+elif [ -S "$XDG_RUNTIME_DIR/gst-snapcast/daemon.sock" ]; then
+    ok "a daemon is running ($XDG_RUNTIME_DIR/gst-snapcast/daemon.sock; log: daemon.log next to it)"
+else
+    ok "no daemon running now (the first snapsink starts one)"
+fi
+
 section "Reference C++ Snapcast (interop and listening tests)"
 for b in "${SNAPCLIENT:-snapclient}" "${SNAPSERVER:-snapserver}"; do
     if command -v "$b" >/dev/null; then ok "$b: $("$b" --version 2>&1 | head -1)"; else warn "$b not found"; fi

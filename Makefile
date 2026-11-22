@@ -1,9 +1,10 @@
 .PHONY: setup check fmt fmt-fix clippy test doc build release inspect submodule \
-	install uninstall install-system uninstall-system test-interop test-aloop test-endurance test-mdns doctor \
+	install uninstall install-system uninstall-system test-interop test-aloop test-aloop-shared test-endurance test-mdns doctor \
 	listen-send listen-recv listen-cpp-client listen-cpp-server listen-pair listen-all listen-show
 
 PLUGIN_PATH := $(CURDIR)/target/debug
 PLUGINS := libgstsnapsink.so libgstsnapsrc.so
+DAEMON := gst-snapcast-daemon
 RELEASE_DIR := $(CURDIR)/target/release
 
 # Per-user GStreamer plugin directory (scanned automatically, no root needed).
@@ -11,6 +12,9 @@ PLUGIN_DIR ?= $(HOME)/.local/share/gstreamer-1.0/plugins
 # System plugin directory as reported by GStreamer itself
 # (Fedora: /usr/lib64/gstreamer-1.0, Debian: /usr/lib/<triplet>/gstreamer-1.0).
 SYSTEM_PLUGIN_DIR ?= $(shell pkg-config --variable=pluginsdir gstreamer-1.0 2>/dev/null)
+# Where the daemon goes: snapsink starts it from PATH (or GST_SNAPCAST_DAEMON).
+BIN_DIR ?= $(HOME)/.local/bin
+SYSTEM_BIN_DIR ?= /usr/local/bin
 
 ## First-time setup: git hooks here and in the snapcast-rs submodule (.githooks:
 ## Conventional Commits, fmt on commit, `make check` on push)
@@ -45,10 +49,9 @@ build:
 
 # Each crate on its own: in one workspace build Cargo would merge the features of
 # all crates, and snapsink would get the daemon's control API (HTTP, auth).
-# SNAPSINK_FEATURES: extra snapsink features. `control` (the API in embedded mode)
-# stays the default until `make install` installs and autospawns the daemon
-# (docs/shared-server.md, steps 3 and 5); `make release SNAPSINK_FEATURES=` is the lean build.
-SNAPSINK_FEATURES ?= control
+# SNAPSINK_FEATURES: extra snapsink features, e.g. `control` for the control API in
+# mode embedded (in modes auto/shared the daemon serves it).
+SNAPSINK_FEATURES ?=
 release:
 	cargo build --release -p gst-plugin-snapsink $(if $(SNAPSINK_FEATURES),--features $(SNAPSINK_FEATURES))
 	cargo build --release -p gst-plugin-snapsrc
@@ -63,24 +66,28 @@ inspect: build
 submodule:
 	git submodule update --init --recursive
 
-## Install the release plugins for the current user (into PLUGIN_DIR)
+## Install the release plugins (into PLUGIN_DIR) and the shared server daemon (into
+## BIN_DIR, which must be on PATH for snapsink to start it) for the current user
 install: release
-	install -d $(PLUGIN_DIR)
+	install -d $(PLUGIN_DIR) $(BIN_DIR)
 	install -m 0755 $(addprefix $(RELEASE_DIR)/,$(PLUGINS)) $(PLUGIN_DIR)/
-	@echo "Installed into $(PLUGIN_DIR). Check with: make doctor"
+	install -m 0755 $(RELEASE_DIR)/$(DAEMON) $(BIN_DIR)/
+	@echo "Installed into $(PLUGIN_DIR) and $(BIN_DIR). Check with: make doctor"
+	@case ":$$PATH:" in *":$(BIN_DIR):"*) ;; *) echo "Note: $(BIN_DIR) is not on PATH, so snapsink cannot start $(DAEMON) (extend PATH or set GST_SNAPCAST_DAEMON)";; esac
 
 uninstall:
-	rm -f $(addprefix $(PLUGIN_DIR)/,$(PLUGINS))
+	rm -f $(addprefix $(PLUGIN_DIR)/,$(PLUGINS)) $(BIN_DIR)/$(DAEMON)
 
 ## System-wide install. Build as yourself first: make release && sudo make install-system
 install-system:
 	@test -n "$(SYSTEM_PLUGIN_DIR)" || { echo "cannot find the GStreamer plugins dir (pkg-config)"; exit 1; }
-	@for f in $(PLUGINS); do test -f $(RELEASE_DIR)/$$f || { echo "$$f missing: run 'make release' first (not as root)"; exit 1; }; done
+	@for f in $(PLUGINS) $(DAEMON); do test -f $(RELEASE_DIR)/$$f || { echo "$$f missing: run 'make release' first (not as root)"; exit 1; }; done
 	install -m 0755 $(addprefix $(RELEASE_DIR)/,$(PLUGINS)) $(SYSTEM_PLUGIN_DIR)/
+	install -m 0755 $(RELEASE_DIR)/$(DAEMON) $(SYSTEM_BIN_DIR)/
 
 uninstall-system:
 	@test -n "$(SYSTEM_PLUGIN_DIR)" || { echo "cannot find the GStreamer plugins dir (pkg-config)"; exit 1; }
-	rm -f $(addprefix $(SYSTEM_PLUGIN_DIR)/,$(PLUGINS))
+	rm -f $(addprefix $(SYSTEM_PLUGIN_DIR)/,$(PLUGINS)) $(SYSTEM_BIN_DIR)/$(DAEMON)
 
 ## Interop tests against the reference C++ snapclient/snapserver
 ## (override the binaries with SNAPCLIENT=... SNAPSERVER=...)
@@ -93,6 +100,18 @@ test-interop:
 ## they share loopback subdevice 0. See docs/testing.md.
 test-aloop:
 	cargo test -p gst-plugin-snapsrc --test aloop -- --ignored --test-threads=1 --nocapture \
+		--skip aloop_endurance
+
+## The same timing tests with the sender in the shared server daemon (ALOOP_SENDER_MODE=shared):
+## the daemon from this tree, autospawned with a runtime directory of its own
+## (target/aloop-runtime; its daemon.log stays there for reading).
+ALOOP_RUNTIME_DIR := $(CURDIR)/target/aloop-runtime
+test-aloop-shared:
+	cargo build -p gst-snapcast-daemon
+	install -d -m 0700 $(ALOOP_RUNTIME_DIR)
+	XDG_RUNTIME_DIR=$(ALOOP_RUNTIME_DIR) GST_SNAPCAST_DAEMON=$(PLUGIN_PATH)/$(DAEMON) \
+	ALOOP_SENDER_MODE=shared \
+		cargo test -p gst-plugin-snapsrc --test aloop -- --ignored --test-threads=1 --nocapture \
 		--skip aloop_endurance
 
 ## F3: snapsrc + C++ snapclient for ENDURANCE_MINUTES (default 60) on snd-aloop; one CSV
@@ -111,7 +130,7 @@ doctor:
 ## Listening tests (see scripts/listen.sh for SRC, HOST, PORT, CODEC, BUFFER_MS, ...).
 ## They use the installed plugins; LOCAL=1 uses a fresh release build from this tree instead.
 ifeq ($(LOCAL),1)
-LISTEN_ENV := GST_PLUGIN_PATH=$(RELEASE_DIR)
+LISTEN_ENV := GST_PLUGIN_PATH=$(RELEASE_DIR) GST_SNAPCAST_DAEMON=$(RELEASE_DIR)/$(DAEMON)
 LISTEN_DEPS := release
 endif
 

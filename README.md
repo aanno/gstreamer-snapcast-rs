@@ -174,11 +174,17 @@ is still missing.
 ### Install
 
 ```sh
-make install            # release build into ~/.local/share/gstreamer-1.0/plugins (no root)
+make install            # release build: plugins into ~/.local/share/gstreamer-1.0/plugins,
+                        #   the shared server daemon into ~/.local/bin (no root)
 make uninstall
-make release && sudo make install-system    # or system-wide (GStreamer's own plugins dir)
-sudo make uninstall-system
+make release && sudo make install-system    # or system-wide (GStreamer's own plugins dir,
+sudo make uninstall-system                  #   the daemon into /usr/local/bin)
 ```
+
+`snapsink` starts the daemon `gst-snapcast-daemon` from `PATH` (Fedora has
+`~/.local/bin` on it; elsewhere set `GST_SNAPCAST_DAEMON` to its path). Without it,
+`snapsink` runs its server embedded, as before, and says so in a warning. Design:
+[docs/shared-server.md](docs/shared-server.md).
 
 `make doctor` shows which `snapsink`/`snapsrc` files GStreamer actually loads. Note that
 `GST_PLUGIN_PATH` (set in the devcontainer) takes precedence over installed copies.
@@ -199,10 +205,9 @@ snapcast-rs crates (their features:
 **`snapsink` without `control`** is about half the size (release, 2026-11-22: 3.1 MB
 instead of 5.8 MB; 127 instead of 239 crates including GStreamer's), because the HTTP
 stack and the authentication crates are left out. In mode `shared` the control API runs
-in the daemon, so it is still available. For now `make install` builds `snapsink` with
-`control`, so that `CONTROL=1 make listen-send` keeps working in mode `embedded`, until
-the daemon is started automatically (`make release SNAPSINK_FEATURES=` builds the lean
-one). For Android: `--no-default-features` (no daemon), plus `control` if wanted.
+in the daemon, so it is still available. `make install` builds this lean `snapsink`;
+`make install SNAPSINK_FEATURES=control` adds the control API for mode `embedded`. For
+Android: `--no-default-features` (no daemon), plus `control` if wanted.
 
 No feature adds a C library beyond GStreamer itself. Features that would break
 interoperability with the C++ Snapcast (`f32lz4`, `encryption`, `custom-protocol`) are not
@@ -222,6 +227,7 @@ make check     # all of the above (except build)
 make inspect   # gst-inspect-1.0 the freshly built plugins
 make test-interop  # against the C++ snapclient/snapserver (not part of make check)
 make test-aloop    # timing on the snd-aloop card: receiver offset, drift (not part of make check)
+make test-aloop-shared  # the same with the sender in the shared server daemon
 make test-endurance  # an hour on the snd-aloop card: dropouts, offsets, memory (F3)
 make doctor    # tools, elements, plugins and sound devices on this machine
 ```

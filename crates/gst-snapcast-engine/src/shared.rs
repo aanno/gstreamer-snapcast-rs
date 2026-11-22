@@ -44,8 +44,9 @@ const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a PCM write may block when the daemon does not read (backpressure
 /// beyond this means it hangs).
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
-/// How long to wait for a spawned daemon to listen.
-const SPAWN_WAIT: Duration = Duration::from_secs(2);
+/// How long to wait for a spawned daemon to listen. It normally takes a few ms,
+/// but on a loaded machine (seen in `make check`) almost 2 s.
+const SPAWN_WAIT: Duration = Duration::from_secs(5);
 /// The daemon binary, unless `GST_SNAPCAST_DAEMON` names one.
 const DAEMON_BINARY: &str = "gst-snapcast-daemon";
 
