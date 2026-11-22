@@ -353,6 +353,58 @@ Each step ends with `make check` green and a commit. No snapcast-rs change is ex
   socket. Rejected.
 - **Shared memory for PCM:** not needed at these data rates (see Timing).
 
+### GStreamer as the transport (discussed 2026-11-22)
+
+The project owner asked whether GStreamer itself, whose main domain is moving media,
+should carry the audio from `snapsink` to the daemon instead of our socket protocol.
+Three variants were discussed; all are possible, none makes the code simpler, so the
+socket protocol stays. To be revisited if the daemon ever needs GStreamer for other
+reasons (mixing, converting, processing audio).
+
+**1. A GStreamer IPC element pair for the PCM.** Candidates, all in gst-plugins-bad
+(not installed in the devcontainer, so taken from the documentation, not tested):
+
+| Elements | Buffer timestamps |
+|---|---|
+| `shmsink` / `shmsrc` (shared memory) | lost: the receiver stamps buffers on arrival, which the timing design forbids |
+| `unixfdsink` / `unixfdsrc` (GStreamer ≥ 1.24, memory passed as file descriptors) | kept, with caps and (serializable) metas |
+| `gdppay` / `gdpdepay` over a pipe or socket | kept, with caps and events |
+
+Against it:
+
+- A GStreamer timestamp is relative to its own pipeline's base time and clock; the
+  daemon's pipeline is another one, so it would need the sender's base time and latency
+  to get back to an absolute time. Our frames carry an absolute `CLOCK_MONOTONIC` time,
+  valid in every process of the host (measured through the daemon: −14…−21 µs).
+- The control traffic remains: acquiring the stream, server options, errors (name in
+  use, port taken), stream properties, and commands back to the sender. So each sender
+  would need two connections that have to be paired and torn down together, instead of
+  one.
+- The daemon would need GStreamer (a pipeline per sender instead of a read loop), and
+  `snapsink` a runtime dependency on gst-plugins-bad ≥ 1.24 that it does not have now.
+- Little to gain: 192 kB/s per stereo stream, so zero-copy saves nothing measurable.
+
+**2. Timestamps made in the daemon.** True: only the clients' agreement matters; a
+constant offset at the server shifts all clients equally. But the daemon would have to
+stamp by arrival (scheduling noise of several ms reaches the clients as uneven playout)
+or by counting samples (drifts against a sender whose clock is a sound card, until it
+jumps: the known weakness of the C++ snapserver's pipe sources). Handling that means
+smoothing, drift estimation and resyncs in the daemon, while embedded mode still needs
+`snapsink`'s own mapping (about 40 lines): two timing methods instead of one, and the
+sender side (lip sync with video in the same pipeline, the latency query) would lose a
+fixed, known delay.
+
+**3. The Snapcast timestamp as per-buffer metadata, and no embedded mode.** Tags do not
+fit (they are stream-level events, not per buffer); the right tool would be a
+`GstReferenceTimestampMeta` (a timestamp in another clock domain, named by caps) that
+`snapsink` attaches and the daemon reads, carried by `unixfdsink` if it serializes that
+meta (to be checked; probably yes since 1.24). The timing design would survive. But the
+control channel stays (see 1), so this adds a second transport next to the protocol
+rather than replacing it; the daemon runs a GStreamer pipeline per sender; and users
+need gst-plugins-bad ≥ 1.24. Dropping embedded mode is a separate question with a small
+gain (the backend switch and the fallback, about 100 lines) and real costs: most tests
+(loopback, lifecycle, aloop) use embedded mode on an ephemeral port, and Android needs it.
+
 ## Decisions (2026-11-22, with the project owner)
 
 1. **Names:** crate and binary `gst-snapcast-daemon`, socket directory `gst-snapcast/`.
