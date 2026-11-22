@@ -106,6 +106,7 @@ integrators**: one element instead of a FIFO and a daemon.
 |---|---|---|
 | `crates/gst-snapcast-engine` | **no** | Glue around snapcast-rs: the shared tokio runtime, one embedded server per port (`server`), embedded clients with play-out times (`client`), mDNS, client instance numbers |
 | `crates/gst-snapcast-common` | yes | Code both plugins need on the GStreamer side; so far the logging bridge |
+| `crates/gst-snapcast-daemon` | **no** | The shared server daemon (in progress, `docs/shared-server.md`): a binary around the engine, one stream acquisition per connection on a Unix socket; the protocol is the engine's `ipc` module (feature `shared`) |
 | `crates/gst-plugin-snapsink` | yes | `snapsink` (`GstBaseSink`): PCM in, Snapcast stream out (`libgstsnapsink.so`) |
 | `crates/gst-plugin-snapsrc` | yes | `snapsrc` (live `GstPushSrc`): Snapcast in, timestamped PCM out (`libgstsnapsrc.so`) |
 | `snapcast-rs/` (submodule) | no | `snapcast-server`, `snapcast-client`, `snapcast-proto`; our fork, changes go upstream |
@@ -166,6 +167,7 @@ Other rules (see also CLAUDE.md):
 | `gst-snapcast-engine` (tokio, multi-threaded) | `gst_snapcast_engine::runtime()`, on first use | snapcast-rs server and client tasks, engine event tasks |
 | one per stream | snapcast-rs `SnapServer::serve` | the stream's encoder, on its own current-thread runtime |
 | mdns-sd daemon | `mdns-sd` | announcement (snapsink) and discovery (snapsrc) |
+| one per connection (daemon only) | `gst-snapcast-daemon` | reads a sender's frames and feeds its stream (`send_pcm` blocks: backpressure) |
 
 ### Timing (summary)
 
@@ -280,6 +282,7 @@ element message `snapcast-stream-control`. Plan:
 | Variable | Default | Effect |
 |---|---|---|
 | `GST_DEBUG` | (GStreamer) | Thresholds per category, e.g. `snapsrc:5,snapcast*:4` |
+| `GST_SNAPCAST_DAEMON_LOG` | `info` | Log level of `gst-snapcast-daemon` (`error` … `trace`); its log goes to stderr |
 | `GST_SNAPCAST_TRACING` | on | `0`, `false`, `no` or `off`: don't install the logging bridge (snapcast-rs and engine logs then go to the application's own `tracing` subscriber, or nowhere) |
 | `XDG_RUNTIME_DIR` | temp dir | Where snapsrc keeps its instance lock files (`gst-snapcast-engine/instance-<n>.lock`; until 2026-11-21 `snapcast-engine/`) |
 

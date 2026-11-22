@@ -7,7 +7,7 @@ the prototype (P1–P4 in detail, every decision with its reasons, the fixed lim
 L2–L13, all measurements) is in [memory-old-2026-11-22.md](memory-old-2026-11-22.md),
 frozen; the evaluation in [../evaluation.md](../evaluation.md).
 
-Last updated: 2026-11-22 (L1 done: runtime streams in the fork, several snapsink streams per port; next: the daemon design doc).
+Last updated: 2026-11-22 (daemon design agreed, step 1 done: IPC protocol and daemon; next: step 2).
 
 ## Resume here (2026-11-22)
 
@@ -22,12 +22,17 @@ Last updated: 2026-11-22 (L1 done: runtime streams in the fork, several snapsink
    a released stream stays (clients keep their assignment across a sender restart);
    re-acquiring it with another codec/format replaces it. `EngineError::StreamsFixed`
    and `StreamMismatch` are gone, `StreamNotAdded` is new. **Next: the shared-server
-   daemon.** Design doc draft: `docs/shared-server.md` (2026-11-22), five open
-   questions at its end for the user; implement after they are answered.
+   daemon**, design `docs/shared-server.md` (agreed 2026-11-22; its "Decisions"
+   section has the answers). **Step 1 done (2026-11-22):** protocol
+   `gst_snapcast_engine::ipc` (feature `shared`), crate `gst-snapcast-daemon`
+   (`--socket PATH`), tests (a marker plays −14…−21 µs from timestamp + buffer through
+   the daemon). **Next: step 2** (engine client backend, `acquire_stream` with a mode,
+   `snapsink` `mode`). **Still to confirm with the user:** the build-feature split of
+   `snapsink` (design doc, "Build features"), and the fork PR candidate "make
+   `snapcast-control`'s auth an optional feature".
 3. **Alongside:** the snapsrc wander experiment (Open items), measured as usual.
-4. **Unpushed** (the user pushes): fork `aanno/fixes` `9a4c2b4`, `152dce6`, `7aede14`,
-   `5b77ff7`, `4f8cb71`, `da298e3`, `1b5b3b5`; this repo everything since `d256e76`. Earlier fork
-   commits (L2, L3, L4, client instances, tracing context, rustdoc fix) are pushed. No
+4. **Pushed** by the user on 2026-11-22: the fork up to `1b5b3b5` and this repo up to
+   `2258343`. No
    upstream PR is open yet; 13 fork commits are PR candidates.
 5. **Housekeeping:** the xerj index (`ax-docs`, `ax-snapcast-rs-docs`) is a snapshot from
    before 2026-11-21; reindex on the host before relying on it (`docs/claude/mcp-xerj.md`).
@@ -168,9 +173,10 @@ Fixed ones (L2–L5, L7–L10, L12, L13) are in the archive.
 ## Plan
 
 1. ~~**L1 in the fork**~~ done 2026-11-22 (see Resume here).
-2. **Design doc for the shared-server daemon:** draft `docs/shared-server.md`; agree it
-   with the user (open questions) before implementing it.
-3. **The daemon**, then `snapsink`'s `mode` (shared by default, embedded).
+2. ~~**Design doc for the shared-server daemon**~~ agreed 2026-11-22 (`docs/shared-server.md`).
+3. **The daemon**, in the doc's five steps (step 1 done): engine client and `snapsink`
+   `mode` (step 2), autospawn and lifetime (3), properties and commands (4), tests and
+   install (5).
 4. **Alongside:** the wander experiment (Open items).
 
 **After that** (not scheduled): upstream PRs for the fork commits; finishing `snapsink`

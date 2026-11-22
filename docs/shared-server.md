@@ -1,6 +1,6 @@
 # Design: a shared Snapcast server across processes
 
-Status: **agreed** (2026-11-22), implementation in progress (step 1). The outline was
+Status: **agreed** (2026-11-22), implementation in progress: step 1 done. The outline was
 agreed with the project owner on 2026-11-22 (`docs/claude/memory.md`, Decisions); the
 open questions are answered at the end; the build-feature split of `snapsink` is a
 proposal still to confirm.
@@ -159,7 +159,9 @@ in the Android build.
 
 - **Socket:** `$XDG_RUNTIME_DIR/gst-snapcast/daemon.sock`. `XDG_RUNTIME_DIR` is per user
   and mode 0700, so the socket is private without further checks. Without
-  `XDG_RUNTIME_DIR`: shared mode is unavailable (see `mode`).
+  `XDG_RUNTIME_DIR`: shared mode is unavailable (see `mode`). A socket path must fit in
+  `sun_path` (108 bytes on Linux): fine for `/run/user/<uid>`, but a long custom
+  directory fails with "path must be shorter than SUN_LEN".
 - **One daemon per user, for all ports.** The engine registry inside it already keys
   servers by port.
 - **Singleton:** the daemon takes an exclusive `flock` on
@@ -266,8 +268,10 @@ the other gets the usual "cannot listen on port" error.
 ## Logging
 
 - The daemon installs its own `tracing` subscriber (it is a binary; the engine still
-  never installs one). Output goes to `$XDG_RUNTIME_DIR/gst-snapcast/daemon.log`,
-  level from `GST_SNAPCAST_DAEMON_LOG` (an env-filter string, default `info`).
+  never installs one). Level from `GST_SNAPCAST_DAEMON_LOG` (`error` … `trace`, default
+  `info`; a level rather than a filter string, to avoid the regex dependency). Output:
+  stderr when started by hand; `$XDG_RUNTIME_DIR/gst-snapcast/daemon.log` when
+  autospawned (step 3).
 - The sink side keeps logging through `gst-snapcast-common` into the GStreamer debug log
   (`snapcast-engine`), including the IPC client. What the server logs about a stream
   stays in the daemon log; errors that matter to a sink are sent to it (`Error`) and
@@ -291,8 +295,11 @@ the other gets the usual "cannot listen on port" error.
 
 ## Steps
 
-1. Protocol module and the daemon with `Hello`/`Acquire`/`Pcm`/close, started by hand;
-   engine tests.
+1. ~~Protocol module and the daemon with `Hello`/`Acquire`/`Pcm`/close, started by hand;
+   engine tests.~~ Done 2026-11-22: `gst_snapcast_engine::ipc` (feature `shared`),
+   `crates/gst-snapcast-daemon` (`--socket PATH`). Tests: protocol unit tests; daemon
+   integration tests (version, order, two senders on one port, release on close, and a
+   marker that plays −14…−21 µs from its timestamp + buffer, through the daemon).
 2. Engine client backend and `acquire_stream` with a mode; `snapsink`'s `mode`.
 3. Autospawn, singleton, grace period, reconnect after a daemon crash.
 4. `Properties` and `Command` (metadata and `Stream.Control` through the daemon).

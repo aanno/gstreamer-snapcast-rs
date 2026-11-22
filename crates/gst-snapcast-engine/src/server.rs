@@ -239,6 +239,8 @@ struct StreamSlot {
 /// A running server. Dropped (and thereby stopped) with its last [`StreamHandle`].
 struct ServerEntry {
     requested_port: u16,
+    /// The options of the acquisition that started the server.
+    options: ServerOptions,
     local_port: u16,
     cmd_tx: mpsc::Sender<ServerCommand>,
     streams: Mutex<HashMap<String, StreamSlot>>,
@@ -299,6 +301,12 @@ impl StreamHandle {
     /// Stream name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The server-wide options in effect: those of the acquisition that started
+    /// the server, which may differ from the caller's.
+    pub fn server_options(&self) -> &ServerOptions {
+        &self.server.options
     }
 
     /// Port of the JSON-RPC control API over TCP, if the server offers it.
@@ -589,6 +597,7 @@ fn start_server(
     };
     Ok(Arc::new(ServerEntry {
         requested_port: server.port,
+        options: server.clone(),
         local_port,
         cmd_tx,
         streams: Mutex::new(streams),

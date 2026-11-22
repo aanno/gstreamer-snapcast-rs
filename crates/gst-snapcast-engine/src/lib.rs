@@ -10,6 +10,8 @@
 //!   see [`server::acquire_stream`],
 //! * (feature `control`) the Snapcast JSON-RPC control API and Snapweb for those
 //!   servers, see [`server::ControlOptions`],
+//! * (feature `shared`, Unix) the protocol between senders and the shared
+//!   server daemon `gst-snapcast-daemon`, see [`ipc`],
 //! * (feature `client`) embedded clients producing frames with a local
 //!   play-out time, see [`client::connect`].
 //!
@@ -36,6 +38,8 @@ use std::sync::OnceLock;
 
 #[cfg(feature = "client")]
 pub mod client;
+#[cfg(all(feature = "shared", unix))]
+pub mod ipc;
 #[cfg(any(feature = "client", feature = "server"))]
 pub mod mdns;
 #[cfg(feature = "server")]

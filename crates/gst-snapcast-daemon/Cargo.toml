@@ -1,0 +1,22 @@
+[package]
+name = "gst-snapcast-daemon"
+description = "Shared Snapcast server for all snapsink pipelines of a user (no GStreamer)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+gst-snapcast-engine = { workspace = true, features = ["server", "control", "shared"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt"] }
+
+[dev-dependencies]
+gst-snapcast-engine = { workspace = true, features = ["server", "control", "shared", "client"] }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

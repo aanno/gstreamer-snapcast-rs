@@ -750,10 +750,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "gst-snapcast-daemon"
+version = "0.1.0"
+dependencies = [
+ "gst-snapcast-engine",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "gst-snapcast-engine"
 version = "0.1.0"
 dependencies = [
  "mdns-sd",
+ "serde",
  "serde_json",
  "snapcast-client",
  "snapcast-control",

@@ -117,6 +117,7 @@ first).
 ├── crates/
 │   ├── gst-snapcast-engine/   # GStreamer-free glue: tokio runtime, shared server/client lifecycle
 │   ├── gst-snapcast-common/   # GStreamer-side code shared by both plugins (logging bridge)
+│   ├── gst-snapcast-daemon/   # shared server for all pipelines of a user (in progress)
 │   ├── gst-plugin-snapsink/   # -> libgstsnapsink.so  (element: snapsink)
 │   └── gst-plugin-snapsrc/    # -> libgstsnapsrc.so   (element: snapsrc)
 ├── snapcast-rs/               # git submodule (fork of metaneutrons/snapcast-rs), own Cargo workspace

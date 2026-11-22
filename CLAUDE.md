@@ -10,9 +10,12 @@ built on the embeddable engines of the `snapcast-rs` submodule:
 - `snapsink` (`crates/gst-plugin-snapsink`, `GstBaseSink`): PCM in, embedded Snapcast **server** stream out.
 - `snapsrc` (`crates/gst-plugin-snapsrc`, live `GstPushSrc`): embedded Snapcast **client** in, timestamped PCM out.
 - `gst-snapcast-engine` (`crates/gst-snapcast-engine`): GStreamer-free glue (tokio runtime,
-  servers shared per port, client lifecycle). Features `server` / `client`.
+  servers shared per port, client lifecycle). Features `server` / `control` / `client` /
+  `shared` (the daemon's IPC protocol).
 - `gst-snapcast-common` (`crates/gst-snapcast-common`): GStreamer-side code shared by both
   plugins (so far the `tracing`/`log` → GStreamer debug log bridge).
+- `gst-snapcast-daemon` (`crates/gst-snapcast-daemon`, in progress): the per-user shared
+  server, a GStreamer-free binary around the engine (design: `docs/shared-server.md`).
 
 Architecture, dependency rules (with reasons), threads, logging and the interfaces
 (environment variables, debug categories): `docs/architecture.md`. Keep it current.
