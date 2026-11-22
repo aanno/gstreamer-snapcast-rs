@@ -1,8 +1,9 @@
 # Design: a shared Snapcast server across processes
 
-Status: **draft for discussion** (2026-11-22). Nothing here is implemented yet. The
-outline was agreed with the project owner on 2026-11-22 (`docs/claude/memory.md`,
-Decisions); this document fills in the details and lists what is still to decide.
+Status: **agreed** (2026-11-22), implementation in progress (step 1). The outline was
+agreed with the project owner on 2026-11-22 (`docs/claude/memory.md`, Decisions); the
+open questions are answered at the end; the build-feature split of `snapsink` is a
+proposal still to confirm.
 
 ## Goal
 
@@ -50,6 +51,94 @@ what an embedded `snapsink` does today, `server::acquire_stream` with the sink's
 options, and the stream is released when the connection closes. Everything that works
 embedded (several streams per port, codecs, control API, Snapweb, mDNS, metadata,
 `Stream.Control`) works in the daemon without new server code.
+
+## Protocols
+
+Three kinds of traffic, of which only the last one is new:
+
+| Protocol | Between | Port / path | Changes with the daemon? |
+|---|---|---|---|
+| Snapcast stream protocol (binary messages: Hello, ServerSettings, CodecHeader, WireChunk, Time) | server → players (snapsrc, C++ snapclient, Snapcast apps) | TCP 1704 | no: served by the daemon instead of the pipeline's process |
+| Snapcast control API: JSON-RPC 2.0 with notifications (`Client.OnVolumeChanged`, …) | server ↔ controllers (Snapweb, Snapdroid, Home Assistant, scripts) | TCP 1705 (newline-delimited), HTTP 1780: `POST /jsonrpc` and WebSocket `/jsonrpc`, plus static files (Snapweb) | no: served by the daemon |
+| IPC: timestamped PCM and stream control | `snapsink` ↔ daemon | Unix socket, private to the user | new (below) |
+
+**Why a new protocol for the IPC.** No existing one carries what a sender has to hand
+over: PCM *with* its server timestamp, plus the acquisition (stream name, format,
+server options) and the stream's properties and commands. The C++ snapserver's
+pipe/TCP sources carry raw PCM only and time it by arrival. Considered and not chosen:
+
+- *JSON-RPC for the IPC* (e.g. a `Stream.AddStream` with a local URI): fine for the
+  control messages, but PCM inside JSON is wasteful, and the URI form is exactly what
+  the library refuses (sources are application-owned, see L1).
+- *Snapcast's own binary framing* (`snapcast-proto`: `WireChunk` has a timestamp, and the
+  `custom-protocol` feature allows extra message types): tested serialization, but its
+  messages mean "server to player"; reusing them backwards for "sender to server"
+  would confuse readers and tie the IPC to that crate's evolution.
+
+So the IPC is a minimal private framing (next section), versioned, and never exposed
+on the network. Only the daemon and `snapsink` speak it; both ship from this repo, so
+it needs no compatibility beyond "same version".
+
+## Web server: needed or not?
+
+What needs HTTP:
+
+- **Snapweb** talks JSON-RPC over a **WebSocket**, and a WebSocket starts as an HTTP
+  upgrade, so some HTTP handling is needed for it. Its static files can come from
+  anywhere: Snapweb has a setting for the server address (it defaults to the host the
+  page came from), so it could be served by any web server and pointed at the daemon.
+- **Snapweb's in-browser player** needs `/stream` (audio over WebSocket), which
+  snapcast-rs does not have (L11).
+- **Controllers over TCP** (Snapdroid, Home Assistant's Snapcast integration, scripts with
+  `nc`) need **no** web server: JSON-RPC over TCP 1705.
+
+So HTTP is only needed for browser controllers. In the shared setup it lives in **one**
+process, the daemon, which is the natural place for it; the pipelines don't need it.
+
+**REST as an alternative?**
+
+| | JSON-RPC (Snapcast's API) | REST |
+|---|---|---|
+| Existing controllers | Snapweb, Snapdroid, Home Assistant, Snapcast apps all speak it | none; each would need an adapter |
+| Push updates | notifications over TCP and WebSocket, built in | needs SSE or a WebSocket next to it anyway |
+| Spec | the C++ snapserver's `doc/json_rpc_api/`, one implementation in `snapcast-control` | ours to design, document and keep in sync |
+| Ease from the shell | `POST /jsonrpc` with curl works already | nicer: `GET /streams`, cacheable, OpenAPI tooling |
+| Dependencies | the same HTTP stack | the same HTTP stack |
+
+REST would only make sense as an *additional* convenience layer for scripts, and the
+existing `POST /jsonrpc` covers that use already. Recommendation: **no REST**; keep
+JSON-RPC as the only control API (as decided on 2026-11-21).
+
+## Build features of `snapsink` (proposal)
+
+Today `snapsink` always builds the engine with `server` and `control`, and the control
+stack roughly doubles its dependency tree. Measured with `cargo tree` (normal
+dependencies, unique crates, 2026-11-22):
+
+| Engine features | Crates |
+|---|---|
+| `server` | 80 |
+| `server` + `control` (TCP, HTTP, Snapweb, auth) | 199 |
+
+Inside `snapcast-control`: its HTTP part (axum, hyper, tower-http, tungstenite) adds
+about 50 crates; most of the other ~70 come from its authentication (jsonwebtoken
+with RSA and elliptic-curve crypto), which is always compiled in although it is off by
+default.
+
+With the daemon, the control API runs in the daemon, not in the pipeline. So:
+
+- **`snapsink` default build:** engine `server` (for `mode=embedded` and the `auto`
+  fallback) + `shared` (the IPC client). No control stack. The properties
+  `control-port`, `http-port`, `snapweb-dir` stay: in shared mode they go to the daemon
+  with the acquisition, and the daemon serves the API. In embedded mode without the
+  `control` feature, setting them gives a warning ("control API needs the shared
+  server or a build with feature `control`").
+- **`snapsink` feature `control`** (off by default): the control API in embedded mode, as
+  today. For Android (no daemon) and for anyone who wants embedded with Snapweb.
+- **The daemon** always has `control`.
+- **snapcast-rs, an upstream PR candidate:** make authentication an optional feature of
+  `snapcast-control` (`auth`), like `http` already is. That shrinks every build that
+  doesn't need it, including a TCP-only control API for Android (Snapdroid).
 
 ## Components
 
@@ -223,13 +312,12 @@ Each step ends with `make check` green and a commit. No snapcast-rs change is ex
   socket. Rejected.
 - **Shared memory for PCM:** not needed at these data rates (see Timing).
 
-## Open questions
+## Decisions (2026-11-22, with the project owner)
 
-1. **Names:** crate and binary `gst-snapcast-daemon`, socket directory `gst-snapcast/`?
-2. **`mode=auto` falls back to embedded with a warning.** Or should the default be strict
-   `shared`, failing when the daemon cannot start?
-3. **Grace period** 5 s?
-4. **Released streams** stay until the daemon exits (as embedded today), or are removed
-   after a while?
-5. **Daemon crash:** reconnect once (respawning the daemon) as proposed, or post an error
-   at once?
+1. **Names:** crate and binary `gst-snapcast-daemon`, socket directory `gst-snapcast/`.
+2. **`mode=auto`** is the default: shared, falling back to embedded with a warning.
+3. **Grace period** 5 s.
+4. **Released streams** stay until the daemon exits.
+5. **Daemon crash:** reconnect once (respawning the daemon), then an element error.
+
+Still to confirm: the build-feature split of `snapsink` (proposal above).
