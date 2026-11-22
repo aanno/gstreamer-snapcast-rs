@@ -176,6 +176,24 @@ sudo make uninstall-system
 `make doctor` shows which `snapsink`/`snapsrc` files GStreamer actually loads. Note that
 `GST_PLUGIN_PATH` (set in the devcontainer) takes precedence over installed copies.
 
+### Build features
+
+The plugins have no Cargo features of their own: each enables what it needs in
+`gst-snapcast-engine`, which in turn picks the snapcast-rs crates (their features:
+[snapcast-rs/README.md](snapcast-rs/README.md#build-features)).
+
+| Crate | Uses | snapcast-rs underneath |
+|-------|------|------------------------|
+| `gst-plugin-snapsink` | engine `server` + `control` | `snapcast-server` (default features: encodes PCM and FLAC; `opus`/`vorbis` are off, they would need libopus/libvorbis), `snapcast-control` (default `http`: JSON-RPC over TCP and HTTP/WebSocket, Snapweb's files) |
+| `gst-plugin-snapsrc` | engine `client` | `snapcast-client` without default features (decodes PCM, FLAC, Opus and Vorbis, all pure Rust) |
+| `gst-snapcast-engine` | features `server`, `control` (implies `server`), `client`; none by default | as above, plus `mdns-sd` for mDNS (pure Rust) |
+
+No feature adds a C library beyond GStreamer itself. Features that would break
+interoperability with the C++ Snapcast (`f32lz4`, `encryption`, `custom-protocol`) are not
+enabled. The control API can be switched off at runtime (`control-port=0`, `http-port=0`,
+the defaults); building `snapsink` without it would need a plugin feature that does not
+exist yet.
+
 ## Development
 
 ```sh
