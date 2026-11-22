@@ -3,7 +3,7 @@
 Working memory for agents and humans continuing this project. Keep it current:
 update **State** and **Plan** when a step is finished, and add decisions with a date.
 
-Last updated: 2026-11-22 (P4 started: F5 lifecycle done — snapsrc fills gaps with silence, lifecycle and sender-pause tests; next: F3 endurance tooling, F1 listening by the user).
+Last updated: 2026-11-22 (P4: F5 lifecycle met, F3 endurance met (an hour on the aloop card); next: the write-up `docs/evaluation.md`).
 
 ## Resume here (2026-11-22)
 
@@ -20,10 +20,23 @@ write-up `docs/evaluation.md`; the go/no-go is the user's):
    snapsink resume bug was **not** ours: `audiotestsrc is-live` re-anchors its timestamps
    after PAUSED→PLAYING (hole or overlap of a few ms). The C++ snapclient is +2…+3.5 ms
    off for ~3 s after a stream gap (its own re-sync), snapsrc is not.
-2. **F3 tooling done** (`make test-endurance`, `aloop_endurance`; docs/testing.md). A
-   3-minute check: no dropouts, all ticks, memory flat after the first window. **Next:
-   the hour-long run** (started by the agent in the devcontainer at the end of
-   2026-11-22; CSV in `target/endurance-*.csv`), then the write-up `docs/evaluation.md`.
+2. **F3 met (2026-11-22)** (`make test-endurance`, `aloop_endurance`; docs/testing.md).
+   Two hour-long runs on the aloop card (snapsink → snapsrc + C++ snapclient, ticks plus a
+   quiet sine). **Run 1** failed only on a measurement artifact in window 17 (the test
+   process stalled, so the capture could not be mapped to clock time: both receivers
+   appeared −499…+489 ms off the server while the pair stayed at +19 µs); otherwise all
+   ticks, no gaps, pair +8…+68 µs per window, both receivers +0.3…+0.4 ms against the
+   server. Fixed in the tooling (`capture_jitter_ms`, only waited-for buffers count,
+   unreliable windows are skipped and listed, > 10 % fail). **Run 2 passed**: 3599/3599
+   ticks in both receivers, no gaps, no unreliable windows; pair +776…+831 µs per window
+   (single ticks +396…+1167 µs); against the server snapsrc +0.06…+0.14 ms, C++
+   +0.86…+0.95 ms; trend snapsrc vs server +0.008 ms/h; RSS of the test process 41–47 MiB
+   (−3.4 MiB/h after the first window), C++ 9 MiB flat. The pair offset is constant within
+   a run but differs between runs (run 1 ~0, run 2 ~+0.8 ms; it is the C++ client that
+   moved), so it is a per-start offset, not drift. Capture jitter in run 2: median 10.5 ms,
+   max 19.3 ms, close to the 20 ms gate (the 2-minute check had 4–5 ms); raise
+   `ENDURANCE_MAX_JITTER_MS` if long runs start skipping windows. **Next: the write-up
+   `docs/evaluation.md`.**
    **F1:** the user listened to `listen-pair` on 2026-11-22: fine (a ~30 s track only).
 4. **The known snapsrc wander, measured (2026-11-22):** in about one receiver run in four
    or five, snapsrc wanders by ±1.5…3 ms against the server within a 20 s run; it also
@@ -537,7 +550,7 @@ from the sink's `resample` slaving; could be smoothed via the sink clock's
 |---|---|
 | F1 listening (desktop sender, snapsrc + C++ in sync) | mostly: music through snapsrc on the host is clean since the frame-loss fix; `listen-pair` fine (user, 2026-11-22, a ~30 s track); a longer desktop-music session is still open |
 | F2 measured (≤ 1 ms, also under drift) | met in the aloop tests; under drift only to 2.5 ms, because of the C++ reference |
-| F3 endurance (hours, no growth) | tooling done (`make test-endurance`, 2026-11-22); the hour-long run is pending |
+| F3 endurance (hours, no growth) | **met (2026-11-22)**: an hour on the aloop card, all ticks, no gaps, no growth in latency or memory (run 2; run 1 failed only on a measurement artifact, since fixed) |
 | F4 controller (optional) | met: Snapweb in the browser (user, 2026-11-21/22) |
 | F5 lifecycle | **met (2026-11-22)**: sender pause → silence (GAP) on a continuous timeline, in sync after the resume (aloop, with the C++ client); receiver pause resumes on schedule; restarted snapsrc keeps its client id; reconnect after a server restart |
 
