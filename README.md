@@ -50,8 +50,9 @@ publishing: [docs/architecture.md](docs/architecture.md).
 > it outputs silence (GAP buffers) on a continuous timeline. snapcast-rs logs into the GStreamer debug log. snapsink
 > can offer the Snapcast JSON-RPC control API and serve Snapweb (`control-port`,
 > `http-port`, `snapweb-dir`; opt-in), and passes track tags on as stream metadata.
-> Limitations: one stream per server port (snapcast-rs cannot add streams at runtime
-> yet), S16LE/S32LE input only, no authentication on the control API, Snapweb's
+> Several `snapsink`s in one process can feed different streams of one server port.
+> Limitations: streams are shared only within one process (a shared server daemon is
+> planned), S16LE/S32LE input only, no authentication on the control API, Snapweb's
 > in-browser player is not supported (P2). The current state, decisions, all known limitations and the plan are
 > in [docs/claude/memory.md](docs/claude/memory.md); the architecture in
 > [docs/architecture.md](docs/architecture.md); the evaluation of the prototype (F1–F5, an

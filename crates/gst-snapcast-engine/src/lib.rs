@@ -93,26 +93,13 @@ pub enum EngineError {
     /// The stream is already fed by another sender.
     #[error("stream '{0}' is already in use")]
     StreamTaken(String),
-    /// The running server was created without this stream.
-    #[error(
-        "server on port {port} is already running without stream '{stream}' \
-         (snapcast-rs cannot add streams at runtime yet; use another port)"
-    )]
-    StreamsFixed {
-        /// Port of the running server.
-        port: u16,
+    /// The running server refused to add the stream (e.g. an unknown codec).
+    #[error("cannot add stream '{stream}' to the running server: {reason}")]
+    StreamNotAdded {
         /// Requested stream.
         stream: String,
-    },
-    /// The stream exists with a different codec or format.
-    #[error("stream '{stream}' runs as {existing}, requested {requested}")]
-    StreamMismatch {
-        /// Stream name.
-        stream: String,
-        /// Existing codec and format.
-        existing: String,
-        /// Requested codec and format.
-        requested: String,
+        /// The server's reason.
+        reason: String,
     },
     /// The server terminated.
     #[error("Snapcast server is gone")]

@@ -23,7 +23,7 @@ fn element_has_default_properties() {
 }
 
 #[test]
-fn second_stream_on_running_server_fails() {
+fn streams_share_a_running_server_but_not_a_name() {
     init();
     let port = free_port();
     let launch = |stream: &str| {
@@ -35,23 +35,40 @@ fn second_stream_on_running_server_fails() {
     };
     let first = launch("a");
     first.set_state(gst::State::Playing).unwrap();
+    // A second stream joins the server on the same port (L1).
     let second = launch("b");
     second.set_state(gst::State::Playing).unwrap();
+    let (_, state, _) = second.state(gst::ClockTime::from_seconds(5));
+    assert_eq!(state, gst::State::Playing);
+    assert!(
+        second
+            .bus()
+            .unwrap()
+            .timed_pop_filtered(
+                gst::ClockTime::from_mseconds(500),
+                &[gst::MessageType::Error]
+            )
+            .is_none(),
+        "the second stream runs"
+    );
 
-    let msg = second
+    // The same name twice is still refused.
+    let third = launch("a");
+    let _ = third.set_state(gst::State::Playing);
+    let msg = third
         .bus()
         .unwrap()
         .timed_pop_filtered(gst::ClockTime::from_seconds(5), &[gst::MessageType::Error])
-        .expect("expected an error for the second stream");
+        .expect("expected an error for a stream name in use");
     let gst::MessageView::Error(err) = msg.view() else {
         unreachable!()
     };
     assert!(
-        err.debug()
-            .is_some_and(|d| d.contains("without stream 'b'")),
+        err.debug().is_some_and(|d| d.contains("already in use")),
         "{err:?}"
     );
 
+    third.set_state(gst::State::Null).unwrap();
     second.set_state(gst::State::Null).unwrap();
     first.set_state(gst::State::Null).unwrap();
 }

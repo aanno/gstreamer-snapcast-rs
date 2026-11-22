@@ -7,20 +7,27 @@ the prototype (P1–P4 in detail, every decision with its reasons, the fixed lim
 L2–L13, all measurements) is in [memory-old-2026-11-22.md](memory-old-2026-11-22.md),
 frozen; the evaluation in [../evaluation.md](../evaluation.md).
 
-Last updated: 2026-11-22 (P4 done: the user agreed to the evaluation, go; memory split).
+Last updated: 2026-11-22 (L1 done: runtime streams in the fork, several snapsink streams per port; next: the daemon design doc).
 
 ## Resume here (2026-11-22)
 
 1. **The feasibility prototype is done: go** (user, 2026-11-22, agreeing to
    `docs/evaluation.md`). F1–F5 met; F1 and F2 with caveats (see Open items).
-2. **Next: L1 in the fork** (runtime streams, framing in the L1 row below), then the
-   **design doc for the shared-server daemon** (see Decisions), with `snapsink`'s default
-   mode "shared".
+2. **L1 done (2026-11-22).** Fork commit `1b5b3b5` `feat(server): add and remove
+   embedder-fed streams while the server runs` (upstream PR candidate):
+   `ServerCommand::AddAudioStream` (answers with the frame sender), `RemoveStream` now
+   stops the encoder and forgets the codec header (name reusable), new clients start on
+   the first playable stream when the default was removed; URI-based `Stream.AddStream`
+   stays rejected. Engine: another stream name on a running port is added at runtime;
+   a released stream stays (clients keep their assignment across a sender restart);
+   re-acquiring it with another codec/format replaces it. `EngineError::StreamsFixed`
+   and `StreamMismatch` are gone, `StreamNotAdded` is new. **Next: the design doc for
+   the shared-server daemon** (see Decisions), with `snapsink`'s default mode "shared".
 3. **Alongside:** the snapsrc wander experiment (Open items), measured as usual.
 4. **Unpushed** (the user pushes): fork `aanno/fixes` `9a4c2b4`, `152dce6`, `7aede14`,
-   `5b77ff7`, `4f8cb71`, `da298e3`; this repo everything since `d256e76`. Earlier fork
+   `5b77ff7`, `4f8cb71`, `da298e3`, `1b5b3b5`; this repo everything since `d256e76`. Earlier fork
    commits (L2, L3, L4, client instances, tracing context, rustdoc fix) are pushed. No
-   upstream PR is open yet; 12 fork commits are PR candidates.
+   upstream PR is open yet; 13 fork commits are PR candidates.
 5. **Housekeeping:** the xerj index (`ax-docs`, `ax-snapcast-rs-docs`) is a snapshot from
    before 2026-11-21; reindex on the host before relying on it (`docs/claude/mcp-xerj.md`).
 6. **Offer, not done:** start the C++ client in `listen.sh pair` with `--instance 2`, if the
@@ -37,8 +44,8 @@ What works, with the tests that cover it (all details in the archive and in
   `aanno/snapcast-rs`, branch `aanno/fixes`). Crates, rules, threads and logging:
   `docs/architecture.md`.
 - **Sender** `snapsink`: embedded server, one per port and process, shared by the sinks of
-  that process (registry by port; `port=0` = ephemeral, read `bound-port`); one stream per
-  server (L1). Paces non-live sources. mDNS announce. Control plane: JSON-RPC (TCP,
+  that process (registry by port; `port=0` = ephemeral, read `bound-port`); each sink
+  feeds its own stream, further names join the running server (L1 done). Paces non-live sources. mDNS announce. Control plane: JSON-RPC (TCP,
   HTTP/WebSocket) and Snapweb (`control-port`, `http-port`, `snapweb-dir`; opt-in), tags as
   stream metadata, `controls` with `Stream.Control` as the bus message
   `snapcast-stream-control`. PCM and FLAC (default `pcm`).
@@ -151,7 +158,7 @@ Fixed ones (L2–L5, L7–L10, L12, L13) are in the archive.
 
 | # | Limitation | Where | Current workaround | Fix |
 |---|---|---|---|---|
-| L1 | Streams are fixed once `SnapServer::serve()` runs. `ServerCommand::AddStream` exists, but it always answers with an error after `serve()`; `RemoveStream` works | snapcast-rs server | One stream per port; a second stream name fails with `StreamsFixed` | **Next** (needed for the daemon). **Framing for the PR (2026-11-22):** upstream's README ("Known Limitations") says dynamic `Stream.AddStream` is *application-owned*, because the library owns no source readers (the JSON-RPC call takes a URI such as `pipe://…`). So the PR adds a Rust API for an embedder-fed stream after `serve()` (like `add_stream`, returning the frame sender: encoder, session codec registration, state, notification), and leaves URI-based `Stream.AddStream` rejected; that keeps upstream's stance and is all the daemon needs |
+| L1 | ~~Streams are fixed once `SnapServer::serve()` runs~~ | snapcast-rs server | — | **Fixed 2026-11-22** (fork `1b5b3b5`, upstream PR candidate): `ServerCommand::AddAudioStream` for embedder-fed streams; URI-based `Stream.AddStream` stays rejected (upstream's "application-owned" stance). Engine and snapsink use it. Left: streams are shared only within one process (the daemon) |
 | L6 | Sink input is only S16LE/S32LE; no S24_32LE | `snapsink` | `audioconvert` upstream | When finishing snapsink |
 | L11 | snapcast-rs cannot serve **audio** over WebSocket (C++ snapserver: `/stream` on port 1780, used by Snapweb's in-browser player). Its WebSocket endpoint carries only JSON-RPC (upstream README: "No WebSocket audio transport") | snapcast-rs server | — | Only if a WebSocket audio client must work with `snapsink`; a separate snapcast-rs change |
 | L14 | `snapsink` and `snapsrc` **in one pipeline** never reach PLAYING: snapsink prerolls and waits for PLAYING, the receiver's sink waits for its first buffer | both elements, GStreamer preroll | `async=false` on one sink (e.g. `snapsink async=false`); documented in `docs/pipelines.md` 5.4 | Won't fix (2026-11-21): a rare setup |
@@ -159,8 +166,7 @@ Fixed ones (L2–L5, L7–L10, L12, L13) are in the archive.
 
 ## Plan
 
-1. **L1 in the fork** (upstream PR candidate, with tests and docs), then the pointer commit
-   and the engine using it (several `snapsink` streams on one port in one process).
+1. ~~**L1 in the fork**~~ done 2026-11-22 (see Resume here).
 2. **Design doc for the shared-server daemon** (outline in Decisions), agreed with the user
    before implementing it.
 3. **The daemon**, then `snapsink`'s `mode` (shared by default, embedded).

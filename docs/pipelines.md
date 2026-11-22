@@ -113,16 +113,21 @@ time and the pipeline ends when the file does.
 **4.4 Microphone or line-in:** `autoaudiosrc ! audioconvert ! audioresample ! …` (the
 default input), or `alsasrc device=hw:1,0` for a specific card.
 
-**4.5 Two streams** (tested): one server per port and one stream per server for now
-(L1), so use two ports:
+**4.5 Two streams** (tested): `snapsink`s in one process share the server on their port,
+each with its own stream; a controller (Snapweb) assigns the groups to the streams. New
+clients start on the first stream.
 
 ```sh
 gst-launch-1.0 -e \
     audiotestsrc is-live=true ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
-        ! snapsink stream=music port=1704 \
+        ! snapsink stream=music control-port=1705 \
     audiotestsrc is-live=true wave=ticks ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
-        ! snapsink stream=ticks port=1714
+        ! snapsink stream=ticks
 ```
+
+The server-wide options (`port`'s server, `buffer-ms`, the control ports, `mdns-name`) come
+from the `snapsink` that starts the server. Separate processes still need separate ports
+until the shared server daemon exists.
 
 **4.6 Mopidy** (not tested yet): Mopidy's usual Snapcast setup writes into a FIFO for a
 separate `snapserver`. With `snapsink` installed for the user Mopidy runs as, its output

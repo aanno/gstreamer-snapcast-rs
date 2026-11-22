@@ -4,13 +4,15 @@
 //! server listening on a given port. The first acquisition for a port creates
 //! and starts the server; it is stopped when the last handle is dropped.
 //!
-//! # Limitation: fixed stream set
+//! # Several streams per server
 //!
-//! `snapcast-server` requires all streams to be registered before
-//! `SnapServer::serve` is called. Until snapcast-rs grows runtime
-//! `add_stream`/`remove_stream`, a running server only has the stream it was
-//! created with, so a second, *different* stream on the same port fails with
-//! [`EngineError::StreamsFixed`]. Use different ports for now.
+//! The first acquisition creates the server with its stream; acquiring another
+//! stream name on the same port adds that stream to the running server
+//! (`ServerCommand::AddAudioStream`). Each stream has its own codec and format.
+//! A released stream stays on the server, unclaimed, until the server stops, so
+//! clients keep their stream assignment when a sender restarts. Re-acquiring it
+//! with another codec or format replaces it: the old one is removed (groups
+//! playing it are left without a stream) and a new one is added.
 //!
 //! # Control API (feature `control`)
 //!
@@ -26,10 +28,13 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use snapcast_server::{
     AudioData, AudioFrame, ServerCommand, ServerConfig, ServerEvent, SnapServer, StreamConfig,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::Instrument;
 
 use crate::{EngineError, PcmFormat, runtime};
+
+/// How long [`acquire_stream`] waits for a running server to add a stream.
+const ADD_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Codec used when none is configured. PCM has no encoder delay and is
 /// understood by every Snapcast client.
@@ -365,7 +370,8 @@ impl Drop for StreamHandle {
 }
 
 /// Get exclusive access to stream `stream.name` of the server on `server.port`,
-/// starting that server if necessary.
+/// starting that server if necessary, and adding the stream to a running server
+/// that does not have it yet (blocks until the server answers, at most 5 s).
 pub fn acquire_stream(
     server: &ServerOptions,
     stream: &StreamOptions,
@@ -397,31 +403,106 @@ fn claim_existing(
     stream: &StreamOptions,
 ) -> Result<StreamHandle, EngineError> {
     let tx = {
+        // Held while the server adds a stream, so that concurrent acquisitions
+        // of one name don't both add it.
         let mut streams = entry.streams.lock().unwrap();
-        let Some(slot) = streams.get_mut(&stream.name) else {
-            return Err(EngineError::StreamsFixed {
-                port: entry.local_port,
-                stream: stream.name.clone(),
-            });
-        };
-        if slot.claimed {
-            return Err(EngineError::StreamTaken(stream.name.clone()));
+        match streams.get_mut(&stream.name) {
+            Some(slot) if slot.claimed => {
+                return Err(EngineError::StreamTaken(stream.name.clone()));
+            }
+            Some(slot) if slot.format == stream.format && slot.codec == stream.codec => {
+                slot.claimed = true;
+                slot.tx.clone()
+            }
+            existing => {
+                if let Some(slot) = existing {
+                    tracing::info!(
+                        old = %format!("{} {}", slot.codec, slot.format),
+                        new = %format!("{} {}", stream.codec, stream.format),
+                        "Replacing the released stream with another format"
+                    );
+                    send_command(
+                        &entry.cmd_tx,
+                        ServerCommand::RemoveStream {
+                            stream_id: stream.name.clone(),
+                        },
+                    )?;
+                    streams.remove(&stream.name);
+                }
+                let tx = add_stream_at_runtime(&entry.cmd_tx, stream)?;
+                streams.insert(
+                    stream.name.clone(),
+                    StreamSlot {
+                        tx: tx.clone(),
+                        codec: stream.codec.clone(),
+                        format: stream.format,
+                        claimed: true,
+                    },
+                );
+                tx
+            }
         }
-        if slot.format != stream.format || slot.codec != stream.codec {
-            return Err(EngineError::StreamMismatch {
-                stream: stream.name.clone(),
-                existing: format!("{} {}", slot.codec, slot.format),
-                requested: format!("{} {}", stream.codec, stream.format),
-            });
-        }
-        slot.claimed = true;
-        slot.tx.clone()
     };
     Ok(StreamHandle {
         server: entry,
         name: stream.name.clone(),
         tx,
     })
+}
+
+/// Queue a command for the server without blocking.
+fn send_command(
+    cmd_tx: &mpsc::Sender<ServerCommand>,
+    cmd: ServerCommand,
+) -> Result<(), EngineError> {
+    use mpsc::error::TrySendError;
+    cmd_tx.try_send(cmd).map_err(|e| match e {
+        TrySendError::Full(_) => EngineError::Busy,
+        TrySendError::Closed(_) => EngineError::ServerGone,
+    })
+}
+
+/// Add `stream` to a running server and wait (bounded) for its audio sender.
+/// Callable from any thread except the engine runtime's own.
+fn add_stream_at_runtime(
+    cmd_tx: &mpsc::Sender<ServerCommand>,
+    stream: &StreamOptions,
+) -> Result<mpsc::Sender<AudioFrame>, EngineError> {
+    let (response_tx, response_rx) = oneshot::channel();
+    send_command(
+        cmd_tx,
+        ServerCommand::AddAudioStream {
+            name: stream.name.clone(),
+            config: stream_config(stream),
+            response_tx,
+        },
+    )?;
+    // Wait on the runtime, bounded, and hand the answer to this thread.
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    runtime().spawn(async move {
+        let _ = done_tx.send(tokio::time::timeout(ADD_STREAM_TIMEOUT, response_rx).await);
+    });
+    match done_rx.recv() {
+        Ok(Ok(Ok(Ok(tx)))) => {
+            tracing::info!("Stream added to the running server");
+            Ok(tx)
+        }
+        Ok(Ok(Ok(Err(reason)))) => Err(EngineError::StreamNotAdded {
+            stream: stream.name.clone(),
+            reason,
+        }),
+        Ok(Ok(Err(_))) | Err(_) => Err(EngineError::ServerGone),
+        Ok(Err(_)) => Err(EngineError::Busy),
+    }
+}
+
+/// The server-side configuration of a stream: always explicit, because the
+/// server's defaults are those of its first stream.
+fn stream_config(stream: &StreamOptions) -> StreamConfig {
+    StreamConfig {
+        codec: Some(stream.codec.clone()),
+        sample_format: Some(stream.format.to_string()),
+    }
 }
 
 fn start_server(
@@ -446,13 +527,7 @@ fn start_server(
         ..ServerConfig::default()
     };
     let (mut snap, events) = SnapServer::new(config);
-    let tx = snap.add_stream_with_config(
-        &stream.name,
-        StreamConfig {
-            codec: Some(stream.codec.clone()),
-            sample_format: Some(stream.format.to_string()),
-        },
-    );
+    let tx = snap.add_stream_with_config(&stream.name, stream_config(stream));
     let cmd_tx = snap.command_sender();
 
     // The server outlives the sink that started it: its own span, not the caller's.
@@ -704,20 +779,20 @@ mod tests {
             acquire_stream(&opts, &stream("a")),
             Err(EngineError::StreamTaken(_))
         ));
-        assert!(matches!(
-            acquire_stream(&opts, &stream("b")),
-            Err(EngineError::StreamsFixed { .. })
-        ));
+        // Another stream name joins the running server.
+        let b = acquire_stream(&opts, &stream("b")).unwrap();
+        assert!(Arc::ptr_eq(&a.server, &b.server));
         let mut other_format = stream("a");
         other_format.format.rate = 44100;
         drop(a);
+        drop(b);
 
         // Last handle gone: the server stops and the port can be reused,
         // now with a different stream set.
-        let b = acquire_stream(&opts, &stream("b")).unwrap();
-        assert_eq!(b.port(), opts.port);
-        drop(b);
-        let _c = acquire_stream(&opts, &other_format).unwrap();
+        let c = acquire_stream(&opts, &stream("c")).unwrap();
+        assert_eq!(c.port(), opts.port);
+        drop(c);
+        let _d = acquire_stream(&opts, &other_format).unwrap();
     }
 
     #[test]
@@ -736,9 +811,16 @@ mod tests {
         let mut other = stream("a");
         other.codec = "flac".into();
         drop(a2);
+        // Released with another codec: replaced on the same server.
+        let a3 = acquire_stream(&opts, &other).unwrap();
+        assert!(Arc::ptr_eq(&server, &a3.server));
+        drop(a3);
+        // An invalid format is the server's to reject.
+        let mut invalid = stream("z");
+        invalid.codec = "bogus".into();
         assert!(matches!(
-            acquire_stream(&opts, &other),
-            Err(EngineError::StreamMismatch { .. })
+            acquire_stream(&opts, &invalid),
+            Err(EngineError::StreamNotAdded { .. })
         ));
     }
 
@@ -847,6 +929,37 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+
+    #[cfg(feature = "control")]
+    #[test]
+    fn controllers_see_every_stream_of_the_server() {
+        let opts = ServerOptions {
+            port: free_port(),
+            buffer_ms: 500,
+            control: ControlOptions {
+                tcp_port: Some(0),
+                ..ControlOptions::default()
+            },
+            ..ServerOptions::default()
+        };
+        let x = acquire_stream(&opts, &stream("x")).unwrap();
+        let mut flac = stream("y");
+        flac.codec = "flac".into();
+        let _y = acquire_stream(&opts, &flac).unwrap();
+        let tcp = x.control_tcp_port().expect("TCP control port");
+        let reply = rpc_over_tcp(
+            tcp,
+            r#"{"jsonrpc":"2.0","id":1,"method":"Server.GetStatus"}"#,
+        );
+        let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        let ids: Vec<&str> = reply["result"]["server"]["streams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["x", "y"]);
     }
 
     #[test]

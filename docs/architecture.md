@@ -66,8 +66,8 @@ groups and persistence out of the box is `snapserver`.
    [Audio sink slaving](#audio-sink-slaving-adjust-sink)). snapclient-rs writes to a
    device and does not have this problem.
 2. **Weight:** the GStreamer runtime is far bigger than a single client binary.
-3. **A building block, not a product:** no control plane yet (P2), one stream per port
-   (L1), no persistence. An application has to provide what snapserver provides as a daemon.
+3. **A building block, not a product:** several streams per port only within one
+   process, no persistence. An application has to provide what snapserver provides as a daemon.
 4. **Lifecycle:** the server lives in the application's process. If the application
    crashes or the pipeline stops, the server or its stream goes with it.
 5. **Two moving upstreams:** gstreamer-rs has a breaking minor release once or twice a
@@ -152,7 +152,9 @@ the app; see [Static linking](#static-linking-rust-applications).
 Other rules (see also CLAUDE.md):
 
 - One embedded `SnapServer` per port, owned by the engine (`server::acquire_stream`).
-  Each `snapsink` feeds one named stream. Multiple streams per server are postponed (L1).
+  Each `snapsink` feeds one named stream; further stream names join the running server
+  (`ServerCommand::AddAudioStream`, since L1, 2026-11-22). A released stream stays on the
+  server until it stops, so clients keep their assignment across a sender restart.
 - Async work runs on `gst_snapcast_engine::runtime()`. GStreamer streaming threads never
   block on async code without a bound.
 
