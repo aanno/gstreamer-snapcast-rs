@@ -28,7 +28,7 @@ both directions (`make test-interop`), timing (`make test-aloop`, P3), mDNS, rec
 volume/mute and logging (L9) work. Control plane (P2): `snapsink` serves the JSON-RPC
 API and Snapweb (crate `snapcast-control` in the fork), tags as metadata, `controls` with
 `Stream.Control` as a bus message; checked in a browser by the user. Evaluation (P4) in
-progress: F5 lifecycle met (snapsrc fills gaps with silence), F3 endurance met (an hour, `make test-endurance`). After P4: a per-user shared
+progress: F5 lifecycle met (snapsrc fills gaps with silence), F3 endurance met (an hour, `make test-endurance`); write-up in `docs/evaluation.md` (recommends go). After P4: a per-user shared
 server daemon (needs L1, multiple streams per server).
 
 ## Commands

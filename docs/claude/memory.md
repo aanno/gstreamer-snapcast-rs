@@ -3,7 +3,7 @@
 Working memory for agents and humans continuing this project. Keep it current:
 update **State** and **Plan** when a step is finished, and add decisions with a date.
 
-Last updated: 2026-11-22 (P4: F5 lifecycle met, F3 endurance met (an hour on the aloop card); next: the write-up `docs/evaluation.md`).
+Last updated: 2026-11-22 (P4: F5 lifecycle met, F3 endurance met (an hour on the aloop card); write-up `docs/evaluation.md` done, the go/no-go is the user's).
 
 ## Resume here (2026-11-22)
 
@@ -35,8 +35,9 @@ write-up `docs/evaluation.md`; the go/no-go is the user's):
    a run but differs between runs (run 1 ~0, run 2 ~+0.8 ms; it is the C++ client that
    moved), so it is a per-start offset, not drift. Capture jitter in run 2: median 10.5 ms,
    max 19.3 ms, close to the 20 ms gate (the 2-minute check had 4–5 ms); raise
-   `ENDURANCE_MAX_JITTER_MS` if long runs start skipping windows. **Next: the write-up
-   `docs/evaluation.md`.**
+   `ENDURANCE_MAX_JITTER_MS` if long runs start skipping windows.
+   **Write-up done: `docs/evaluation.md`** (2026-11-22; recommendation: go). **Next: the
+   user's go/no-go**, then split this file (item 5), then L1.
    **F1:** the user listened to `listen-pair` on 2026-11-22: fine (a ~30 s track only).
 4. **The known snapsrc wander, measured (2026-11-22):** in about one receiver run in four
    or five, snapsrc wanders by ±1.5…3 ms against the server within a 20 s run; it also
@@ -545,6 +546,7 @@ from the sink's `resample` slaving; could be smoothed via the sink clock's
 | left open, not blocking | tick-to-tick jitter ±0.7 ms in single runs (sink's `resample` slaving); drift tests allow 2.5 ms because the C++ client itself is ~2 ms off there |
 
 **P4. Evaluation:** listening tests on the host, endurance run, write-up, and the decision.
+Write-up: `docs/evaluation.md` (2026-11-22).
 
 | Criterion | State (2026-11-19) |
 |---|---|

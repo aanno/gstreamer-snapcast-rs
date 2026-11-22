@@ -54,7 +54,8 @@ publishing: [docs/architecture.md](docs/architecture.md).
 > yet), S16LE/S32LE input only, no authentication on the control API, Snapweb's
 > in-browser player is not supported (P2). The current state, decisions, all known limitations and the plan are
 > in [docs/claude/memory.md](docs/claude/memory.md); the architecture in
-> [docs/architecture.md](docs/architecture.md).
+> [docs/architecture.md](docs/architecture.md); the evaluation of the prototype (F1–F5, an
+> hour-long endurance run) in [docs/evaluation.md](docs/evaluation.md).
 
 ### Element properties
 
