@@ -34,7 +34,12 @@ write-up `docs/evaluation.md`; the go/no-go is the user's):
    for the sink's streaming thread; smoother slaving via the sink clock's
    `window-size`/`timeout`; the card clock as pipeline clock with snapsrc's aligner
    correcting (no sink slaving); the user also asked about direct/DMA (mmap) buffers and
-   lock-free paths (and "quaternia", unclear: ask). My view: the wander comes from the
+   lock-free paths, and PipeWire's quantum ("quaternia" was a typo): on the host,
+   snapsrc plays through PipeWire (`autoaudiosink` → pulsesink on pipewire-pulse), whose
+   graph period (quantum, default 1024 frames ≈ 21 ms at 48 kHz) sets how coarsely the
+   sink's clock advances; a small fixed quantum (`PIPEWIRE_QUANTUM=256/48000`, or
+   `pw-metadata -n settings 0 clock.force-quantum 256`) may calm the slaving there. Host
+   only: the aloop tests use ALSA directly, without PipeWire. My view: the wander comes from the
    slaving's rate estimate, not from the buffer transfer, so RT priority and the slaving
    method are the first candidates.
 5. **After P4 (user, 2026-11-22): split this file.** Done and decided things go to
