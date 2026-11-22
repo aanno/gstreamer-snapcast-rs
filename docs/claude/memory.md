@@ -7,50 +7,44 @@ the prototype (P1–P4 in detail, every decision with its reasons, the fixed lim
 L2–L13, all measurements) is in [memory-old-2026-11-22.md](memory-old-2026-11-22.md),
 frozen; the evaluation in [../evaluation.md](../evaluation.md).
 
-Last updated: 2026-11-22 (shared server daemon done, steps 1–5; next: the user's host test).
+Last updated: 2026-11-22, end of session (shared server daemon done; `auth` optional in the fork; `make dist`).
 
 ## Resume here (2026-11-22)
 
 1. **The feasibility prototype is done: go** (user, 2026-11-22, agreeing to
    `docs/evaluation.md`). F1–F5 met; F1 and F2 with caveats (see Open items).
-2. **L1 done (2026-11-22).** Fork commit `1b5b3b5` `feat(server): add and remove
-   embedder-fed streams while the server runs` (upstream PR candidate):
-   `ServerCommand::AddAudioStream` (answers with the frame sender), `RemoveStream` now
-   stops the encoder and forgets the codec header (name reusable), new clients start on
-   the first playable stream when the default was removed; URI-based `Stream.AddStream`
-   stays rejected. Engine: another stream name on a running port is added at runtime;
-   a released stream stays (clients keep their assignment across a sender restart);
-   re-acquiring it with another codec/format replaces it. `EngineError::StreamsFixed`
-   and `StreamMismatch` are gone, `StreamNotAdded` is new. **Next: the shared-server
-   daemon**, design `docs/shared-server.md` (agreed 2026-11-22; its "Decisions"
-   section has the answers). **Step 1 done (2026-11-22):** protocol
-   `gst_snapcast_engine::ipc` (feature `shared`), crate `gst-snapcast-daemon`
-   (`--socket PATH`), tests (a marker plays −14…−21 µs from timestamp + buffer through
-   the daemon). **Step 2 done (2026-11-22):** engine `Mode`
-   (auto/shared/embedded) and a shared `StreamHandle` backend; `snapsink` `mode`
-   (default `auto`), `active-mode`, features `shared` (default) / `control` (user agreed
-   to the lean split: release 3.1 MB instead of 5.8 MB). `make install` still builds
-   `snapsink` with `control` until steps 3/5 (so `CONTROL=1 make listen-send` keeps
-   working); drop `SNAPSINK_FEATURES ?= control` then. **Step 3 done (2026-11-22):** autospawn (default
-   mode `auto` really shares now), lock-file singleton, 5 s grace period, one reconnect
-   after a daemon crash (checked by hand with `kill -9` under two `gst-launch-1.0`).
-   **Steps 4 and 5 done (2026-11-22): the daemon is
-   complete** (`docs/shared-server.md`): metadata and `Stream.Control` through it,
-   `make test-aloop-shared` (all 10 aloop tests pass in shared mode, same numbers as
-   embedded), `make install` installs it into `~/.local/bin` and the lean `snapsink`,
-   `make doctor` and `listen.sh` (`MODE`) know it. **Next:** the user tries it on the
-   host (`make install`, `make doctor`, `CONTROL=1 make listen-send` twice with
-   different `STREAM`s in two terminals, Snapweb). **Fork (2026-11-22):** `60cb098`
-   `feat(control): make JWT authentication an optional feature auth` (off by default,
-   the user's wish; fails closed without it; snapserver-rs enables it; upstream PR
-   candidate). Effect here: `snapsink` with `control` 4.9 MB / 174 crates (was 5.8 / 239),
-   daemon 5.0 MB (was 6.0). Known, older: `snapcast-control`'s crate doctest calls
-   `serve_http` and fails with `--no-default-features`. **Also new:** `make dist` (a
-   tarball with `install.sh`), and a paths table in the README.
-3. **Alongside:** the snapsrc wander experiment (Open items), measured as usual.
-4. **Pushed** by the user on 2026-11-22: the fork up to `1b5b3b5` and this repo up to
-   `9985ef8`. No
-   upstream PR is open yet; 13 fork commits are PR candidates.
+2. **Done on 2026-11-22, after P4** (details: `docs/shared-server.md`, the commits):
+   - **L1** (fork `1b5b3b5`): `ServerCommand::AddAudioStream` for embedder-fed streams,
+     `RemoveStream` stops the encoder; URI-based `Stream.AddStream` stays rejected. The
+     engine adds further stream names to a running port; a released stream stays.
+   - **Shared server daemon, all five design steps:** `gst-snapcast-daemon`, IPC protocol
+     v2 (`gst_snapcast_engine::ipc`), `snapsink mode=auto|shared|embedded` (default
+     `auto`) and read-only `active-mode`, autospawn, one daemon per user (lock file),
+     5 s grace period, one reconnect after a crash, metadata and `Stream.Control`
+     through it. `make test-aloop-shared`: all 10 aloop tests pass with the same numbers
+     as embedded. Discussed and rejected (recorded in the design doc): GStreamer as the
+     transport, timestamps in the daemon, `GstReferenceTimestampMeta` without embedded
+     mode.
+   - **Lean `snapsink`:** features `shared` (default) and `control` (off); `make
+     install` builds it lean and installs the daemon into `~/.local/bin`.
+   - **Fork `60cb098`:** JWT authentication of `snapcast-control` is the optional feature
+     `auth`, **off by default (the user's wish)**, failing closed without it;
+     `snapserver-rs` enables it. Effect: `snapsink` with `control` 4.9 MB / 174 crates
+     (was 5.8 / 239), the daemon 5.0 MB (was 6.0), lean `snapsink` 3.1 MB / 127.
+   - **`make dist`:** a tarball with plugins, daemon, `install.sh` (user, `--system`,
+     `--uninstall`), `README.txt`, `BUILD-INFO`. README: a paths table, current status.
+3. **Next session, candidates (the user picks):**
+   - the user's host test of the daemon: `make install`, `make doctor`,
+     `CONTROL=1 STREAM=a make listen-send` and `STREAM=b make listen-send` in two
+     terminals, Snapweb shows both streams, Ctrl+C on the first leaves the second
+     playing; or the same from a `make dist` tarball;
+   - the snapsrc wander experiment (Open items), measured as usual;
+   - upstream PRs for the 14 fork commits (none opened yet).
+   Known, older: `snapcast-control`'s crate doctest calls `serve_http` and fails with
+   `--no-default-features` (a small fork fix).
+4. **Pushed** by the user on 2026-11-22: the fork up to `1b5b3b5`, this repo up to
+   `9985ef8`. **Not pushed yet:** fork `60cb098`; this repo `d2a2201`, `31b23f3`,
+   `0ba5055`, `4c682d3` and the session-end commit.
 5. **Housekeeping:** the xerj index (`ax-docs`, `ax-snapcast-rs-docs`) is a snapshot from
    before 2026-11-21; reindex on the host before relying on it (`docs/claude/mcp-xerj.md`).
 6. **Offer, not done:** start the C++ client in `listen.sh pair` with `--instance 2`, if the
@@ -66,9 +60,11 @@ What works, with the tests that cover it (all details in the archive and in
   bridge), `gst-plugin-snapsink`, `gst-plugin-snapsrc`. snapcast-rs is a submodule (fork
   `aanno/snapcast-rs`, branch `aanno/fixes`). Crates, rules, threads and logging:
   `docs/architecture.md`.
-- **Sender** `snapsink`: embedded server, one per port and process, shared by the sinks of
-  that process (registry by port; `port=0` = ephemeral, read `bound-port`); each sink
-  feeds its own stream, further names join the running server (L1 done). Paces non-live sources. mDNS announce. Control plane: JSON-RPC (TCP,
+- **Sender** `snapsink`: one server per port, in the user's shared daemon
+  `gst-snapcast-daemon` (`mode=auto`, the default, autospawned; `shared`) or embedded in
+  the process (`mode=embedded`, the fallback, and always for `port=0`, read
+  `bound-port`); each sink feeds its own stream, further names join the running server.
+  `active-mode` tells which. Paces non-live sources. mDNS announce. Control plane: JSON-RPC (TCP,
   HTTP/WebSocket) and Snapweb (`control-port`, `http-port`, `snapweb-dir`; opt-in), tags as
   stream metadata, `controls` with `Stream.Control` as the bus message
   `snapcast-stream-control`. PCM and FLAC (default `pcm`).
@@ -161,7 +157,8 @@ Short form; dates and reasons in the archive. CLAUDE.md has the coding rules.
   Reference submodules are read-only.
 - 2026-11-22 (user): **Conventional Commits** here too, enforced by `.githooks/` (`make setup`).
 - 2026-11-22 (user): **P4 ends with go**; `docs/evaluation.md` agreed.
-- 2026-11-22 (with the user): **shared server across processes**, next after L1. The first
+- 2026-11-22 (with the user): **shared server across processes**, done the same day
+  (`docs/shared-server.md`, its "Decisions" section has the details). The first
   pipeline with `snapsink` starts one server instance (with control and Snapweb, if
   enabled); each further pipeline adds a *stream*; the instance ends with the last
   pipeline. Outline (details in a design doc first):
@@ -171,9 +168,16 @@ Short form; dates and reasons in the archive. CLAUDE.md has the coding rules.
     last sink plus a grace period); no systemd;
   - IPC carries PCM with `CLOCK_MONOTONIC` timestamps, so the timing work survives;
   - **default mode is shared** (user's wish); embedded stays available and is the default
-    where no daemon can be spawned (Android). Exact `mode` semantics (silent fallback or
-    error) to be settled in the design doc;
+    where no daemon can be spawned (Android). Settled: `mode=auto` falls back to
+    embedded with a warning;
   - prerequisite: **L1**.
+- 2026-11-22 (user): **`snapsink` is lean by default** (features `shared` on, `control`
+  off; the daemon serves the control API), and **`snapcast-control`'s JWT
+  authentication is an optional feature `auth`, off by default** (fork `60cb098`).
+- 2026-11-22 (user): **the audio between `snapsink` and the daemon stays on our socket
+  protocol** with absolute `CLOCK_MONOTONIC` timestamps; GStreamer as the transport and
+  timestamps made in the daemon were discussed and rejected (`docs/shared-server.md`,
+  "Alternatives considered").
 
 ## Known limitations (open)
 
