@@ -104,7 +104,7 @@ integrators**: one element instead of a FIFO and a daemon.
 
 | Crate | Depends on GStreamer | Role |
 |---|---|---|
-| `crates/gst-snapcast-engine` | **no** | Glue around snapcast-rs: the shared tokio runtime, one embedded server per port (`server`), embedded clients with play-out times (`client`), mDNS, client instance numbers |
+| `crates/gst-snapcast-engine` | **no** | Glue around snapcast-rs: the shared tokio runtime, one embedded server per port (`server`), the control API (`control`), streams in the shared server daemon instead (`shared`: `server::Mode`, the IPC protocol `ipc`), embedded clients with play-out times (`client`), mDNS, client instance numbers |
 | `crates/gst-snapcast-common` | yes | Code both plugins need on the GStreamer side; so far the logging bridge |
 | `crates/gst-snapcast-daemon` | **no** | The shared server daemon (in progress, `docs/shared-server.md`): a binary around the engine, one stream acquisition per connection on a Unix socket; the protocol is the engine's `ipc` module (feature `shared`) |
 | `crates/gst-plugin-snapsink` | yes | `snapsink` (`GstBaseSink`): PCM in, Snapcast stream out (`libgstsnapsink.so`) |

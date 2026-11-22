@@ -278,50 +278,36 @@ mod convert {
     //! Between the wire types and the engine's server types.
 
     use super::{ErrorKind, IpcError, ServerSettings, StreamSettings};
-    use crate::server::{ServerOptions, StreamOptions};
+    use crate::server::{ControlOptions, Mode, ServerOptions, StreamOptions};
     use crate::{EngineError, PcmFormat};
 
     impl ServerSettings {
-        /// The wire form of `options`.
+        /// The wire form of `options` (the mode stays on the sender's side).
         pub fn from_options(options: &ServerOptions) -> Self {
-            #[cfg(feature = "control")]
-            let (control_tcp_port, control_http_port, snapweb_dir) = (
-                options.control.tcp_port,
-                options.control.http_port,
-                options.control.snapweb_dir.clone(),
-            );
-            #[cfg(not(feature = "control"))]
-            let (control_tcp_port, control_http_port, snapweb_dir) = (None, None, None);
             Self {
                 port: options.port,
                 buffer_ms: options.buffer_ms,
                 mdns_name: options.mdns_name.clone(),
-                control_tcp_port,
-                control_http_port,
-                snapweb_dir,
+                control_tcp_port: options.control.tcp_port,
+                control_http_port: options.control.http_port,
+                snapweb_dir: options.control.snapweb_dir.clone(),
             }
         }
 
-        /// The engine options; an error if they ask for a control API that this
-        /// build lacks (feature `control`).
-        pub fn to_options(&self) -> Result<ServerOptions, EngineError> {
-            #[cfg(not(feature = "control"))]
-            if self.control_tcp_port.is_some() || self.control_http_port.is_some() {
-                return Err(EngineError::InvalidConfig(
-                    "the control API needs the engine feature `control`".into(),
-                ));
-            }
-            Ok(ServerOptions {
+        /// The engine options, with [`Mode::Embedded`]: in the daemon, the
+        /// server runs in the daemon's process.
+        pub fn to_options(&self) -> ServerOptions {
+            ServerOptions {
                 port: self.port,
                 buffer_ms: self.buffer_ms,
                 mdns_name: self.mdns_name.clone(),
-                #[cfg(feature = "control")]
-                control: crate::server::ControlOptions {
+                control: ControlOptions {
                     tcp_port: self.control_tcp_port,
                     http_port: self.control_http_port,
                     snapweb_dir: self.snapweb_dir.clone(),
                 },
-            })
+                mode: Mode::Embedded,
+            }
         }
     }
 
@@ -361,6 +347,7 @@ mod convert {
                 EngineError::Bind(..) => ErrorKind::Bind,
                 EngineError::ServerGone => ErrorKind::ServerGone,
                 EngineError::Busy => ErrorKind::Busy,
+                EngineError::Daemon(_) => ErrorKind::Protocol,
                 _ => ErrorKind::InvalidConfig,
             };
             Self {

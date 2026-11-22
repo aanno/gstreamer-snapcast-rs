@@ -52,9 +52,25 @@ pub struct ServerOptions {
     /// clients find it without a host name (`None`: don't). Servers on an ephemeral
     /// port (`port == 0`) are never announced.
     pub mdns_name: Option<String>,
-    /// The JSON-RPC control API (default: off).
-    #[cfg(feature = "control")]
+    /// The JSON-RPC control API (default: off). Served only with the feature
+    /// `control`, or by the shared server daemon.
     pub control: ControlOptions,
+    /// Where the server runs (default: [`Mode::Embedded`]).
+    pub mode: Mode,
+}
+
+/// Where the server of an acquisition runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Mode {
+    /// In the shared server daemon of the user if one runs, otherwise embedded
+    /// (with a log line saying why).
+    Auto,
+    /// In the shared server daemon of the user (`gst-snapcast-daemon`, feature
+    /// `shared`, Unix); an error if there is none.
+    Shared,
+    /// In this process, shared by the acquisitions of this process.
+    #[default]
+    Embedded,
 }
 
 impl Default for ServerOptions {
@@ -63,8 +79,8 @@ impl Default for ServerOptions {
             port: snapcast_server::DEFAULT_STREAM_PORT,
             buffer_ms: 1000,
             mdns_name: None,
-            #[cfg(feature = "control")]
             control: ControlOptions::default(),
+            mode: Mode::default(),
         }
     }
 }
@@ -73,7 +89,8 @@ impl Default for ServerOptions {
 /// interfaces and need no authentication: anyone who can reach them controls the
 /// server. With [`ServerOptions::mdns_name`], they are announced too
 /// (`_snapcast-ctrl._tcp`, `_snapcast-http._tcp`, as the C++ snapserver does).
-#[cfg(feature = "control")]
+/// An embedded server serves them only with the feature `control`; without it
+/// they are ignored with a warning.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ControlOptions {
     /// JSON-RPC over TCP (Snapcast's default is 1705). `None`: off; `Some(0)`: an
@@ -247,7 +264,6 @@ struct ServerEntry {
     /// The mDNS announcement, withdrawn together with the server.
     _announcement: Option<crate::mdns::Announcement>,
     /// Bound control ports (TCP, HTTP).
-    #[cfg(feature = "control")]
     control_ports: (Option<u16>, Option<u16>),
     /// Tasks to abort with the server (the control listeners).
     tasks: Vec<tokio::task::AbortHandle>,
@@ -276,99 +292,27 @@ impl Drop for ServerEntry {
 static REGISTRY: LazyLock<Mutex<HashMap<u16, Weak<ServerEntry>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Exclusive handle to one stream of an embedded server.
+/// Exclusive handle to one stream of a server: embedded in this process or in
+/// the shared server daemon (see [`Mode`]).
 pub struct StreamHandle {
+    name: String,
+    backend: Backend,
+}
+
+enum Backend {
+    Embedded(EmbeddedStream),
+    #[cfg(all(feature = "shared", unix))]
+    Shared(crate::shared::SharedStream),
+}
+
+/// A stream of a server in this process.
+struct EmbeddedStream {
     server: Arc<ServerEntry>,
     name: String,
     tx: mpsc::Sender<AudioFrame>,
 }
 
-impl std::fmt::Debug for StreamHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StreamHandle")
-            .field("name", &self.name)
-            .field("port", &self.server.local_port)
-            .finish()
-    }
-}
-
-impl StreamHandle {
-    /// Port the server is actually listening on.
-    pub fn port(&self) -> u16 {
-        self.server.local_port
-    }
-
-    /// Stream name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// The server-wide options in effect: those of the acquisition that started
-    /// the server, which may differ from the caller's.
-    pub fn server_options(&self) -> &ServerOptions {
-        &self.server.options
-    }
-
-    /// Port of the JSON-RPC control API over TCP, if the server offers it.
-    #[cfg(feature = "control")]
-    pub fn control_tcp_port(&self) -> Option<u16> {
-        self.server.control_ports.0
-    }
-
-    /// Port of the JSON-RPC control API over HTTP/WebSocket (and Snapweb), if the
-    /// server offers it.
-    #[cfg(feature = "control")]
-    pub fn control_http_port(&self) -> Option<u16> {
-        self.server.control_ports.1
-    }
-
-    /// Publish what controllers see of this stream (replaces the previous
-    /// properties as a whole).
-    ///
-    /// Does not block: fails with [`EngineError::Busy`] if the server's command
-    /// queue is full.
-    pub fn set_properties(&self, properties: &StreamProperties) -> Result<(), EngineError> {
-        use mpsc::error::TrySendError;
-        self.server
-            .cmd_tx
-            .try_send(ServerCommand::SetStreamMeta {
-                stream_id: self.name.clone(),
-                metadata: properties.to_map(),
-            })
-            .map_err(|e| match e {
-                TrySendError::Full(_) => EngineError::Busy,
-                TrySendError::Closed(_) => EngineError::ServerGone,
-            })
-    }
-
-    /// Call `handler` for each player command a controller sends to this stream
-    /// (replaces a previous handler; removed when the handle is dropped). It runs
-    /// on the engine runtime and must not block. Controllers only offer the
-    /// commands announced in [`StreamProperties::controls`].
-    pub fn on_command(&self, handler: impl Fn(StreamCommand) + Send + Sync + 'static) {
-        self.server
-            .handlers
-            .lock()
-            .unwrap()
-            .insert(self.name.clone(), Arc::new(handler));
-    }
-
-    /// Submit interleaved little-endian PCM in the stream's format.
-    ///
-    /// `timestamp_usec` is the server time (see [`crate::now_usec`]) of the
-    /// first frame in `data`. Blocks while the stream's queue is full; must not
-    /// be called from within the async runtime.
-    pub fn send_pcm(&self, data: Vec<u8>, timestamp_usec: i64) -> Result<(), EngineError> {
-        self.tx
-            .blocking_send(AudioFrame {
-                data: AudioData::Pcm(data),
-                timestamp_usec,
-            })
-            .map_err(|_| EngineError::ServerGone)
-    }
-}
-
-impl Drop for StreamHandle {
+impl Drop for EmbeddedStream {
     fn drop(&mut self) {
         self.server.handlers.lock().unwrap().remove(&self.name);
         if let Some(slot) = self.server.streams.lock().unwrap().get_mut(&self.name) {
@@ -377,9 +321,149 @@ impl Drop for StreamHandle {
     }
 }
 
+impl std::fmt::Debug for StreamHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamHandle")
+            .field("name", &self.name)
+            .field("port", &self.port())
+            .field("shared", &self.is_shared())
+            .finish()
+    }
+}
+
+impl StreamHandle {
+    /// Port the server is actually listening on.
+    pub fn port(&self) -> u16 {
+        match &self.backend {
+            Backend::Embedded(e) => e.server.local_port,
+            #[cfg(all(feature = "shared", unix))]
+            Backend::Shared(s) => s.port,
+        }
+    }
+
+    /// Stream name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Whether the stream is fed through the shared server daemon.
+    pub fn is_shared(&self) -> bool {
+        match &self.backend {
+            Backend::Embedded(_) => false,
+            #[cfg(all(feature = "shared", unix))]
+            Backend::Shared(_) => true,
+        }
+    }
+
+    /// The server-wide options in effect: those of the acquisition that started
+    /// the server, which may differ from the caller's.
+    pub fn server_options(&self) -> &ServerOptions {
+        match &self.backend {
+            Backend::Embedded(e) => &e.server.options,
+            #[cfg(all(feature = "shared", unix))]
+            Backend::Shared(s) => &s.server_options,
+        }
+    }
+
+    /// Port of the JSON-RPC control API over TCP, if the server offers it.
+    pub fn control_tcp_port(&self) -> Option<u16> {
+        match &self.backend {
+            Backend::Embedded(e) => e.server.control_ports.0,
+            #[cfg(all(feature = "shared", unix))]
+            Backend::Shared(s) => s.control_tcp_port,
+        }
+    }
+
+    /// Port of the JSON-RPC control API over HTTP/WebSocket (and Snapweb), if the
+    /// server offers it.
+    pub fn control_http_port(&self) -> Option<u16> {
+        match &self.backend {
+            Backend::Embedded(e) => e.server.control_ports.1,
+            #[cfg(all(feature = "shared", unix))]
+            Backend::Shared(s) => s.control_http_port,
+        }
+    }
+
+    /// Publish what controllers see of this stream (replaces the previous
+    /// properties as a whole).
+    ///
+    /// Does not block: fails with [`EngineError::Busy`] if the server's command
+    /// queue is full. Not yet passed on by the shared backend (design step 4).
+    pub fn set_properties(&self, properties: &StreamProperties) -> Result<(), EngineError> {
+        match &self.backend {
+            Backend::Embedded(e) => send_command(
+                &e.server.cmd_tx,
+                ServerCommand::SetStreamMeta {
+                    stream_id: self.name.clone(),
+                    metadata: properties.to_map(),
+                },
+            ),
+            #[cfg(all(feature = "shared", unix))]
+            Backend::Shared(_) => {
+                tracing::debug!("Stream properties are not passed to the daemon yet");
+                Ok(())
+            }
+        }
+    }
+
+    /// Call `handler` for each player command a controller sends to this stream
+    /// (replaces a previous handler; removed when the handle is dropped). It runs
+    /// on the engine runtime and must not block. Controllers only offer the
+    /// commands announced in [`StreamProperties::controls`]. Not yet passed on by
+    /// the shared backend (design step 4).
+    pub fn on_command(&self, handler: impl Fn(StreamCommand) + Send + Sync + 'static) {
+        match &self.backend {
+            Backend::Embedded(e) => {
+                e.server
+                    .handlers
+                    .lock()
+                    .unwrap()
+                    .insert(self.name.clone(), Arc::new(handler));
+            }
+            #[cfg(all(feature = "shared", unix))]
+            Backend::Shared(_) => {
+                drop(handler);
+                tracing::debug!("Stream commands are not passed from the daemon yet");
+            }
+        }
+    }
+
+    /// Submit interleaved little-endian PCM in the stream's format.
+    ///
+    /// `timestamp_usec` is the server time (see [`crate::now_usec`]) of the
+    /// first frame in `data`. Blocks while the stream's queue is full (shared: at
+    /// most 2 s); must not be called from within the async runtime.
+    pub fn send_pcm(&self, data: Vec<u8>, timestamp_usec: i64) -> Result<(), EngineError> {
+        match &self.backend {
+            Backend::Embedded(e) => {
+                e.tx.blocking_send(AudioFrame {
+                    data: AudioData::Pcm(data),
+                    timestamp_usec,
+                })
+                .map_err(|_| EngineError::ServerGone)
+            }
+            #[cfg(all(feature = "shared", unix))]
+            Backend::Shared(s) => s.send_pcm(data, timestamp_usec),
+        }
+    }
+
+    /// The embedded server entry (tests).
+    #[cfg(test)]
+    fn entry(&self) -> &Arc<ServerEntry> {
+        match &self.backend {
+            Backend::Embedded(e) => &e.server,
+            #[cfg(all(feature = "shared", unix))]
+            Backend::Shared(_) => panic!("not embedded"),
+        }
+    }
+}
+
 /// Get exclusive access to stream `stream.name` of the server on `server.port`,
 /// starting that server if necessary, and adding the stream to a running server
 /// that does not have it yet (blocks until the server answers, at most 5 s).
+///
+/// [`ServerOptions::mode`] says where the server runs. A port of `0` (ephemeral)
+/// is never shared, so it always means embedded.
 pub fn acquire_stream(
     server: &ServerOptions,
     stream: &StreamOptions,
@@ -387,6 +471,55 @@ pub fn acquire_stream(
     let span =
         tracing::info_span!("snapcast_stream", log_id = %stream.log_id, stream = %stream.name);
     let _entered = span.enter();
+    let mode = if server.port == 0 {
+        Mode::Embedded
+    } else {
+        server.mode
+    };
+    let backend = match mode {
+        Mode::Embedded => Backend::Embedded(acquire_embedded(server, stream)?),
+        #[cfg(all(feature = "shared", unix))]
+        Mode::Shared | Mode::Auto => {
+            use crate::shared::Failure;
+            match crate::shared::acquire(server, stream) {
+                Ok(shared) => {
+                    tracing::info!(port = shared.port, "Stream acquired from the shared server");
+                    Backend::Shared(shared)
+                }
+                Err(Failure::Engine(e)) => return Err(e),
+                Err(Failure::Unavailable { reason, .. }) if mode == Mode::Shared => {
+                    return Err(EngineError::Daemon(reason));
+                }
+                Err(Failure::Unavailable { reason, expected }) => {
+                    if expected {
+                        tracing::info!(reason, "No shared server, running embedded");
+                    } else {
+                        tracing::warn!(reason, "Shared server unusable, running embedded");
+                    }
+                    Backend::Embedded(acquire_embedded(server, stream)?)
+                }
+            }
+        }
+        #[cfg(not(all(feature = "shared", unix)))]
+        Mode::Shared => {
+            return Err(EngineError::InvalidConfig(
+                "mode shared needs the engine feature `shared` (Unix)".into(),
+            ));
+        }
+        #[cfg(not(all(feature = "shared", unix)))]
+        Mode::Auto => Backend::Embedded(acquire_embedded(server, stream)?),
+    };
+    Ok(StreamHandle {
+        name: stream.name.clone(),
+        backend,
+    })
+}
+
+/// [`acquire_stream`] in this process.
+fn acquire_embedded(
+    server: &ServerOptions,
+    stream: &StreamOptions,
+) -> Result<EmbeddedStream, EngineError> {
     let mut registry = REGISTRY.lock().unwrap();
 
     if server.port != 0
@@ -409,7 +542,7 @@ pub fn acquire_stream(
 fn claim_existing(
     entry: Arc<ServerEntry>,
     stream: &StreamOptions,
-) -> Result<StreamHandle, EngineError> {
+) -> Result<EmbeddedStream, EngineError> {
     let tx = {
         // Held while the server adds a stream, so that concurrent acquisitions
         // of one name don't both add it.
@@ -451,7 +584,7 @@ fn claim_existing(
             }
         }
     };
-    Ok(StreamHandle {
+    Ok(EmbeddedStream {
         server: entry,
         name: stream.name.clone(),
         tx,
@@ -564,6 +697,18 @@ fn start_server(
     let control_ports = control.ports();
     #[cfg(feature = "control")]
     let events = control.spawn(cmd_tx.clone(), events, &span, &mut tasks)?;
+    #[cfg(not(feature = "control"))]
+    let control_ports = {
+        let c = &server.control;
+        if c.tcp_port.is_some() || c.http_port.is_some() {
+            let _entered = span.enter();
+            tracing::warn!(
+                "The control API needs the shared server or a build with the feature \
+                 `control`; not served"
+            );
+        }
+        (None, None)
+    };
     // The event channel is bounded; drain it so the server never stalls.
     let handlers = CommandHandlers::default();
     rt.spawn(drain_events(events, Arc::clone(&handlers)).instrument(span.clone()));
@@ -581,14 +726,10 @@ fn start_server(
     let announcement = match &server.mdns_name {
         Some(name) if server.port != 0 && !name.is_empty() => {
             let _entered = span.enter();
-            #[allow(unused_mut)]
             let mut services = vec![(crate::mdns::SERVICE_TYPE, local_port)];
-            #[cfg(feature = "control")]
-            {
-                let (tcp, http) = control_ports;
-                services.extend(tcp.map(|p| (crate::mdns::CONTROL_SERVICE_TYPE, p)));
-                services.extend(http.map(|p| (crate::mdns::HTTP_SERVICE_TYPE, p)));
-            }
+            let (tcp, http) = control_ports;
+            services.extend(tcp.map(|p| (crate::mdns::CONTROL_SERVICE_TYPE, p)));
+            services.extend(http.map(|p| (crate::mdns::HTTP_SERVICE_TYPE, p)));
             crate::mdns::announce(name, &services)
                 .inspect_err(|e| tracing::warn!(error = %e, "Server runs without mDNS"))
                 .ok()
@@ -602,7 +743,6 @@ fn start_server(
         cmd_tx,
         streams: Mutex::new(streams),
         _announcement: announcement,
-        #[cfg(feature = "control")]
         control_ports,
         tasks,
         handlers,
@@ -790,7 +930,7 @@ mod tests {
         ));
         // Another stream name joins the running server.
         let b = acquire_stream(&opts, &stream("b")).unwrap();
-        assert!(Arc::ptr_eq(&a.server, &b.server));
+        assert!(Arc::ptr_eq(a.entry(), b.entry()));
         let mut other_format = stream("a");
         other_format.format.rate = 44100;
         drop(a);
@@ -813,16 +953,16 @@ mod tests {
         };
         let a = acquire_stream(&opts, &stream("a")).unwrap();
         // Keep the server alive through a second user of the same entry.
-        let server = Arc::clone(&a.server);
+        let server = Arc::clone(a.entry());
         drop(a);
         let a2 = acquire_stream(&opts, &stream("a")).unwrap();
-        assert!(Arc::ptr_eq(&server, &a2.server));
+        assert!(Arc::ptr_eq(&server, a2.entry()));
         let mut other = stream("a");
         other.codec = "flac".into();
         drop(a2);
         // Released with another codec: replaced on the same server.
         let a3 = acquire_stream(&opts, &other).unwrap();
-        assert!(Arc::ptr_eq(&server, &a3.server));
+        assert!(Arc::ptr_eq(&server, a3.entry()));
         drop(a3);
         // An invalid format is the server's to reject.
         let mut invalid = stream("z");

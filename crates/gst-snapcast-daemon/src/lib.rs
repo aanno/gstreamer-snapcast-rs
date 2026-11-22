@@ -98,10 +98,8 @@ fn handle_connection(stream: UnixStream) -> std::io::Result<()> {
         Some(_) => return reject(&mut writer, ErrorKind::Protocol, "expected Acquire"),
         None => return Ok(()),
     };
-    let server_options = match server_settings.to_options() {
-        Ok(options) => options,
-        Err(e) => return ipc::write_message(&mut writer, &Message::Error((&e).into())),
-    };
+    // Mode::Embedded: the server runs here, in the daemon.
+    let server_options = server_settings.to_options();
     let handle = match server::acquire_stream(&server_options, &stream_settings.to_options()) {
         Ok(handle) => handle,
         Err(e) => {

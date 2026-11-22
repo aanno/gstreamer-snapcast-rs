@@ -63,7 +63,8 @@ publishing: [docs/architecture.md](docs/architecture.md).
 | Element    | Property      | Default     | Meaning |
 |------------|---------------|-------------|---------|
 | `snapsink` | `stream`      | `default`   | Snapcast stream name |
-|            | `port`        | `1704`      | Server port, shared by all snapsinks using it (`0` = ephemeral) |
+|            | `port`        | `1704`      | Server port, shared by all snapsinks using it (`0` = ephemeral, always embedded) |
+|            | `mode`        | `auto`      | Where the server runs: `shared` in the user's server daemon `gst-snapcast-daemon` (pipelines in several processes share one server; in progress, start it by hand for now), `embedded` in this process, `auto` shared if the daemon runs, else embedded |
 |            | `codec`       | `pcm`       | `pcm` or `flac` |
 |            | `buffer-ms`   | `1000`      | End-to-end buffer announced to clients |
 |            | `mdns-name`   | `gst-snapsink` | Announce the server via mDNS (`_snapcast._tcp`) under this name; empty: don't (never for `port=0`) |
@@ -72,6 +73,7 @@ publishing: [docs/architecture.md](docs/architecture.md).
 |            | `controls`    | (none)      | Player commands the stream accepts (`play+pause+next+previous+seek`); Snapweb shows those buttons, and each press arrives as element message `snapcast-stream-control` (fields `stream`, `command`, `params`) for the application. Changeable while playing |
 |            | `snapweb-dir` | (empty)     | Snapweb's files, served on `http-port` (`scripts/fetch-snapweb.sh` downloads them; Debian's package has only a placeholder) |
 |            | `bound-port`  | (read-only) | Port actually listened on |
+|            | `active-mode` | (read-only) | `shared` or `embedded` while a stream runs (what `auto` chose), else `auto` |
 |            | `async`       | `true`      | (from GstBaseSink) Wait for the first buffer ("preroll") before the pipeline counts as PAUSED. Set `false` when the same pipeline also contains a `snapsrc` (see below) |
 |            | `sync`        | `true`      | (from GstBaseSink) Render on the pipeline clock. With `false`, `snapsink` still paces non-live sources (files) to real time itself |
 | `snapsrc`  | `host`/`port` | `127.0.0.1`/`1704` | Server to connect to; empty `host`: find one via mDNS (its port is used) |
@@ -183,21 +185,29 @@ sudo make uninstall-system
 
 ### Build features
 
-The plugins have no Cargo features of their own: each enables what it needs in
-`gst-snapcast-engine`, which in turn picks the snapcast-rs crates (their features:
+Each crate enables what it needs in `gst-snapcast-engine`, which in turn picks the
+snapcast-rs crates (their features:
 [snapcast-rs/README.md](snapcast-rs/README.md#build-features)).
 
-| Crate | Uses | snapcast-rs underneath |
-|-------|------|------------------------|
-| `gst-plugin-snapsink` | engine `server` + `control` | `snapcast-server` (default features: encodes PCM and FLAC; `opus`/`vorbis` are off, they would need libopus/libvorbis), `snapcast-control` (default `http`: JSON-RPC over TCP and HTTP/WebSocket, Snapweb's files) |
-| `gst-plugin-snapsrc` | engine `client` | `snapcast-client` without default features (decodes PCM, FLAC, Opus and Vorbis, all pure Rust) |
-| `gst-snapcast-engine` | features `server`, `control` (implies `server`), `client`; none by default | as above, plus `mdns-sd` for mDNS (pure Rust) |
+| Crate | Features | Uses | snapcast-rs underneath |
+|-------|----------|------|------------------------|
+| `gst-plugin-snapsink` | `shared` (default): feed the shared server daemon; `control`: the control API in mode `embedded` | engine `server` (+ `shared`, `control`) | `snapcast-server` (default features: encodes PCM and FLAC; `opus`/`vorbis` are off, they would need libopus/libvorbis); with `control`: `snapcast-control` (default `http`: JSON-RPC over TCP and HTTP/WebSocket, Snapweb's files) |
+| `gst-plugin-snapsrc` | none | engine `client` | `snapcast-client` without default features (decodes PCM, FLAC, Opus and Vorbis, all pure Rust) |
+| `gst-snapcast-daemon` | none | engine `server` + `control` + `shared` | `snapcast-server`, `snapcast-control` |
+| `gst-snapcast-engine` | `server`, `control` (implies `server`), `shared` (the daemon's protocol; implies `server`, Unix), `client`; none by default | as above, plus `mdns-sd` for mDNS (pure Rust) |
+
+**`snapsink` without `control`** is about half the size (release, 2026-11-22: 3.1 MB
+instead of 5.8 MB; 127 instead of 239 crates including GStreamer's), because the HTTP
+stack and the authentication crates are left out. In mode `shared` the control API runs
+in the daemon, so it is still available. For now `make install` builds `snapsink` with
+`control`, so that `CONTROL=1 make listen-send` keeps working in mode `embedded`, until
+the daemon is started automatically (`make release SNAPSINK_FEATURES=` builds the lean
+one). For Android: `--no-default-features` (no daemon), plus `control` if wanted.
 
 No feature adds a C library beyond GStreamer itself. Features that would break
 interoperability with the C++ Snapcast (`f32lz4`, `encryption`, `custom-protocol`) are not
 enabled. The control API can be switched off at runtime (`control-port=0`, `http-port=0`,
-the defaults); building `snapsink` without it would need a plugin feature that does not
-exist yet.
+the defaults).
 
 ## Development
 

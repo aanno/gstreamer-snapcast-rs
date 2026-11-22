@@ -21,7 +21,21 @@ gst = { workspace = true }
 gst-snapcast-common = { workspace = true }
 gst-base = { workspace = true }
 gst-audio = { workspace = true }
-gst-snapcast-engine = { workspace = true, features = ["server", "control"] }
+gst-snapcast-engine = { workspace = true, features = ["server"] }
+
+[dev-dependencies]
+# tests/shared.rs: a daemon in the test process, and a Snapcast client to listen.
+gst-snapcast-daemon = { path = "../gst-snapcast-daemon" }
+gst-snapcast-engine = { workspace = true, features = ["shared", "client"] }
+tokio = { workspace = true }
+
+[features]
+default = ["shared"]
+# Feed the user's shared server daemon (gst-snapcast-daemon) in mode auto/shared. Unix.
+shared = ["gst-snapcast-engine/shared"]
+# The JSON-RPC control API and Snapweb in mode embedded (the daemon always has them).
+# Pulls in an HTTP stack and authentication crates; off by default.
+control = ["gst-snapcast-engine/control"]
 
 [build-dependencies]
 gst-plugin-version-helper = { workspace = true }

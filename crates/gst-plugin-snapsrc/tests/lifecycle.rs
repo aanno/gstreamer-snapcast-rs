@@ -33,7 +33,7 @@ fn free_port() -> u16 {
 fn start_sender(port: u16, extra: &str) -> gst::Pipeline {
     let p = gst::parse::launch(&format!(
         "audiotestsrc is-live=true volume=0.5 ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
-         ! snapsink port={port} buffer-ms=300 mdns-name=\"\" {extra}"
+         ! snapsink port={port} mode=embedded buffer-ms=300 mdns-name=\"\" {extra}"
     ))
     .unwrap()
     .downcast::<gst::Pipeline>()

@@ -1,9 +1,9 @@
 # Design: a shared Snapcast server across processes
 
-Status: **agreed** (2026-11-22), implementation in progress: step 1 done. The outline was
+Status: **agreed** (2026-11-22), implementation in progress: steps 1 and 2 done. The outline was
 agreed with the project owner on 2026-11-22 (`docs/claude/memory.md`, Decisions); the
 open questions are answered at the end; the build-feature split of `snapsink` is a
-proposal still to confirm.
+confirmed too.
 
 ## Goal
 
@@ -109,7 +109,7 @@ REST would only make sense as an *additional* convenience layer for scripts, and
 existing `POST /jsonrpc` covers that use already. Recommendation: **no REST**; keep
 JSON-RPC as the only control API (as decided on 2026-11-21).
 
-## Build features of `snapsink` (proposal)
+## Build features of `snapsink` (agreed, done in step 2)
 
 Today `snapsink` always builds the engine with `server` and `control`, and the control
 stack roughly doubles its dependency tree. Measured with `cargo tree` (normal
@@ -300,7 +300,18 @@ the other gets the usual "cannot listen on port" error.
    `crates/gst-snapcast-daemon` (`--socket PATH`). Tests: protocol unit tests; daemon
    integration tests (version, order, two senders on one port, release on close, and a
    marker that plays −14…−21 µs from its timestamp + buffer, through the daemon).
-2. Engine client backend and `acquire_stream` with a mode; `snapsink`'s `mode`.
+2. ~~Engine client backend and `acquire_stream` with a mode; `snapsink`'s `mode`.~~ Done
+   2026-11-22: `ServerOptions::mode` (`Mode::{Auto, Shared, Embedded}`, engine default
+   embedded), `StreamHandle` with an embedded and a shared backend, `ControlOptions`
+   always present (served only with `control`, else a warning), `EngineError::Daemon`.
+   `snapsink`: `mode` (default `auto`), read-only `active-mode`, features `shared`
+   (default) and `control`; release 3.1 MB instead of 5.8 MB. `make release` builds each
+   crate on its own (feature merging) and, until steps 3 and 5, `snapsink` with `control`.
+   Without autospawn, `auto` falls back to embedded unless a daemon was started by hand
+   (an info line, not a warning, when there is simply no daemon). Properties and
+   commands are not passed through the daemon yet (step 4). Tested: two
+   `gst-launch-1.0` processes on one port via the daemon binary; Ctrl+C on the first
+   leaves the second and the control API running.
 3. Autospawn, singleton, grace period, reconnect after a daemon crash.
 4. `Properties` and `Command` (metadata and `Stream.Control` through the daemon).
 5. Plugin and aloop tests; `make install`, `make doctor`, `scripts/listen.sh`, docs.
@@ -327,4 +338,4 @@ Each step ends with `make check` green and a commit. No snapcast-rs change is ex
 4. **Released streams** stay until the daemon exits.
 5. **Daemon crash:** reconnect once (respawning the daemon), then an element error.
 
-Still to confirm: the build-feature split of `snapsink` (proposal above).
+6. **Build features** of `snapsink`: lean by default, as proposed above.

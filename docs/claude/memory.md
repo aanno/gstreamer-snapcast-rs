@@ -7,7 +7,7 @@ the prototype (P1–P4 in detail, every decision with its reasons, the fixed lim
 L2–L13, all measurements) is in [memory-old-2026-11-22.md](memory-old-2026-11-22.md),
 frozen; the evaluation in [../evaluation.md](../evaluation.md).
 
-Last updated: 2026-11-22 (daemon design agreed, step 1 done: IPC protocol and daemon; next: step 2).
+Last updated: 2026-11-22 (daemon steps 1 and 2 done: IPC, daemon, snapsink `mode`, lean build; next: step 3).
 
 ## Resume here (2026-11-22)
 
@@ -26,13 +26,17 @@ Last updated: 2026-11-22 (daemon design agreed, step 1 done: IPC protocol and da
    section has the answers). **Step 1 done (2026-11-22):** protocol
    `gst_snapcast_engine::ipc` (feature `shared`), crate `gst-snapcast-daemon`
    (`--socket PATH`), tests (a marker plays −14…−21 µs from timestamp + buffer through
-   the daemon). **Next: step 2** (engine client backend, `acquire_stream` with a mode,
-   `snapsink` `mode`). **Still to confirm with the user:** the build-feature split of
-   `snapsink` (design doc, "Build features"), and the fork PR candidate "make
-   `snapcast-control`'s auth an optional feature".
+   the daemon). **Step 2 done (2026-11-22):** engine `Mode`
+   (auto/shared/embedded) and a shared `StreamHandle` backend; `snapsink` `mode`
+   (default `auto`), `active-mode`, features `shared` (default) / `control` (user agreed
+   to the lean split: release 3.1 MB instead of 5.8 MB). `make install` still builds
+   `snapsink` with `control` until steps 3/5 (so `CONTROL=1 make listen-send` keeps
+   working); drop `SNAPSINK_FEATURES ?= control` then. **Next: step 3** (autospawn,
+   lock-file singleton, grace period, reconnect after a daemon crash). Later: fork PR
+   candidate "make `snapcast-control`'s auth an optional feature" (agreed in principle).
 3. **Alongside:** the snapsrc wander experiment (Open items), measured as usual.
 4. **Pushed** by the user on 2026-11-22: the fork up to `1b5b3b5` and this repo up to
-   `2258343`. No
+   `b4f135c`. No
    upstream PR is open yet; 13 fork commits are PR candidates.
 5. **Housekeeping:** the xerj index (`ax-docs`, `ax-snapcast-rs-docs`) is a snapshot from
    before 2026-11-21; reindex on the host before relying on it (`docs/claude/mcp-xerj.md`).

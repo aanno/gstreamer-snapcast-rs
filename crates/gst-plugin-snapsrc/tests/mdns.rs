@@ -34,7 +34,7 @@ fn snapsrc_finds_snapsink_via_mdns() {
     let port = free_port();
     let sender = gst::parse::launch(&format!(
         "audiotestsrc is-live=true ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
-         ! snapsink port={port} mdns-name={name} buffer-ms=300"
+         ! snapsink port={port} mode=embedded mdns-name={name} buffer-ms=300"
     ))
     .unwrap()
     .downcast::<gst::Pipeline>()
@@ -136,7 +136,7 @@ fn snapsink_announces_its_control_ports() {
     let (port, control_port, http_port) = (free_port(), free_port(), free_port());
     let sender = gst::parse::launch(&format!(
         "audiotestsrc is-live=true ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
-         ! snapsink port={port} mdns-name={name} buffer-ms=300 \
+         ! snapsink port={port} mode=embedded mdns-name={name} buffer-ms=300 \
            control-port={control_port} http-port={http_port}"
     ))
     .unwrap();

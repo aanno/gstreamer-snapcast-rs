@@ -705,10 +705,12 @@ version = "0.1.0"
 dependencies = [
  "gst-plugin-version-helper",
  "gst-snapcast-common",
+ "gst-snapcast-daemon",
  "gst-snapcast-engine",
  "gstreamer",
  "gstreamer-audio",
  "gstreamer-base",
+ "tokio",
 ]
 
 [[package]]

@@ -16,7 +16,7 @@ server = ["dep:snapcast-server", "dep:mdns-sd", "dep:serde_json"]
 # JSON-RPC control API (TCP, HTTP/WebSocket, Snapweb) for the embedded server
 control = ["server", "dep:snapcast-control"]
 # IPC with the shared server daemon (gst-snapcast-daemon): protocol and paths. Unix only.
-shared = ["dep:serde", "dep:serde_json"]
+shared = ["server", "dep:serde"]
 # Embedded Snapcast client (used by snapsrc)
 client = ["dep:snapcast-client", "dep:mdns-sd"]
 

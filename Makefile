@@ -30,6 +30,9 @@ fmt-fix:
 
 clippy:
 	cargo clippy --workspace --all-targets -- -D warnings
+	# snapsink as shipped (no control API) and without the daemon client (Android)
+	cargo clippy -p gst-plugin-snapsink --lib -- -D warnings
+	cargo clippy -p gst-plugin-snapsink --lib --no-default-features -- -D warnings
 
 test:
 	cargo test --workspace
@@ -40,8 +43,16 @@ doc:
 build:
 	cargo build --workspace
 
+# Each crate on its own: in one workspace build Cargo would merge the features of
+# all crates, and snapsink would get the daemon's control API (HTTP, auth).
+# SNAPSINK_FEATURES: extra snapsink features. `control` (the API in embedded mode)
+# stays the default until `make install` installs and autospawns the daemon
+# (docs/shared-server.md, steps 3 and 5); `make release SNAPSINK_FEATURES=` is the lean build.
+SNAPSINK_FEATURES ?= control
 release:
-	cargo build --workspace --release
+	cargo build --release -p gst-plugin-snapsink $(if $(SNAPSINK_FEATURES),--features $(SNAPSINK_FEATURES))
+	cargo build --release -p gst-plugin-snapsrc
+	cargo build --release -p gst-snapcast-daemon
 
 ## Show what GStreamer sees of the freshly built plugins
 inspect: build

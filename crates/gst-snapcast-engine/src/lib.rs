@@ -44,6 +44,8 @@ pub mod ipc;
 pub mod mdns;
 #[cfg(feature = "server")]
 pub mod server;
+#[cfg(all(feature = "shared", unix))]
+mod shared;
 
 /// Name of the span field that tags events with the id of the element (or
 /// other embedder object) they belong to. See "Logging" above.
@@ -105,6 +107,10 @@ pub enum EngineError {
         /// The server's reason.
         reason: String,
     },
+    /// The shared server daemon is not usable (mode shared), or it answered
+    /// with an error of its own.
+    #[error("shared Snapcast server: {0}")]
+    Daemon(String),
     /// The server terminated.
     #[error("Snapcast server is gone")]
     ServerGone,

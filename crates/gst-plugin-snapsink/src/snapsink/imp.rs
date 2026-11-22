@@ -71,6 +71,33 @@ const CODECS: &[&str] = &["pcm", "flac"];
 /// Chunks are sent at most this far ahead of their server timestamp ("Pacing").
 const MAX_AHEAD_USEC: i64 = 200_000;
 
+/// Where the Snapcast server runs (property `mode`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, glib::Enum)]
+#[enum_type(name = "GstSnapSinkMode")]
+pub enum Mode {
+    /// The user's shared server daemon if one runs, else embedded.
+    #[default]
+    #[enum_value(name = "Shared server if available, else embedded", nick = "auto")]
+    Auto,
+    #[enum_value(
+        name = "Shared server (gst-snapcast-daemon), or an error",
+        nick = "shared"
+    )]
+    Shared,
+    #[enum_value(name = "Embedded in this process", nick = "embedded")]
+    Embedded,
+}
+
+impl Mode {
+    fn to_engine(self) -> server::Mode {
+        match self {
+            Self::Auto => server::Mode::Auto,
+            Self::Shared => server::Mode::Shared,
+            Self::Embedded => server::Mode::Embedded,
+        }
+    }
+}
+
 /// Player commands the stream accepts from controllers (property `controls`).
 #[glib::flags(name = "GstSnapSinkControls")]
 pub enum Controls {
@@ -109,6 +136,7 @@ struct Settings {
     http_port: u32,
     snapweb_dir: String,
     controls: Controls,
+    mode: Mode,
 }
 
 impl Default for Settings {
@@ -123,6 +151,7 @@ impl Default for Settings {
             http_port: 0,
             snapweb_dir: String::new(),
             controls: Controls::empty(),
+            mode: Mode::default(),
         }
     }
 }
@@ -352,6 +381,26 @@ impl ObjectImpl for SnapSink {
                     )
                     .mutable_playing()
                     .build(),
+                glib::ParamSpecEnum::builder::<Mode>("mode")
+                    .nick("Mode")
+                    .blurb(
+                        "Where the Snapcast server runs: in the user's shared server daemon \
+                         (gst-snapcast-daemon), so that pipelines in several processes share \
+                         one server, or embedded in this process. auto: shared if the daemon \
+                         runs, else embedded. port=0 is always embedded",
+                    )
+                    .default_value(Mode::default())
+                    .mutable_ready()
+                    .build(),
+                glib::ParamSpecEnum::builder::<Mode>("active-mode")
+                    .nick("Active mode")
+                    .blurb(
+                        "Where the server of the running stream is: shared or embedded \
+                         (auto while no stream runs)",
+                    )
+                    .default_value(Mode::Auto)
+                    .read_only()
+                    .build(),
                 glib::ParamSpecUInt::builder("bound-port")
                     .nick("Bound port")
                     .blurb("Port the server actually listens on (0 while not running)")
@@ -402,6 +451,7 @@ impl ObjectImpl for SnapSink {
                     .expect("type checked upstream")
                     .unwrap_or_default();
             }
+            "mode" => settings.mode = value.get().expect("type checked upstream"),
             "control-port" => settings.control_port = value.get().expect("type checked upstream"),
             "http-port" => settings.http_port = value.get().expect("type checked upstream"),
             "snapweb-dir" => {
@@ -423,6 +473,15 @@ impl ObjectImpl for SnapSink {
                     .map_or(0u32, |a| a.stream.port().into())
                     .to_value()
             }
+            "active-mode" => {
+                let state = self.state.lock().unwrap();
+                match state.as_ref() {
+                    None => Mode::Auto,
+                    Some(a) if a.stream.is_shared() => Mode::Shared,
+                    Some(_) => Mode::Embedded,
+                }
+                .to_value()
+            }
             name => {
                 let settings = self.settings.lock().unwrap();
                 match name {
@@ -435,6 +494,7 @@ impl ObjectImpl for SnapSink {
                     "http-port" => settings.http_port.to_value(),
                     "snapweb-dir" => settings.snapweb_dir.to_value(),
                     "controls" => settings.controls.to_value(),
+                    "mode" => settings.mode.to_value(),
                     _ => unimplemented!(),
                 }
             }
@@ -560,6 +620,7 @@ impl BaseSinkImpl for SnapSink {
             buffer_ms: settings.buffer_ms,
             mdns_name: Some(settings.mdns_name.clone()).filter(|n| !n.is_empty()),
             control: settings.control_options(),
+            mode: settings.mode.to_engine(),
         };
         let stream_opts = StreamOptions {
             name: settings.stream.clone(),
@@ -574,13 +635,35 @@ impl BaseSinkImpl for SnapSink {
         gst::info!(
             CAT,
             imp = self,
-            "Feeding stream '{}' ({} {format}) on port {}; control: TCP {:?}, HTTP {:?}",
+            "Feeding stream '{}' ({} {format}) on port {} ({}); control: TCP {:?}, HTTP {:?}",
             stream.name(),
             settings.codec,
             stream.port(),
+            if stream.is_shared() {
+                "shared server"
+            } else {
+                "embedded server"
+            },
             stream.control_tcp_port(),
             stream.control_http_port()
         );
+        // Only the first sink of a server decides its options.
+        let effective = stream.server_options();
+        if effective.buffer_ms != server_opts.buffer_ms
+            || effective.mdns_name != server_opts.mdns_name
+            || effective.control != server_opts.control
+        {
+            gst::warning!(
+                CAT,
+                imp = self,
+                "The server on port {} was started with other options; in effect: \
+                 buffer-ms {}, mdns-name {:?}, control {:?}",
+                stream.port(),
+                effective.buffer_ms,
+                effective.mdns_name,
+                effective.control
+            );
+        }
         let element = self.obj().downgrade();
         let stream_name = settings.stream.clone();
         stream.on_command(move |command| {
@@ -614,6 +697,7 @@ impl BaseSinkImpl for SnapSink {
         self.publish_properties(active);
         drop(state);
         self.obj().notify("bound-port");
+        self.obj().notify("active-mode");
         Ok(())
     }
 
