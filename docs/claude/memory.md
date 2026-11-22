@@ -40,11 +40,16 @@ Last updated: 2026-11-22 (shared server daemon done, steps 1–5; next: the user
    embedded), `make install` installs it into `~/.local/bin` and the lean `snapsink`,
    `make doctor` and `listen.sh` (`MODE`) know it. **Next:** the user tries it on the
    host (`make install`, `make doctor`, `CONTROL=1 make listen-send` twice with
-   different `STREAM`s in two terminals, Snapweb). Later: fork
-   PR candidate "make `snapcast-control`'s auth an optional feature" (agreed in principle).
+   different `STREAM`s in two terminals, Snapweb). **Fork (2026-11-22):** `60cb098`
+   `feat(control): make JWT authentication an optional feature auth` (off by default,
+   the user's wish; fails closed without it; snapserver-rs enables it; upstream PR
+   candidate). Effect here: `snapsink` with `control` 4.9 MB / 174 crates (was 5.8 / 239),
+   daemon 5.0 MB (was 6.0). Known, older: `snapcast-control`'s crate doctest calls
+   `serve_http` and fails with `--no-default-features`. **Also new:** `make dist` (a
+   tarball with `install.sh`), and a paths table in the README.
 3. **Alongside:** the snapsrc wander experiment (Open items), measured as usual.
 4. **Pushed** by the user on 2026-11-22: the fork up to `1b5b3b5` and this repo up to
-   `1f20989`. No
+   `9985ef8`. No
    upstream PR is open yet; 13 fork commits are PR candidates.
 5. **Housekeeping:** the xerj index (`ax-docs`, `ax-snapcast-rs-docs`) is a snapshot from
    before 2026-11-21; reindex on the host before relying on it (`docs/claude/mcp-xerj.md`).
@@ -188,9 +193,8 @@ Fixed ones (L2–L5, L7–L10, L12, L13) are in the archive.
 2. ~~**Design doc for the shared-server daemon**~~ agreed 2026-11-22 (`docs/shared-server.md`).
 3. ~~**The daemon**~~ done 2026-11-22 (all five steps of the design doc). Left: the
    user's test on the host.
-4. **Next candidates** (the user's choice): the wander experiment (Open items); the fork
-   PR candidate "make `snapcast-control`'s auth an optional feature" (agreed in
-   principle); upstream PRs for the fork commits.
+4. **Next candidates** (the user's choice): the wander experiment (Open items); upstream
+   PRs for the fork commits (now 15, including runtime streams and the `auth` feature).
 
 **After that** (not scheduled): upstream PRs for the fork commits; finishing `snapsink`
 (L6, Android build and CI); infrastructure (CI, packaging); L11 if a WebSocket audio client

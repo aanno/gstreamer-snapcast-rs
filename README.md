@@ -17,9 +17,11 @@ sender:    pipewiresrc ! audioconvert ! audioresample ! snapsink stream=desktop
 receiver:  snapsrc host=sender ! audioconvert ! audioresample ! pipewiresink
 ```
 
-All `snapsink` elements in one process share a single embedded server; each
-element feeds one stream. Standard Snapcast clients (C++ `snapclient`,
-Snapdroid, ...) can connect to it, provided you use the PCM or FLAC codec.
+All `snapsink` elements of a user share one Snapcast server per port, also across
+processes: the first one starts the shared server daemon `gst-snapcast-daemon`, which
+ends 5 s after the last one (or, without the daemon, the server runs embedded in the
+pipeline's process). Each element feeds one stream. Standard Snapcast clients (C++
+`snapclient`, Snapdroid, ...) can connect to it, provided you use the PCM or FLAC codec.
 
 ### Why Snapcast as a GStreamer element?
 
@@ -40,23 +42,33 @@ When not to use it: a plain receiver (e.g. a Raspberry Pi on an amplifier) is si
 `snapserver`. Pros and cons, the comparison with snapcast-rs, licence (GPL-3.0) and
 publishing: [docs/architecture.md](docs/architecture.md).
 
-> **Status: feasibility prototype, evaluated with a go (2026-11-22).** `snapsink → embedded server → snapsrc` works for
-> `pcm` and `flac`, and interoperates with the C++ Snapcast in both directions
-> (`snapsink` → `snapclient`, `snapserver` → `snapsrc`; `make test-interop`). Measured on
-> a loopback sound card, receivers play within about 1 ms of each other and of the
-> server timeline, also on a drifting card (`make test-aloop`). snapsink announces itself
-> via mDNS and snapsrc finds it; snapsrc reconnects after a server restart and applies
-> the server's volume and mute; while the server sends nothing (sender paused, server gone)
-> it outputs silence (GAP buffers) on a continuous timeline. snapcast-rs logs into the GStreamer debug log. snapsink
-> can offer the Snapcast JSON-RPC control API and serve Snapweb (`control-port`,
-> `http-port`, `snapweb-dir`; opt-in), and passes track tags on as stream metadata.
-> Several `snapsink`s in one process can feed different streams of one server port.
-> Limitations: streams are shared only within one process (a shared server daemon is
-> planned), S16LE/S32LE input only, no authentication on the control API, Snapweb's
-> in-browser player is not supported (P2). The current state, decisions, all known limitations and the plan are
-> in [docs/claude/memory.md](docs/claude/memory.md); the architecture in
-> [docs/architecture.md](docs/architecture.md); the evaluation of the prototype (F1–F5, an
-> hour-long endurance run) in [docs/evaluation.md](docs/evaluation.md).
+> **Status (2026-11-22): prototype evaluated with a go; shared server daemon done.**
+> `snapsink → server → snapsrc` works for `pcm` and `flac`, and interoperates with the C++
+> Snapcast in both directions (`snapsink` → `snapclient`, `snapserver` → `snapsrc`;
+> `make test-interop`). Measured on a loopback sound card, receivers play within about
+> 1 ms of each other and of the server timeline, also on a drifting card, with the
+> server embedded or in the daemon (`make test-aloop`, `make test-aloop-shared`), and
+> for an hour without dropouts or growth (`make test-endurance`).
+>
+> - **Server:** pipelines of a user share one server per port through the daemon
+>   `gst-snapcast-daemon` (started by the first `snapsink`, one per user, ends 5 s after
+>   the last; reconnects after a crash); several streams per server; `mode=embedded`
+>   (and the fallback without the daemon) keeps the server in the pipeline's process.
+> - **Control:** the Snapcast JSON-RPC API and Snapweb (`control-port`, `http-port`,
+>   `snapweb-dir`; opt-in), track tags as stream metadata, Snapweb's player buttons as a
+>   bus message (`controls`).
+> - **Receiver:** `snapsrc` finds a sender via mDNS, reconnects after a server restart,
+>   applies the server's volume and mute, and outputs silence (GAP buffers) on a
+>   continuous timeline while nothing is sent.
+> - **Install:** `make install`, or a tarball with `install.sh` (`make dist`).
+>
+> Limitations: S16LE/S32LE input only; no authentication on the control API; Snapweb's
+> in-browser player is not supported; `snapsrc` wanders by ±1.5…3 ms in some runs;
+> Android is not built yet. State, decisions, known limitations and the plan:
+> [docs/claude/memory.md](docs/claude/memory.md); architecture:
+> [docs/architecture.md](docs/architecture.md); the shared server:
+> [docs/shared-server.md](docs/shared-server.md); the evaluation of the prototype (F1–F5,
+> an hour-long endurance run): [docs/evaluation.md](docs/evaluation.md).
 
 ### Element properties
 
@@ -119,7 +131,7 @@ first).
 ├── crates/
 │   ├── gst-snapcast-engine/   # GStreamer-free glue: tokio runtime, shared server/client lifecycle
 │   ├── gst-snapcast-common/   # GStreamer-side code shared by both plugins (logging bridge)
-│   ├── gst-snapcast-daemon/   # shared server for all pipelines of a user (in progress)
+│   ├── gst-snapcast-daemon/   # shared server for all pipelines of a user (no GStreamer)
 │   ├── gst-plugin-snapsink/   # -> libgstsnapsink.so  (element: snapsink)
 │   └── gst-plugin-snapsrc/    # -> libgstsnapsrc.so   (element: snapsrc)
 ├── snapcast-rs/               # git submodule (fork of metaneutrons/snapcast-rs), own Cargo workspace
@@ -247,9 +259,11 @@ snapcast-rs crates (their features:
 | `gst-snapcast-daemon` | none | engine `server` + `control` + `shared` | `snapcast-server`, `snapcast-control` |
 | `gst-snapcast-engine` | `server`, `control` (implies `server`), `shared` (the daemon's protocol; implies `server`, Unix), `client`; none by default | as above, plus `mdns-sd` for mDNS (pure Rust) |
 
-**`snapsink` without `control`** is about half the size (release, 2026-11-22: 3.1 MB
-instead of 5.8 MB; 127 instead of 239 crates including GStreamer's), because the HTTP
-stack and the authentication crates are left out. In mode `shared` the control API runs
+**`snapsink` without `control`** is smaller (release, 2026-11-22: 3.1 MB instead of
+4.9 MB; 127 instead of 174 crates including GStreamer's), because the HTTP stack is left
+out. The JWT authentication of `snapcast-control` is an optional feature (`auth`, off) in
+our fork, so neither `snapsink` nor the daemon contains its crypto crates (before that:
+5.8 MB and 239 crates with `control`). In mode `shared` the control API runs
 in the daemon, so it is still available. `make install` builds this lean `snapsink`;
 `make install SNAPSINK_FEATURES=control` adds the control API for mode `embedded`. For
 Android: `--no-default-features` (no daemon), plus `control` if wanted.
