@@ -29,7 +29,8 @@ Short version (2026-11-22): the **feasibility prototype is done, with a go** (P4
 `docs/evaluation.md`, agreed by the user). Loopback, C++ interop both ways, timing within
 ~1 ms of the server (aloop tests), an hour of endurance, gap filling, mDNS, reconnect,
 volume/mute, logging, and the control plane (JSON-RPC and Snapweb served by `snapsink`)
-work. Next: L1 (runtime streams) in the fork, then a per-user shared server daemon
+work. L1 is done: several `snapsink` streams share a server port within one process
+(runtime streams in the fork). Next: a per-user shared server daemon across processes
 (design doc first; `snapsink` default mode "shared"). Open timing item: the occasional
 snapsrc wander (±1.5…3 ms).
 
