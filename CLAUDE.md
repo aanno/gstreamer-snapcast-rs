@@ -35,8 +35,8 @@ volume/mute, logging, and the control plane (JSON-RPC and Snapweb served by `sna
 work. L1 is done: several `snapsink` streams share a server port within one process
 (runtime streams in the fork). In progress: the per-user shared server daemon across
 processes (`docs/shared-server.md`; steps 1–2 done: IPC, `gst-snapcast-daemon`,
-`snapsink mode=auto|shared|embedded`, lean default build without the control API;
-next: autospawn). Open timing item: the occasional
+`snapsink mode=auto|shared|embedded`, lean default build without the control API,
+autospawn, crash reconnect; next: metadata and `Stream.Control` through the daemon). Open timing item: the occasional
 snapsrc wander (±1.5…3 ms).
 
 ## Commands

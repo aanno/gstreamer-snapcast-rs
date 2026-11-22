@@ -23,7 +23,7 @@ fn start_daemon() -> PathBuf {
     let socket = ipc::socket_path(&dir);
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket).unwrap();
-    std::thread::spawn(move || gst_snapcast_daemon::serve(&listener));
+    std::thread::spawn(move || gst_snapcast_daemon::serve(&listener, None));
     socket
 }
 

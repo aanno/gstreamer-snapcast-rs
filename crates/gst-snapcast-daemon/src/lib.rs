@@ -13,11 +13,20 @@
 //! stream's queue is full, which in turn fills the socket buffer and blocks the
 //! sender: that is the backpressure). The servers themselves run on the engine
 //! runtime, as in a pipeline.
+//!
+//! # Lifetime
+//!
+//! [`serve`] counts the connections; the binary exits once there has been none for
+//! a grace period (default 5 s), which covers senders that restart. It is started
+//! by the first sender that finds no daemon (autospawn), and only one runs per
+//! user: it holds a lock file next to its socket for its whole life.
 
 #![warn(missing_docs)]
 
 use std::io::{BufReader, BufWriter};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use gst_snapcast_engine::ipc::{
     self, Acquire, Acquired, ErrorKind, IpcError, Message, PROTOCOL_VERSION, ServerSettings,
@@ -28,13 +37,97 @@ use gst_snapcast_engine::server;
 /// The daemon's package version, sent in [`Welcome`].
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Serve connections on `listener` until it fails; each connection gets a thread.
-pub fn serve(listener: &UnixListener) -> std::io::Result<()> {
+/// How many senders are connected, and whether the daemon is shutting down.
+#[derive(Debug)]
+struct Lifetime {
+    connections: usize,
+    /// When the number of connections last changed.
+    since: Instant,
+    /// Set when the daemon decided to exit; later connections are dropped.
+    closing: bool,
+}
+
+type Shared = Arc<(Mutex<Lifetime>, Condvar)>;
+
+/// Counts a connection while it lives.
+struct Connection(Shared);
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        let (lock, changed) = &*self.0;
+        let mut lifetime = lock.lock().unwrap();
+        lifetime.connections -= 1;
+        lifetime.since = Instant::now();
+        changed.notify_all();
+    }
+}
+
+/// Serve connections on `listener`, each on its own thread.
+///
+/// With `grace`, return once no sender has been connected for that long (also
+/// right after the start, when the sender that spawned the daemon never
+/// connects). Connections that arrive while returning are closed at once, so
+/// that their sender retries (and spawns a new daemon). Without `grace`, serve
+/// until accepting fails.
+pub fn serve(listener: &UnixListener, grace: Option<Duration>) -> std::io::Result<()> {
+    let shared: Shared = Arc::new((
+        Mutex::new(Lifetime {
+            connections: 0,
+            since: Instant::now(),
+            closing: false,
+        }),
+        Condvar::new(),
+    ));
+    let Some(grace) = grace else {
+        return accept_loop(listener, &shared);
+    };
+    let accepting = listener.try_clone()?;
+    let for_accept = Arc::clone(&shared);
+    std::thread::Builder::new()
+        .name("gst-snapcast-daemon-accept".into())
+        .spawn(move || {
+            if let Err(e) = accept_loop(&accepting, &for_accept) {
+                tracing::error!(error = %e, "Accepting connections failed");
+            }
+        })?;
+
+    let (lock, changed) = &*shared;
+    let mut lifetime = lock.lock().unwrap();
+    loop {
+        let idle = lifetime.since.elapsed();
+        if lifetime.connections == 0 && idle >= grace {
+            lifetime.closing = true;
+            tracing::info!(?grace, "No senders, exiting");
+            return Ok(());
+        }
+        let wait = if lifetime.connections == 0 {
+            grace - idle
+        } else {
+            grace
+        };
+        lifetime = changed.wait_timeout(lifetime, wait).unwrap().0;
+    }
+}
+
+fn accept_loop(listener: &UnixListener, shared: &Shared) -> std::io::Result<()> {
     loop {
         let (stream, _) = listener.accept()?;
+        {
+            let (lock, changed) = &**shared;
+            let mut lifetime = lock.lock().unwrap();
+            if lifetime.closing {
+                // The sender sees the connection closed and retries.
+                continue;
+            }
+            lifetime.connections += 1;
+            lifetime.since = Instant::now();
+            changed.notify_all();
+        }
+        let connection = Connection(Arc::clone(shared));
         std::thread::Builder::new()
             .name("gst-snapcast-daemon-conn".into())
             .spawn(move || {
+                let _connection = connection;
                 if let Err(e) = handle_connection(stream) {
                     tracing::warn!(error = %e, "Connection failed");
                 }

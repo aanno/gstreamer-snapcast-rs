@@ -1,6 +1,6 @@
 # Design: a shared Snapcast server across processes
 
-Status: **agreed** (2026-11-22), implementation in progress: steps 1 and 2 done. The outline was
+Status: **agreed** (2026-11-22), implementation in progress: steps 1 to 3 done. The outline was
 agreed with the project owner on 2026-11-22 (`docs/claude/memory.md`, Decisions); the
 open questions are answered at the end; the build-feature split of `snapsink` is a
 confirmed too.
@@ -271,7 +271,7 @@ the other gets the usual "cannot listen on port" error.
   never installs one). Level from `GST_SNAPCAST_DAEMON_LOG` (`error` … `trace`, default
   `info`; a level rather than a filter string, to avoid the regex dependency). Output:
   stderr when started by hand; `$XDG_RUNTIME_DIR/gst-snapcast/daemon.log` when
-  autospawned (step 3).
+  autospawned (the sender passes `--log`; the daemon truncates it once it holds the lock).
 - The sink side keeps logging through `gst-snapcast-common` into the GStreamer debug log
   (`snapcast-engine`), including the IPC client. What the server logs about a stream
   stays in the daemon log; errors that matter to a sink are sent to it (`Error`) and
@@ -312,7 +312,21 @@ the other gets the usual "cannot listen on port" error.
    commands are not passed through the daemon yet (step 4). Tested: two
    `gst-launch-1.0` processes on one port via the daemon binary; Ctrl+C on the first
    leaves the second and the control API running.
-3. Autospawn, singleton, grace period, reconnect after a daemon crash.
+3. ~~Autospawn, singleton, grace period, reconnect after a daemon crash.~~ Done
+   2026-11-22. Daemon: lock file `daemon.lock` next to the socket (std `File::try_lock`;
+   a second daemon waits up to 2 s, then exits quietly), the socket is removed before
+   the lock is released, `--grace-secs` / `GST_SNAPCAST_DAEMON_GRACE_SECS`, `--log`
+   (truncated, after the lock is taken). Connections arriving while it exits are closed
+   at once; the sender then tries once more, which spawns a new daemon. Engine:
+   connect, else spawn (`GST_SNAPCAST_DAEMON` or `PATH`, `process_group(0)`, a thread
+   reaps the child) and wait up to 2 s; one reconnect when a write fails (not on a write
+   timeout). `auto` now logs a warning when it falls back (the binary is missing, …).
+   No SIGPIPE: Rust's socket writes suppress it, so a C application such as
+   `gst-launch-1.0` gets an error, not a signal (checked by hand). Tests: the real
+   binary in `crates/gst-snapcast-daemon/tests/autospawn.rs` (four senders spawn one
+   daemon, `kill -9` and reconnect, exit after the grace period). By hand: two
+   `gst-launch-1.0` in mode `auto`, `kill -9` of the daemon, both reconnected and kept
+   playing, the daemon exited 5 s after the last.
 4. `Properties` and `Command` (metadata and `Stream.Control` through the daemon).
 5. Plugin and aloop tests; `make install`, `make doctor`, `scripts/listen.sh`, docs.
 

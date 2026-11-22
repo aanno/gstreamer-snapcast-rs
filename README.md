@@ -64,7 +64,7 @@ publishing: [docs/architecture.md](docs/architecture.md).
 |------------|---------------|-------------|---------|
 | `snapsink` | `stream`      | `default`   | Snapcast stream name |
 |            | `port`        | `1704`      | Server port, shared by all snapsinks using it (`0` = ephemeral, always embedded) |
-|            | `mode`        | `auto`      | Where the server runs: `shared` in the user's server daemon `gst-snapcast-daemon` (pipelines in several processes share one server; in progress, start it by hand for now), `embedded` in this process, `auto` shared if the daemon runs, else embedded |
+|            | `mode`        | `auto`      | Where the server runs: `shared` in the user's server daemon `gst-snapcast-daemon` (pipelines in several processes share one server; the first `snapsink` starts it, it exits 5 s after the last; needs `gst-snapcast-daemon` on `PATH` or `GST_SNAPCAST_DAEMON`), `embedded` in this process, `auto` shared if the daemon runs, else embedded |
 |            | `codec`       | `pcm`       | `pcm` or `flac` |
 |            | `buffer-ms`   | `1000`      | End-to-end buffer announced to clients |
 |            | `mdns-name`   | `gst-snapsink` | Announce the server via mDNS (`_snapcast._tcp`) under this name; empty: don't (never for `port=0`) |

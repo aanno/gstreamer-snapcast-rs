@@ -487,15 +487,11 @@ pub fn acquire_stream(
                     Backend::Shared(shared)
                 }
                 Err(Failure::Engine(e)) => return Err(e),
-                Err(Failure::Unavailable { reason, .. }) if mode == Mode::Shared => {
+                Err(Failure::Unavailable(reason)) if mode == Mode::Shared => {
                     return Err(EngineError::Daemon(reason));
                 }
-                Err(Failure::Unavailable { reason, expected }) => {
-                    if expected {
-                        tracing::info!(reason, "No shared server, running embedded");
-                    } else {
-                        tracing::warn!(reason, "Shared server unusable, running embedded");
-                    }
+                Err(Failure::Unavailable(reason)) => {
+                    tracing::warn!(reason, "No shared server, running embedded");
                     Backend::Embedded(acquire_embedded(server, stream)?)
                 }
             }

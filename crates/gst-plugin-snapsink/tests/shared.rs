@@ -63,11 +63,16 @@ fn modes_choose_between_the_shared_server_and_an_embedded_one() {
     std::fs::create_dir_all(&runtime_dir).unwrap();
     // SAFETY: the only test in this binary sets it before GStreamer or the engine
     // start any thread that reads the environment.
-    unsafe { std::env::set_var("XDG_RUNTIME_DIR", &runtime_dir) };
+    // No autospawn here (the daemon runs in this process below): a binary that
+    // does not exist, so that an installed daemon is never started.
+    unsafe {
+        std::env::set_var("XDG_RUNTIME_DIR", &runtime_dir);
+        std::env::set_var("GST_SNAPCAST_DAEMON", "/nonexistent/gst-snapcast-daemon");
+    }
     gst::init().unwrap();
     gstsnapsink::plugin_register_static().unwrap();
 
-    // No daemon yet: auto runs embedded, shared fails.
+    // No daemon, and none can be started: auto runs embedded, shared fails.
     let auto = launch(free_port(), "a", "auto");
     assert_eq!(play(&auto), "embedded");
     auto.set_state(gst::State::Null).unwrap();
@@ -81,7 +86,7 @@ fn modes_choose_between_the_shared_server_and_an_embedded_one() {
     let dir = runtime_dir.join(ipc::DIR_NAME);
     std::fs::create_dir_all(&dir).unwrap();
     let listener = UnixListener::bind(ipc::socket_path(&dir)).unwrap();
-    std::thread::spawn(move || gst_snapcast_daemon::serve(&listener));
+    std::thread::spawn(move || gst_snapcast_daemon::serve(&listener, None));
 
     // Now both modes go to the daemon, and the streams share its port.
     let port = free_port();
