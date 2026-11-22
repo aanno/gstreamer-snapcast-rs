@@ -6,7 +6,7 @@
 //! different instance numbers, or the server mixes them up.
 //!
 //! Instance numbers are claimed with lock files, one per number, in
-//! `$XDG_RUNTIME_DIR/snapcast-engine` (or the temp dir). A lock is held as long as
+//! `$XDG_RUNTIME_DIR/gst-snapcast-engine` (or the temp dir). A lock is held as long as
 //! its [`InstanceLock`] lives and disappears with the process, even after a crash,
 //! so stale numbers cannot pile up. This coordinates all engine clients on the host,
 //! across processes; C++ snapclients don't take part.

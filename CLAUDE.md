@@ -53,6 +53,7 @@ make test-endurance                # F3: an hour on the snd-aloop card, CSV per 
 make test-mdns                     # #[ignore]d mDNS discovery tests (need multicast)
 make doctor                        # what this machine has (tools, elements, sound devices)
 make install / make listen-all     # per-user install; listening tests (scripts/listen.sh)
+make dist                          # release tarball with install.sh (target/dist/)
 GST_PLUGIN_PATH=$PWD/target/debug GST_DEBUG=snapsink:6 gst-launch-1.0 audiotestsrc num-buffers=50 ! snapsink
 ```
 

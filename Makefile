@@ -1,5 +1,5 @@
 .PHONY: setup check fmt fmt-fix clippy test doc build release inspect submodule \
-	install uninstall install-system uninstall-system test-interop test-aloop test-aloop-shared test-endurance test-mdns doctor \
+	dist install uninstall install-system uninstall-system test-interop test-aloop test-aloop-shared test-endurance test-mdns doctor \
 	listen-send listen-recv listen-cpp-client listen-cpp-server listen-pair listen-all listen-show
 
 PLUGIN_PATH := $(CURDIR)/target/debug
@@ -56,6 +56,25 @@ release:
 	cargo build --release -p gst-plugin-snapsink $(if $(SNAPSINK_FEATURES),--features $(SNAPSINK_FEATURES))
 	cargo build --release -p gst-plugin-snapsrc
 	cargo build --release -p gst-snapcast-daemon
+
+## A tarball for users: plugins, daemon, install.sh, README.txt (target/dist/<name>.tar.gz).
+## Unpack it and run ./install.sh (no root) or sudo ./install.sh --system.
+DIST_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+DIST_COMMIT = $(shell git rev-parse --short HEAD)$(shell git diff --quiet HEAD -- || echo -dirty)
+DIST_NAME = gstreamer-snapcast-rs-$(DIST_VERSION)-$(DIST_COMMIT)-linux-$(shell uname -m)
+DIST_DIR := $(CURDIR)/target/dist
+DIST_STAGE = $(DIST_DIR)/$(DIST_NAME)
+dist: release
+	install -d $(DIST_STAGE)/lib/gstreamer-1.0 $(DIST_STAGE)/bin
+	install -m 0755 $(addprefix $(RELEASE_DIR)/,$(PLUGINS)) $(DIST_STAGE)/lib/gstreamer-1.0/
+	install -m 0755 $(RELEASE_DIR)/$(DAEMON) $(DIST_STAGE)/bin/
+	install -m 0755 scripts/dist-install.sh $(DIST_STAGE)/install.sh
+	install -m 0755 scripts/fetch-snapweb.sh $(DIST_STAGE)/
+	install -m 0644 scripts/dist-README.txt $(DIST_STAGE)/README.txt
+	install -m 0644 LICENSE $(DIST_STAGE)/
+	scripts/dist-build-info.sh "$(DIST_VERSION)" "$(DIST_COMMIT)" "$(SNAPSINK_FEATURES)" > $(DIST_STAGE)/BUILD-INFO
+	tar -C $(DIST_DIR) -czf $(DIST_STAGE).tar.gz $(DIST_NAME)
+	@echo "Packed $(DIST_STAGE).tar.gz"
 
 ## Show what GStreamer sees of the freshly built plugins
 inspect: build

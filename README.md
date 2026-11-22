@@ -186,6 +186,51 @@ sudo make uninstall-system                  #   the daemon into /usr/local/bin)
 `snapsink` runs its server embedded, as before, and says so in a warning. Design:
 [docs/shared-server.md](docs/shared-server.md).
 
+#### A tarball for machines without the source
+
+```sh
+make dist      # target/dist/gstreamer-snapcast-rs-<version>-<commit>-linux-<arch>.tar.gz
+```
+
+The tarball holds the release plugins, the daemon, `install.sh`, `fetch-snapweb.sh`, a
+short `README.txt`, the `LICENSE` and a `BUILD-INFO` (commit, glibc, GStreamer version).
+On the target machine:
+
+```sh
+tar xzf gstreamer-snapcast-rs-*.tar.gz && cd gstreamer-snapcast-rs-*/
+./install.sh                    # for the current user: the same places as make install
+sudo ./install.sh --system      # or system-wide: GStreamer's plugins dir, /usr/local/bin
+./install.sh --uninstall        # (add --system for a system install)
+```
+
+It needs GStreamer 1.22 or newer with gst-plugins-base, the same CPU architecture, and a
+glibc at least as new as the build machine's (the devcontainer: Debian trixie, glibc
+2.41; Fedora 45 is newer). `PLUGIN_DIR` and `BIN_DIR` override the directories.
+
+### Paths
+
+Everything the plugins and the daemon install, create or read, per user unless noted.
+`$XDG_RUNTIME_DIR` is normally `/run/user/<uid>` (private to the user, emptied at logout).
+
+| What | Path | Notes |
+|------|------|-------|
+| Plugins, per user | `~/.local/share/gstreamer-1.0/plugins/libgstsnapsink.so`, `libgstsnapsrc.so` | `make install`, `./install.sh`; GStreamer scans it for this user only |
+| Plugins, system-wide | GStreamer's plugins dir (`pkg-config --variable=pluginsdir gstreamer-1.0`: Fedora `/usr/lib64/gstreamer-1.0`, Debian `/usr/lib/<triplet>/gstreamer-1.0`) | `make install-system`, `./install.sh --system` |
+| Plugins, development | `target/debug` | via `GST_PLUGIN_PATH` (the devcontainer sets it); takes precedence |
+| Daemon binary | `~/.local/bin/gst-snapcast-daemon` (system: `/usr/local/bin`) | `snapsink` starts it from `PATH`, or from `GST_SNAPCAST_DAEMON` |
+| Daemon socket (Unix stream socket) | `$XDG_RUNTIME_DIR/gst-snapcast/daemon.sock` | `snapsink` ↔ daemon; removed when the daemon exits |
+| Daemon lock | `$XDG_RUNTIME_DIR/gst-snapcast/daemon.lock` | held while a daemon runs (one per user); the empty file stays |
+| Daemon log | `$XDG_RUNTIME_DIR/gst-snapcast/daemon.log` | when started by `snapsink`; truncated at each start. Started by hand: stderr. Level: `GST_SNAPCAST_DAEMON_LOG` |
+| `snapsrc` instance locks | `$XDG_RUNTIME_DIR/gst-snapcast-engine/instance-<n>.lock` | one per running `snapsrc` (its client instance number); temp dir without `XDG_RUNTIME_DIR` |
+| Snapweb (web UI) files | `~/.local/share/snapweb` | default of `scripts/fetch-snapweb.sh`; give it to `snapsink snapweb-dir=` |
+| GStreamer's plugin cache | `~/.cache/gstreamer-1.0/registry.<arch>.bin` | GStreamer's own; delete it if a new plugin build is not picked up |
+| Release tarballs | `target/dist/` | `make dist` |
+| Test output | `target/endurance-<time>.csv`, `target/aloop-runtime/` | `make test-endurance`; `make test-aloop-shared` (its daemon log) |
+
+Network ports, on all interfaces: `1704` Snapcast stream (`port`), `1705` JSON-RPC over
+TCP (`control-port`, off by default), `1780` HTTP/WebSocket and Snapweb (`http-port`, off
+by default). The control ports have no authentication.
+
 `make doctor` shows which `snapsink`/`snapsrc` files GStreamer actually loads. Note that
 `GST_PLUGIN_PATH` (set in the devcontainer) takes precedence over installed copies.
 
@@ -225,6 +270,7 @@ make fmt       # rustfmt check (make fmt-fix to apply)
 make doc       # rustdoc, warnings are errors (cargo doc --open to browse)
 make check     # all of the above (except build)
 make inspect   # gst-inspect-1.0 the freshly built plugins
+make dist      # release tarball for other machines (target/dist/, see Install)
 make test-interop  # against the C++ snapclient/snapserver (not part of make check)
 make test-aloop    # timing on the snd-aloop card: receiver offset, drift (not part of make check)
 make test-aloop-shared  # the same with the sender in the shared server daemon
