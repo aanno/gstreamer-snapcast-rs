@@ -2,10 +2,11 @@
 
 As of 2026-11-22. This is the write-up for the go/no-go on the prototype: can GStreamer
 pipelines send to and receive from Snapcast, in sync with the C++ Snapcast, using the
-embeddable engines of `snapcast-rs`? The decision itself is the project owner's; the last
-section gives a recommendation.
+embeddable engines of `snapcast-rs`? The last section gives the recommendation.
 
-The criteria F1–F5 were set at the start (2026-11-10, `docs/claude/memory.md`, Plan). How
+**Decision (2026-11-22): go.** The project owner agreed to this evaluation.
+
+The criteria F1–F5 were set at the start (2026-11-10, `docs/claude/memory-old-2026-11-22.md`, Plan). How
 the measurements work and how to repeat them: `docs/testing.md`.
 
 ## Summary

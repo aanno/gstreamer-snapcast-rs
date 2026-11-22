@@ -19,17 +19,19 @@ Architecture, dependency rules (with reasons), threads, logging and the interfac
 The original design rationale is in `docs/gstreamer-plugins/dlna-rs-gstreamer-2.md`.
 `-1.md` is broader DLNA/UPnP background; read it only when needed.
 
-**Read `docs/claude/memory.md` first.** It holds the current state, the decisions, the
-known limitations (L1–L10) and the plan. Keep it up to date: update State and Plan when
-a step is done, and record new decisions with a date.
+**Read `docs/claude/memory.md` first.** It holds the current state, the decisions in force,
+the open limitations and the plan. Keep it up to date: update State and Plan when a step
+is done, and record new decisions with a date. History up to the end of the prototype
+(P1–P4, fixed limitations, all measurements): `docs/claude/memory-old-2026-11-22.md`,
+frozen; read it only when needed.
 
-Short version (2026-11-21): goal is a **feasibility prototype**. Loopback, C++ interop in
-both directions (`make test-interop`), timing (`make test-aloop`, P3), mDNS, reconnect,
-volume/mute and logging (L9) work. Control plane (P2): `snapsink` serves the JSON-RPC
-API and Snapweb (crate `snapcast-control` in the fork), tags as metadata, `controls` with
-`Stream.Control` as a bus message; checked in a browser by the user. Evaluation (P4) in
-progress: F5 lifecycle met (snapsrc fills gaps with silence), F3 endurance met (an hour, `make test-endurance`); write-up in `docs/evaluation.md` (recommends go). After P4: a per-user shared
-server daemon (needs L1, multiple streams per server).
+Short version (2026-11-22): the **feasibility prototype is done, with a go** (P4,
+`docs/evaluation.md`, agreed by the user). Loopback, C++ interop both ways, timing within
+~1 ms of the server (aloop tests), an hour of endurance, gap filling, mDNS, reconnect,
+volume/mute, logging, and the control plane (JSON-RPC and Snapweb served by `snapsink`)
+work. Next: L1 (runtime streams) in the fork, then a per-user shared server daemon
+(design doc first; `snapsink` default mode "shared"). Open timing item: the occasional
+snapsrc wander (±1.5…3 ms).
 
 ## Commands
 

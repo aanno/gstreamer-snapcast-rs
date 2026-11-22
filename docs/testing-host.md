@@ -114,7 +114,7 @@ PipeWire processes audio in blocks of one **quantum** (its graph period; on Fedo
 1024 frames, about 21 ms at 48 kHz, and it can change with the clients' requests). A sink
 behind PipeWire sees its clock advance in such steps. That may make the sink's clock
 slaving noisier, and with it the receivers' timing. It is a candidate for the timing
-experiment after F3 (`docs/claude/memory.md`): snapsrc wanders by up to ±1.5 ms in some
+experiment (`docs/claude/memory.md`, Open items): snapsrc wanders by up to ±1.5 ms in some
 runs. That was measured on the aloop card *without* PipeWire, so the quantum is not its
 only cause. Not measured on the host yet.
 
@@ -306,10 +306,10 @@ Variations:
 - Another output path for snapsrc, e.g. ALSA: see the next section.
 - `make listen-cpp-client` in terminal 1 (instead of `listen-recv`) plays the same stream
   through the reference C++ client: an A/B comparison of the sound.
-- `make listen-pair` in terminal 1 plays both receivers at once. Because of the ~62 ms
-  offset between `snapsrc` and the C++ client (L13 in `docs/claude/memory.md`), expect an
-  **audible echo or flanging**. With `SRC=ticks`, the same shows as a mixture of single
-  and double clicks.
+- `make listen-pair` in terminal 1 plays both receivers at once. They should sound as
+  one: no echo, no flanging, and with `SRC=ticks` single clicks. (Before the L13 fix of
+  2026-11-19, snapsrc played ~62 ms late and the pair echoed; see
+  `docs/claude/memory-old-2026-11-22.md`.) An echo now is a bug.
 
 Don't:
 

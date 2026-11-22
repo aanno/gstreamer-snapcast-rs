@@ -152,7 +152,7 @@ In some runs snapsrc wanders by ±1.5 ms within a run, probably while the sink's
 e.g. `slave-method=skew drift-tolerance=2000`. With `adjust-sink` on, snapsrc only changes
 `skew`.
 
-These are findings about the plugins, not test problems. See `docs/claude/memory.md`
+These are findings about the plugins, not test problems. See `docs/claude/memory-old-2026-11-22.md`
 (State and Plan, P3) for their analysis.
 
 ## Gotchas (both environments)

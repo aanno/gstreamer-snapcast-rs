@@ -40,7 +40,7 @@ When not to use it: a plain receiver (e.g. a Raspberry Pi on an amplifier) is si
 `snapserver`. Pros and cons, the comparison with snapcast-rs, licence (GPL-3.0) and
 publishing: [docs/architecture.md](docs/architecture.md).
 
-> **Status: feasibility prototype.** `snapsink → embedded server → snapsrc` works for
+> **Status: feasibility prototype, evaluated with a go (2026-11-22).** `snapsink → embedded server → snapsrc` works for
 > `pcm` and `flac`, and interoperates with the C++ Snapcast in both directions
 > (`snapsink` → `snapclient`, `snapserver` → `snapsrc`; `make test-interop`). Measured on
 > a loopback sound card, receivers play within about 1 ms of each other and of the
@@ -125,7 +125,8 @@ first).
 │   ├── pipelines.md           # cookbook: your own pipelines with snapsink/snapsrc
 │   ├── testing*.md            # tests, host and devcontainer setup, gotchas
 │   ├── gstreamer-plugins/     # design discussion (background)
-│   └── claude/memory.md       # current state, decisions, limitations, plan
+│   ├── evaluation.md          # the prototype's evaluation (F1–F5), go
+│   └── claude/memory*.md      # current state, decisions, limitations, plan; history
 └── .devcontainer/             # VS Code devcontainer (Rust + GStreamer dev packages)
 ```
 

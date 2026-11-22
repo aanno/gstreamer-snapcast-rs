@@ -212,7 +212,7 @@ receiver must not do. So the adjustment is on by default.
   on purpose, also set `adjust-sink=false`. Other values (`none`, `resample`, `custom`)
   are left alone.
 - `resample` costs a little CPU, and its rate estimate is sometimes restless: single runs
-  showed tick-to-tick jitter of ±0.7 ms (memory.md, "Still open"). Smoother slaving via
+  showed tick-to-tick jitter of ±0.7 ms (memory.md, "Open items"). Smoother slaving via
   the sink clock's `window-size`/`timeout` would be possible, at the cost of slower
   convergence.
 - Not chosen: making the card the master clock. An audio sink can provide its clock only
@@ -271,7 +271,7 @@ the event loop run on the engine runtime and stop with the server. Tags, `contro
 playback status become stream properties (`StreamHandle::set_properties`);
 `Stream.Control` reaches the element through `StreamHandle::on_command` and becomes the
 element message `snapcast-stream-control`. Plan:
-[claude/memory.md](claude/memory.md), P2.
+[claude/memory-old-2026-11-22.md](claude/memory-old-2026-11-22.md), P2.
 
 ### Environment variables
 
