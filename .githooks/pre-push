@@ -1,0 +1,15 @@
+#!/bin/sh
+# Pre-push: what `make check` checks: format, clippy (all targets, -D warnings), the
+# tests that need no devices or C++ binaries, and rustdoc (-D warnings).
+#
+# Escape hatches:
+#   SKIP_TESTS=1 git push   → fmt + clippy + rustdoc, without the (slower) tests
+#   git push --no-verify    → skip this hook entirely
+set -e
+
+make fmt clippy doc
+if [ "${SKIP_TESTS:-0}" = "1" ]; then
+    echo "pre-push: SKIP_TESTS=1 -> skipping the tests."
+    exit 0
+fi
+make test

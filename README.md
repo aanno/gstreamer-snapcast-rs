@@ -179,6 +179,7 @@ sudo make uninstall-system
 ## Development
 
 ```sh
+make setup     # once: git hooks here and in snapcast-rs (the devcontainer does it for you)
 make build     # cargo build --workspace
 make test      # cargo test --workspace
 make clippy    # lints, warnings are errors
@@ -188,8 +189,15 @@ make check     # all of the above (except build)
 make inspect   # gst-inspect-1.0 the freshly built plugins
 make test-interop  # against the C++ snapclient/snapserver (not part of make check)
 make test-aloop    # timing on the snd-aloop card: receiver offset, drift (not part of make check)
+make test-endurance  # an hour on the snd-aloop card: dropouts, offsets, memory (F3)
 make doctor    # tools, elements, plugins and sound devices on this machine
 ```
+
+Git hooks (`.githooks`, enabled by `make setup`): commit messages follow
+[Conventional Commits](https://www.conventionalcommits.org/) (`feat(snapsrc): …`,
+`fix(snapsink): …`, `build(deps): bump snapcast-rs (…)`), `cargo fmt --check` runs on
+every commit, `make check` on every push (`SKIP_TESTS=1 git push` skips the tests,
+`--no-verify` everything). The snapcast-rs submodule has its own hooks.
 
 ### Testing
 

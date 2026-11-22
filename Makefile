@@ -1,4 +1,4 @@
-.PHONY: check fmt fmt-fix clippy test doc build release inspect submodule \
+.PHONY: setup check fmt fmt-fix clippy test doc build release inspect submodule \
 	install uninstall install-system uninstall-system test-interop test-aloop test-endurance test-mdns doctor \
 	listen-send listen-recv listen-cpp-client listen-cpp-server listen-pair listen-all listen-show
 
@@ -11,6 +11,13 @@ PLUGIN_DIR ?= $(HOME)/.local/share/gstreamer-1.0/plugins
 # System plugin directory as reported by GStreamer itself
 # (Fedora: /usr/lib64/gstreamer-1.0, Debian: /usr/lib/<triplet>/gstreamer-1.0).
 SYSTEM_PLUGIN_DIR ?= $(shell pkg-config --variable=pluginsdir gstreamer-1.0 2>/dev/null)
+
+## First-time setup: git hooks here and in the snapcast-rs submodule (.githooks:
+## Conventional Commits, fmt on commit, `make check` on push)
+setup:
+	git config core.hooksPath .githooks
+	$(MAKE) -C snapcast-rs setup
+	@echo "Git hooks configured (this repo and snapcast-rs)"
 
 ## Run all checks (fmt, clippy, tests, docs)
 check: fmt clippy test doc

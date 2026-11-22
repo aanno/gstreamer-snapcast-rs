@@ -40,7 +40,7 @@
 	// Fetch the snapcast-rs submodule, install the toolchain from rust-toolchain.toml, and
 	// make ALSA's default device a dmix on the snd-aloop card (no audio server in here;
 	// see .devcontainer/asoundrc and docs/testing-devcontainer.md).
-	"postCreateCommand": "git submodule update --init --recursive && rustup show active-toolchain && install -m 0644 .devcontainer/asoundrc ~/.asoundrc",
+	"postCreateCommand": "git submodule update --init --recursive && rustup show active-toolchain && install -m 0644 .devcontainer/asoundrc ~/.asoundrc && make setup",
 
 	// Configure tool-specific properties.
 	"customizations": {

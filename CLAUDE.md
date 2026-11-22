@@ -34,11 +34,13 @@ server daemon (needs L1, multiple streams per server).
 ## Commands
 
 ```sh
+make setup                         # once: git hooks here and in snapcast-rs
 make check                         # fmt + clippy (-D warnings) + tests + rustdoc (-D warnings)
 cargo test -p gst-plugin-snapsink  # single crate
 make inspect                       # gst-inspect-1.0 the built plugins
 make test-interop                  # #[ignore]d tests against the C++ snapclient/snapserver
 make test-aloop                    # #[ignore]d timing tests on the snd-aloop card (offset, drift)
+make test-endurance                # F3: an hour on the snd-aloop card, CSV per minute
 make test-mdns                     # #[ignore]d mDNS discovery tests (need multicast)
 make doctor                        # what this machine has (tools, elements, sound devices)
 make install / make listen-all     # per-user install; listening tests (scripts/listen.sh)
@@ -95,6 +97,12 @@ Run `make check` before declaring work done.
 - Pin a new release by checking out its tag inside the submodule, then commit the pointer.
 
 ## Code conventions
+
+- **Commit messages: Conventional Commits** (since 2026-11-22, enforced by
+  `.githooks/commit-msg`; `make setup`), like snapcast-rs: `type(scope): description`.
+  Scopes: `snapsink`, `snapsrc`, `engine`, `common`, `tests`, `scripts`, `docs`,
+  `memory`; the submodule pointer is `build(deps): bump snapcast-rs (<what>)`. The
+  pre-commit hook runs `cargo fmt --check`, pre-push runs `make check`.
 
 - Edition 2024, MSRV 1.94.1 (dictated by snapcast-rs). Toolchain: `rust-toolchain.toml` (stable).
 - gstreamer-rs 0.25. Follow the gst-plugins-rs layout: `src/<element>/mod.rs` holds the

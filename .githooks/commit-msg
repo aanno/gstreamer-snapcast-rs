@@ -1,0 +1,20 @@
+#!/bin/sh
+# Enforce Conventional Commits, like the snapcast-rs submodule: type(scope): description
+# Types: feat, fix, refactor, docs, test, ci, chore, perf, style, build, revert
+# Scopes used here: snapsink, snapsrc, engine, common, control, tests, scripts, docs,
+# memory, deps (submodule pointer: "build(deps): bump snapcast-rs (...)").
+msg=$(head -1 "$1")
+
+# Allow merge commits and revert commits
+echo "$msg" | grep -qE '^(Merge |Revert )' && exit 0
+
+echo "$msg" | grep -qE '^(feat|fix|refactor|docs|test|ci|chore|perf|style|build|revert)(\(.+\))?!?: .+' || {
+    echo "ERROR: Commit message must follow Conventional Commits format:"
+    echo "  <type>(<scope>): <description>"
+    echo ""
+    echo "  Types: feat, fix, refactor, docs, test, ci, chore, perf, style, build, revert"
+    echo "  Example: feat(snapsrc): fill gaps with silence"
+    echo ""
+    echo "  Got: $msg"
+    exit 1
+}

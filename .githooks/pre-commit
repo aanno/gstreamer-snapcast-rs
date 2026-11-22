@@ -1,0 +1,3 @@
+#!/bin/sh
+# Formatting only: fast enough for every commit. Skip with `git commit --no-verify`.
+exec cargo fmt --all -- --check
