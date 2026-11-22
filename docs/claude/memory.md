@@ -3,11 +3,32 @@
 Working memory for agents and humans continuing this project. Keep it current:
 update **State** and **Plan** when a step is finished, and add decisions with a date.
 
-Last updated: 2026-11-21 (P2 done: control API, Snapweb, metadata, `controls` + `Stream.Control` bus message; browser check by the user; next: P4).
+Last updated: 2026-11-22 (P4 started: F5 lifecycle done — snapsrc fills gaps with silence, lifecycle and sender-pause tests; next: F3 endurance tooling, F1 listening by the user).
 
-## Resume here (2026-11-21)
+## Resume here (2026-11-22)
 
-**End of 2026-11-21 — start next session here:**
+**2026-11-22, P4 in progress** (order agreed with the user: F5 → F3 → F1 in parallel →
+write-up `docs/evaluation.md`; the go/no-go is the user's):
+1. **F5 done.** Measured first: a sender pause gave receivers *no buffers* (they heard
+   silence only because the audio sink underran). User: receivers should hear silence.
+   Now snapsrc outputs silence buffers flagged GAP when nothing arrives (50 ms before
+   render), bridges the hole up to returning audio with silence, and trims overlaps
+   (jumps > 5 ms; smaller ones stay with the aligner; latency changes still resync with
+   DISCONT, otherwise the drift tests got noisy). Tests: `tests/lifecycle.rs` (sender
+   pause, receiver pause, restarted snapsrc = same client id) in `make check`;
+   `aloop_sender_pause_is_silent_and_resumes_in_sync` in `make test-aloop`. Suspected
+   snapsink resume bug was **not** ours: `audiotestsrc is-live` re-anchors its timestamps
+   after PAUSED→PLAYING (hole or overlap of a few ms). The C++ snapclient is +2…+3.5 ms
+   off for ~3 s after a stream gap (its own re-sync), snapsrc is not.
+2. **Next: F3 endurance tooling** (hours on the aloop card: offset, RSS, dropouts as CSV),
+   then the write-up. F1 listening is the user's (`listen-pair` after the L13 fix).
+3. Snapweb "same ID" report (2026-11-22): not a bug, Snapweb's *MAC* field is the same
+   for both clients on one host; the IDs differ (`listen.sh` passes `--hostID
+   listen-cpp-client` to the C++ client). Offer: `--instance 2` instead, if the user
+   wants `pair` to show the instance mechanism.
+
+
+**End of 2026-11-21** (items 1 and 2 done on 2026-11-22: the browser re-test was fine; P4 started):
 1. **Browser re-test of Snapweb** with the user (after `make install` on the host;
    `docs/testing-host.md`, "Control with Snapweb (F4)", has the checklist). Expect the
    client details filled in now: Client `gst-snapsrc <version>`, IP, OS as the
@@ -318,6 +339,21 @@ Not blocking, left over from P3:
   - **Read-only reference submodules** `reference/snapcast` (v0.35.0) and
     `reference/snapweb` (v0.9.3): shallow, `update = none` (not fetched by
     `--recurse-submodules`), for the API spec and Snapweb's calls. Never built or linked.
+- 2026-11-22 (with the user): **shared server across processes, after P4.** Goal: the
+  first pipeline with `snapsink` starts one server instance (with the control API and
+  Snapweb, if enabled); each further pipeline adds a *stream* to it; the instance ends
+  with the last pipeline. Design (agreed in outline, details in a design doc first):
+  - a separate **daemon executable** (engine + IPC server, no GStreamer) owns server,
+    control, Snapweb and mDNS; `snapsink` becomes a thin IPC client. No leader election
+    (the first pipeline's exit would kill everyone's server);
+  - **per user**: Unix socket in `$XDG_RUNTIME_DIR`; **autospawn only** (first snapsink
+    starts it, it exits after the last sink plus a short grace period); no systemd;
+  - IPC carries PCM with `CLOCK_MONOTONIC` timestamps, so the timing work survives
+    (unlike feeding a C++ snapserver through an untimed pipe/tcp source);
+  - **default mode is shared** (user's wish); embedded stays available as a mode and is
+    the default where no daemon can be spawned (Android). Exact `mode` semantics (silent
+    fallback or error) to be settled in the design doc;
+  - prerequisite: **L1** (runtime `add_stream` in snapcast-rs), un-postponed for this.
 
 ## Known limitations
 
@@ -476,10 +512,13 @@ from the sink's `resample` slaving; could be smoothed via the sink clock's
 | F1 listening (desktop sender, snapsrc + C++ in sync) | partly: music through snapsrc on the host is clean since the frame-loss fix; `listen-pair` not re-listened since the L13 fix (should no longer echo) |
 | F2 measured (≤ 1 ms, also under drift) | met in the aloop tests; under drift only to 2.5 ms, because of the C++ reference |
 | F3 endurance (hours, no growth) | not started |
-| F4 controller (optional) | needs P2 |
-| F5 lifecycle | reconnect done; PLAYING→PAUSED→PLAYING and stop/restart not tested systematically |
+| F4 controller (optional) | met: Snapweb in the browser (user, 2026-11-21/22) |
+| F5 lifecycle | **met (2026-11-22)**: sender pause → silence (GAP) on a continuous timeline, in sync after the resume (aloop, with the C++ client); receiver pause resumes on schedule; restarted snapsrc keeps its client id; reconnect after a server restart |
 
-**After the prototype** (unchanged, not scheduled): multiple streams (L1), upstream PRs
+**Right after P4** (decided 2026-11-22, see Decisions): L1 in the fork, then the shared
+server daemon (design doc first).
+
+**After the prototype** (unchanged, not scheduled): upstream PRs
 (the fork commits for L2, L3, L4, the client-instance fix, the tracing context and the
 rustdoc fix; the control crate is part of P2 now), finishing `snapsink` (L6, L7, Android
 build and CI), finishing `snapsrc` (L8), infrastructure (CI, packaging).
