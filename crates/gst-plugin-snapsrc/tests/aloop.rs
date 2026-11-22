@@ -470,20 +470,26 @@ impl CaptureStream {
         let first_frame = self.frames;
         let target = first_frame + (seconds * f64::from(RATE)) as usize;
         let (mut left, mut right) = (Vec::new(), Vec::new());
-        // (arrival time, frames captured so far) of each buffer.
+        // (arrival time, frames captured so far) of each buffer we had to wait for. A
+        // buffer that was already queued (the test was busy, e.g. analysing the previous
+        // part, or stalled) arrives late by an unknown amount: not used for the fit.
         let mut arrivals: Vec<(f64, f64)> = Vec::new();
         while self.frames < target {
+            let asked = Instant::now();
             let sample = self
                 .appsink
                 .try_pull_sample(gst::ClockTime::from_seconds(5))
                 .expect("no audio captured from the loopback device");
+            let waited = asked.elapsed() >= Duration::from_micros(500);
             let map = sample.buffer().unwrap().map_readable().unwrap();
             for f in map.as_chunks::<4>().0 {
                 left.push(i16::from_le_bytes([f[0], f[1]]));
                 right.push(i16::from_le_bytes([f[2], f[3]]));
             }
             self.frames += map.len() / 4;
-            arrivals.push((now_usec() as f64 / 1e6, self.frames as f64));
+            if waited {
+                arrivals.push((now_usec() as f64 / 1e6, self.frames as f64));
+            }
             for (what, receiver) in receivers.iter_mut() {
                 receiver.assert_alive(what);
             }
@@ -1089,6 +1095,10 @@ struct Window {
     rss_kib: (u64, u64),
     latency_ms: u64,
     card_ppm: f64,
+    /// Spread of the capture's arrival times (ms): how well this window's samples could
+    /// be mapped to clock time. About 3 ms normally; a stall of the test process makes
+    /// it large, and then the offsets against the server are not measurable.
+    capture_jitter_ms: f64,
 }
 
 impl Window {
@@ -1096,11 +1106,11 @@ impl Window {
         gap_ms_snapsrc,gap_ms_cpp,pair_mean_us,pair_min_us,pair_max_us,\
         abs_snapsrc_mean_ms,abs_snapsrc_min_ms,abs_snapsrc_max_ms,\
         abs_cpp_mean_ms,abs_cpp_min_ms,abs_cpp_max_ms,\
-        rss_test_kib,rss_cpp_kib,latency_snapsrc_ms,card_ppm";
+        rss_test_kib,rss_cpp_kib,latency_snapsrc_ms,card_ppm,capture_jitter_ms";
 
     fn csv(&self) -> String {
         format!(
-            "{:.0},{},{},{},{},{:.1},{:.1},{:.0},{:.0},{:.0},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{},{},{:.1}",
+            "{:.0},{},{},{},{},{:.1},{:.1},{:.0},{:.0},{:.0},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{},{},{:.1},{:.1}",
             self.end_s,
             self.ticks.0,
             self.ticks.1,
@@ -1121,6 +1131,7 @@ impl Window {
             self.rss_kib.1,
             self.latency_ms,
             self.card_ppm,
+            self.capture_jitter_ms,
         )
     }
 }
@@ -1143,7 +1154,12 @@ impl Window {
 /// within `ALOOP_TOLERANCE_US` (F2) and every single tick within `ENDURANCE_TOLERANCE_US`
 /// (default 2500: snapsrc wanders by up to ±1.5 ms in some runs, the restlessness of the
 /// audio sink's `resample` slaving, see docs/claude/memory.md), both receivers within
-/// `ALOOP_TOLERANCE_ABS_US` of the server timeline; over the whole run: no dropouts, snapsrc's offset against the server not wandering by more
+/// `ALOOP_TOLERANCE_ABS_US` of the server timeline. That last check needs the window's
+/// capture mapped to clock time; a stall of the test process (once in the first hour-long
+/// run, 2026-11-22: both receivers "−499..+489 ms", their offset to each other +19 µs)
+/// spoils the mapping, so windows whose capture jitter exceeds `ENDURANCE_MAX_JITTER_MS`
+/// (default 20; normally about 3) are skipped there and listed, and more than 10 % of
+/// such windows fail the run. Over the whole run: no dropouts, snapsrc's offset against the server not wandering by more
 /// than `ENDURANCE_WANDER_US` (default 1000) between the first and the last window, and
 /// the test process growing by at most `ENDURANCE_RSS_GROWTH_MB` (default 16) after the
 /// first window. Run with `make test-endurance`.
@@ -1158,6 +1174,7 @@ fn aloop_endurance() {
     let tol_tick_us: f64 = env_or("ENDURANCE_TOLERANCE_US", 2500.0);
     let tol_abs_ms: f64 = env_or("ALOOP_TOLERANCE_ABS_US", 5000.0) / 1000.0;
     let wander_ms: f64 = env_or("ENDURANCE_WANDER_US", 1000.0) / 1000.0;
+    let max_jitter_ms: f64 = env_or("ENDURANCE_MAX_JITTER_MS", 20.0);
     let rss_growth_kib: f64 = env_or("ENDURANCE_RSS_GROWTH_MB", 16.0) * 1024.0;
     let csv_path = std::env::var("ENDURANCE_CSV").unwrap_or_else(|_| {
         format!(
@@ -1265,6 +1282,7 @@ fn aloop_endurance() {
             rss_kib: (rss_kib("self").unwrap_or(0), rss_kib(&cpp_pid).unwrap_or(0)),
             latency_ms: left.latency().map_or(0, |l| l.mseconds()),
             card_ppm: (cap.card_rate / f64::from(RATE) - 1.0) * 1e6,
+            capture_jitter_ms: cap.jitter_ms,
         };
         writeln!(csv, "{}", window.csv()).unwrap();
         csv.flush().unwrap();
@@ -1299,15 +1317,33 @@ fn aloop_endurance() {
     };
     let rss_test = col(&|w| w.rss_kib.0 as f64);
     let rss_cpp = col(&|w| w.rss_kib.1 as f64);
-    let abs_a = col(&|w| w.abs_a_ms.0);
+    let reliable = |w: &Window| w.capture_jitter_ms <= max_jitter_ms;
+    let unreliable: Vec<String> = results
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| !reliable(w))
+        .map(|(i, w)| format!("{} ({:.0} ms)", i + 1, w.capture_jitter_ms))
+        .collect();
+    // Against the server: only windows whose capture could be mapped to clock time.
+    let abs_a: Vec<f64> = results
+        .iter()
+        .skip(usize::from(results.len() > 2))
+        .filter(|w| reliable(w))
+        .map(|w| w.abs_a_ms.0)
+        .collect();
     let per_hour = 3600.0 / window_s;
     eprintln!(
         "aloop: endurance summary: {} windows; trends per hour: RSS test {:+.1} MiB, C++ {:+.1} MiB, \
-         snapsrc vs server {:+.3} ms; gaps: {}",
+         snapsrc vs server {:+.3} ms; capture not mappable to clock time in windows: {}; gaps: {}",
         results.len(),
         trend(&rss_test) * per_hour / 1024.0,
         trend(&rss_cpp) * per_hour / 1024.0,
         trend(&abs_a) * per_hour,
+        if unreliable.is_empty() {
+            "none".into()
+        } else {
+            unreliable.join(", ")
+        },
         if sine <= 0.0 {
             "not checked (no sine)".into()
         } else if gap_list.is_empty() {
@@ -1336,6 +1372,9 @@ fn aloop_endurance() {
             w.pair_us.1,
             w.pair_us.2
         );
+        if !reliable(w) {
+            continue; // the offsets against the server were not measurable
+        }
         for (name, (_, min, max)) in [("snapsrc", w.abs_a_ms), ("C++", w.abs_b_ms)] {
             assert!(
                 min.abs() <= tol_abs_ms && max.abs() <= tol_abs_ms,
@@ -1346,6 +1385,11 @@ fn aloop_endurance() {
     if sine > 0.0 {
         assert!(gap_list.is_empty(), "dropouts: {}", gap_list.join(", "));
     }
+    assert!(
+        unreliable.len() * 10 <= results.len(),
+        "measurement unreliable: the capture could not be mapped to clock time in windows {}",
+        unreliable.join(", ")
+    );
     let wander = abs_a.last().unwrap() - abs_a[0];
     assert!(
         wander.abs() <= wander_ms,

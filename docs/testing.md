@@ -87,6 +87,14 @@ tick within `ENDURANCE_TOLERANCE_US` (2500, see below), both receivers within
 `ENDURANCE_WANDER_US` (1000) from the second to the last window, and the test process
 growing at most `ENDURANCE_RSS_GROWTH_MB` (16) after the first window (warm-up).
 
+The offsets against the server need each window's capture mapped to clock time (see
+"Absolute reference"). If the test process stalls, that mapping fails for the window: both
+receivers then appear hundreds of ms off while their offset to each other stays tiny
+(seen once in the first hour-long run, 2026-11-22). Windows whose capture jitter (CSV
+column `capture_jitter_ms`, normally about 3 ms) exceeds `ENDURANCE_MAX_JITTER_MS` (20)
+are skipped in the server checks and trends and listed in the summary; more than 10 % of
+them fail the run as unreliable.
+
 **Known wander (2026-11-22):** in about one run in four or five, a snapsrc receiver wanders
 by up to ±1.5…3 ms against the server timeline within the run (the audio sink's
 `resample` slaving; it happened as often before the gap filling of 2026-11-22, 2 of 10
