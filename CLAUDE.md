@@ -33,8 +33,10 @@ Short version (2026-11-22): the **feasibility prototype is done, with a go** (P4
 ~1 ms of the server (aloop tests), an hour of endurance, gap filling, mDNS, reconnect,
 volume/mute, logging, and the control plane (JSON-RPC and Snapweb served by `snapsink`)
 work. L1 is done: several `snapsink` streams share a server port within one process
-(runtime streams in the fork). Next: a per-user shared server daemon across processes
-(design doc first; `snapsink` default mode "shared"). Open timing item: the occasional
+(runtime streams in the fork). In progress: the per-user shared server daemon across
+processes (`docs/shared-server.md`; steps 1–2 done: IPC, `gst-snapcast-daemon`,
+`snapsink mode=auto|shared|embedded`, lean default build without the control API;
+next: autospawn). Open timing item: the occasional
 snapsrc wander (±1.5…3 ms).
 
 ## Commands
