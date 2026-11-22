@@ -20,8 +20,25 @@ write-up `docs/evaluation.md`; the go/no-go is the user's):
    snapsink resume bug was **not** ours: `audiotestsrc is-live` re-anchors its timestamps
    after PAUSED→PLAYING (hole or overlap of a few ms). The C++ snapclient is +2…+3.5 ms
    off for ~3 s after a stream gap (its own re-sync), snapsrc is not.
-2. **Next: F3 endurance tooling** (hours on the aloop card: offset, RSS, dropouts as CSV),
-   then the write-up. F1 listening is the user's (`listen-pair` after the L13 fix).
+2. **F3 tooling done** (`make test-endurance`, `aloop_endurance`; docs/testing.md). A
+   3-minute check: no dropouts, all ticks, memory flat after the first window. **Next:
+   the hour-long run** (started by the agent in the devcontainer at the end of
+   2026-11-22; CSV in `target/endurance-*.csv`), then the write-up `docs/evaluation.md`.
+   **F1:** the user listened to `listen-pair` on 2026-11-22: fine (a ~30 s track only).
+4. **The known snapsrc wander, measured (2026-11-22):** in about one receiver run in four
+   or five, snapsrc wanders by ±1.5…3 ms against the server within a 20 s run; it also
+   happens without the gap filling (2 of 10 runs of the old code), so it is not new. The
+   F2 tests (1 ms) are flaky because of it. The C++ snapclient does not wander. Main open
+   timing item for the write-up. **Experiment after F3** (user's idea: "the price for
+   GStreamer instead of ALSA directly? RT tricks?"), measured as usual: real-time priority
+   for the sink's streaming thread; smoother slaving via the sink clock's
+   `window-size`/`timeout`; the card clock as pipeline clock with snapsrc's aligner
+   correcting (no sink slaving); the user also asked about direct/DMA (mmap) buffers and
+   lock-free paths (and "quaternia", unclear: ask). My view: the wander comes from the
+   slaving's rate estimate, not from the buffer transfer, so RT priority and the slaving
+   method are the first candidates.
+5. **After P4 (user, 2026-11-22): split this file.** Done and decided things go to
+   `docs/claude/memory-old-2026-11-22.md`; this file keeps what is open and planned.
 3. Snapweb "same ID" report (2026-11-22): not a bug, Snapweb's *MAC* field is the same
    for both clients on one host; the IDs differ (`listen.sh` passes `--hostID
    listen-cpp-client` to the C++ client). Offer: `--instance 2` instead, if the user
@@ -339,6 +356,10 @@ Not blocking, left over from P3:
   - **Read-only reference submodules** `reference/snapcast` (v0.35.0) and
     `reference/snapweb` (v0.9.3): shallow, `update = none` (not fetched by
     `--recurse-submodules`), for the API spec and Snapweb's calls. Never built or linked.
+- 2026-11-22 (user): **Conventional Commits in this repo too**, enforced by
+  `.githooks/commit-msg` (`make setup`, the devcontainer runs it); pre-commit runs
+  `cargo fmt --check`, pre-push `make check`. Pointer commits: `build(deps): bump
+  snapcast-rs (...)`. Older commits keep their `area: ...` style.
 - 2026-11-22 (with the user): **shared server across processes, after P4.** Goal: the
   first pipeline with `snapsink` starts one server instance (with the control API and
   Snapweb, if enabled); each further pipeline adds a *stream* to it; the instance ends
@@ -509,9 +530,9 @@ from the sink's `resample` slaving; could be smoothed via the sink clock's
 
 | Criterion | State (2026-11-19) |
 |---|---|
-| F1 listening (desktop sender, snapsrc + C++ in sync) | partly: music through snapsrc on the host is clean since the frame-loss fix; `listen-pair` not re-listened since the L13 fix (should no longer echo) |
+| F1 listening (desktop sender, snapsrc + C++ in sync) | mostly: music through snapsrc on the host is clean since the frame-loss fix; `listen-pair` fine (user, 2026-11-22, a ~30 s track); a longer desktop-music session is still open |
 | F2 measured (≤ 1 ms, also under drift) | met in the aloop tests; under drift only to 2.5 ms, because of the C++ reference |
-| F3 endurance (hours, no growth) | not started |
+| F3 endurance (hours, no growth) | tooling done (`make test-endurance`, 2026-11-22); the hour-long run is pending |
 | F4 controller (optional) | met: Snapweb in the browser (user, 2026-11-21/22) |
 | F5 lifecycle | **met (2026-11-22)**: sender pause → silence (GAP) on a continuous timeline, in sync after the resume (aloop, with the C++ client); receiver pause resumes on schedule; restarted snapsrc keeps its client id; reconnect after a server restart |
 
