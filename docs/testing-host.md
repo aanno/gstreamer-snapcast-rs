@@ -108,6 +108,34 @@ make listen-pair SINK="alsasink device=plughw:1,0" SOUNDCARD=plughw:1,0
 Only one program can use a `hw:` device at a time, so for two receivers on one card use
 `dmix` (like `.devcontainer/asoundrc`), or put them on different cards.
 
+### PipeWire's quantum
+
+PipeWire processes audio in blocks of one **quantum** (its graph period; on Fedora usually
+1024 frames, about 21 ms at 48 kHz, and it can change with the clients' requests). A sink
+behind PipeWire sees its clock advance in such steps. That may make the sink's clock
+slaving noisier, and with it the receivers' timing. It is a candidate for the timing
+experiment after F3 (`docs/claude/memory.md`): snapsrc wanders by up to ±1.5 ms in some
+runs. That was measured on the aloop card *without* PipeWire, so the quantum is not its
+only cause. Not measured on the host yet.
+
+```sh
+pw-top                                   # QUANT column: each node's current quantum
+pw-metadata -n settings                  # clock.quantum, clock.force-quantum, ...
+
+# for the whole graph (all programs), until reset or PipeWire restarts
+pw-metadata -n settings 0 clock.force-quantum 256
+pw-metadata -n settings 0 clock.force-quantum 0      # back to automatic
+
+# per program, depending on how it reaches PipeWire
+PULSE_LATENCY_MSEC=5 make listen-recv           # snapsrc via pulsesink / pipewire-pulse
+PIPEWIRE_QUANTUM=256/48000 make listen-cpp-client  # C++ snapclient via pipewire-alsa
+```
+
+A smaller quantum means more wake-ups per second (CPU load), and a risk of xruns
+(crackles) on a busy machine. Check `pw-top` (ERR column) while listening. snapsrc
+compensates its pipeline latency, so a changed quantum must not shift it against the C++
+client. If it does, that is a finding worth noting.
+
 ### `alsasink` examples
 
 `alsasink` is GStreamer's ALSA output. Its `device` property takes any ALSA PCM name; it
