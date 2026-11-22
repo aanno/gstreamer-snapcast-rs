@@ -1,6 +1,6 @@
 # Design: a shared Snapcast server across processes
 
-Status: **agreed** (2026-11-22), implementation in progress: steps 1 to 3 done. The outline was
+Status: **agreed** (2026-11-22), implementation in progress: steps 1 to 4 done. The outline was
 agreed with the project owner on 2026-11-22 (`docs/claude/memory.md`, Decisions); the
 open questions are answered at the end; the build-feature split of `snapsink` is a
 confirmed too.
@@ -309,7 +309,7 @@ the other gets the usual "cannot listen on port" error.
    crate on its own (feature merging) and, until steps 3 and 5, `snapsink` with `control`.
    Without autospawn, `auto` falls back to embedded unless a daemon was started by hand
    (an info line, not a warning, when there is simply no daemon). Properties and
-   commands are not passed through the daemon yet (step 4). Tested: two
+   commands came with step 4. Tested: two
    `gst-launch-1.0` processes on one port via the daemon binary; Ctrl+C on the first
    leaves the second and the control API running.
 3. ~~Autospawn, singleton, grace period, reconnect after a daemon crash.~~ Done
@@ -327,7 +327,16 @@ the other gets the usual "cannot listen on port" error.
    daemon, `kill -9` and reconnect, exit after the grace period). By hand: two
    `gst-launch-1.0` in mode `auto`, `kill -9` of the daemon, both reconnected and kept
    playing, the daemon exited 5 s after the last.
-4. `Properties` and `Command` (metadata and `Stream.Control` through the daemon).
+4. ~~`Properties` and `Command` (metadata and `Stream.Control` through the daemon).~~
+   Done 2026-11-22: frames 7 (`Properties`: metadata, accepted commands, playback
+   status) and 8 (`Command`); protocol version 2 (an old daemon from before answers with
+   a clear version mismatch). Daemon: a writer thread per connection sends the commands,
+   which arrive on the engine runtime and must not block there. Sender: a reader thread
+   per connection calls the command handler; the last properties are sent again after
+   a reconnect. Tests: daemon (properties in `Server.GetStatus`, `Stream.Control` back
+   as `Command`), `snapsink` end to end (tags from `taginject` and `controls=next` shown
+   through the daemon, the command as `snapcast-stream-control` on the bus), autospawn
+   (the title survives `kill -9` of the daemon).
 5. Plugin and aloop tests; `make install`, `make doctor`, `scripts/listen.sh`, docs.
 
 Each step ends with `make check` green and a commit. No snapcast-rs change is expected.

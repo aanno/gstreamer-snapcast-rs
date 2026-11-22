@@ -710,6 +710,7 @@ dependencies = [
  "gstreamer",
  "gstreamer-audio",
  "gstreamer-base",
+ "serde_json",
  "tokio",
 ]
 
@@ -756,6 +757,7 @@ name = "gst-snapcast-daemon"
 version = "0.1.0"
 dependencies = [
  "gst-snapcast-engine",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -149,7 +149,8 @@ fn reject(
     ipc::write_message(writer, &Message::Error(error))
 }
 
-/// One sender: `Hello`, `Acquire`, then PCM until the connection closes.
+/// One sender: `Hello`, `Acquire`, then PCM and properties until the connection
+/// closes; commands for the stream go back to it.
 fn handle_connection(stream: UnixStream) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = BufWriter::new(stream);
@@ -211,6 +212,25 @@ fn handle_connection(stream: UnixStream) -> std::io::Result<()> {
         }),
     )?;
 
+    // From here on, two directions at once: this thread reads the sender's
+    // frames; a writer thread sends the controllers' commands (which arrive on the
+    // engine runtime and must not block there) and a final error.
+    let (outgoing, to_send) = std::sync::mpsc::channel::<Message>();
+    let writer_thread = std::thread::Builder::new()
+        .name("gst-snapcast-daemon-write".into())
+        .spawn(move || {
+            for message in to_send {
+                if ipc::write_message(&mut writer, &message).is_err() {
+                    break;
+                }
+            }
+        })?;
+    let commands = outgoing.clone();
+    handle.on_command(move |command| {
+        tracing::debug!(command = %command.command, "Stream command for the sender");
+        let _ = commands.send(Message::Command((&command).into()));
+    });
+
     let result = loop {
         match ipc::read_message(&mut reader) {
             Ok(Some(Message::Pcm {
@@ -218,16 +238,33 @@ fn handle_connection(stream: UnixStream) -> std::io::Result<()> {
                 data,
             })) => {
                 if let Err(e) = handle.send_pcm(data, timestamp_usec) {
-                    break ipc::write_message(&mut writer, &Message::Error((&e).into()));
+                    let _ = outgoing.send(Message::Error((&e).into()));
+                    break Ok(());
+                }
+            }
+            Ok(Some(Message::Properties(properties))) => {
+                if let Err(e) = handle.set_properties(&(&properties).into()) {
+                    tracing::warn!(error = %e, "Stream properties not applied");
                 }
             }
             Ok(Some(_)) => {
-                break reject(&mut writer, ErrorKind::Protocol, "only PCM after Acquire");
+                let error = IpcError {
+                    kind: ErrorKind::Protocol,
+                    message: "only PCM and Properties after Acquire".into(),
+                };
+                tracing::info!(message = %error.message, "Refused");
+                let _ = outgoing.send(Message::Error(error));
+                break Ok(());
             }
             Ok(None) => break Ok(()),
             Err(e) => break Err(e),
         }
     };
     tracing::info!(stream = %handle.name(), "Stream released");
+    // Releasing the stream also drops the command handler and its sender, so
+    // the writer thread ends once it has sent what is queued.
+    drop(handle);
+    drop(outgoing);
+    let _ = writer_thread.join();
     result
 }

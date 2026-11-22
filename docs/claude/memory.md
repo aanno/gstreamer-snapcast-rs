@@ -7,7 +7,7 @@ the prototype (P1–P4 in detail, every decision with its reasons, the fixed lim
 L2–L13, all measurements) is in [memory-old-2026-11-22.md](memory-old-2026-11-22.md),
 frozen; the evaluation in [../evaluation.md](../evaluation.md).
 
-Last updated: 2026-11-22 (daemon steps 1–3 done: IPC, daemon, snapsink `mode`, lean build, autospawn; next: step 4).
+Last updated: 2026-11-22 (daemon steps 1–4 done: IPC, daemon, snapsink `mode`, lean build, autospawn, properties and commands; next: step 5).
 
 ## Resume here (2026-11-22)
 
@@ -34,13 +34,15 @@ Last updated: 2026-11-22 (daemon steps 1–3 done: IPC, daemon, snapsink `mode`,
    working); drop `SNAPSINK_FEATURES ?= control` then. **Step 3 done (2026-11-22):** autospawn (default
    mode `auto` really shares now), lock-file singleton, 5 s grace period, one reconnect
    after a daemon crash (checked by hand with `kill -9` under two `gst-launch-1.0`).
-   **Next: step 4** (stream properties and `Stream.Control` through the daemon), then
-   step 5 (plugin and aloop tests in shared mode, `make install` with the daemon,
-   `make doctor`, `listen.sh`, docs; drop `SNAPSINK_FEATURES ?= control`). Later: fork
+   **Step 4 done (2026-11-22):** metadata,
+   `controls` and `Stream.Control` through the daemon (protocol version 2; properties
+   are resent after a reconnect). **Next: step 5** (plugin and aloop tests in shared
+   mode, `make install` with the daemon, `make doctor`, `listen.sh`, docs; drop
+   `SNAPSINK_FEATURES ?= control`). Later: fork
    PR candidate "make `snapcast-control`'s auth an optional feature" (agreed in principle).
 3. **Alongside:** the snapsrc wander experiment (Open items), measured as usual.
 4. **Pushed** by the user on 2026-11-22: the fork up to `1b5b3b5` and this repo up to
-   `dae1658`. No
+   `e601646`. No
    upstream PR is open yet; 13 fork commits are PR candidates.
 5. **Housekeeping:** the xerj index (`ax-docs`, `ax-snapcast-rs-docs`) is a snapshot from
    before 2026-11-21; reindex on the host before relying on it (`docs/claude/mcp-xerj.md`).

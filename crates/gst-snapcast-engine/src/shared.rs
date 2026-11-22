@@ -18,19 +18,26 @@
 //!
 //! If the connection breaks while sending (the daemon crashed or was killed),
 //! the stream connects once more, which starts a new daemon, acquires its stream
-//! again and resends the frame. Only if that fails, sending fails.
+//! again, sends the last properties again and resends the frame. Only if that
+//! fails, sending fails.
+//!
+//! # Commands
+//!
+//! A reader thread per connection receives the controllers' commands for the
+//! stream and calls the handler set with [`SharedStream::on_command`]; it ends
+//! when the connection closes.
 
 use std::io::{self, BufReader};
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::EngineError;
 use crate::ipc::{self, Acquire, Acquired, ErrorKind, Hello, IpcError, Message, PROTOCOL_VERSION};
-use crate::server::{Mode, ServerOptions, StreamOptions};
+use crate::server::{Mode, ServerOptions, StreamCommand, StreamOptions, StreamProperties};
 
 /// How long a read from the daemon (its answers) may take.
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
@@ -64,6 +71,50 @@ pub(crate) struct SharedStream {
     pub(crate) server_options: ServerOptions,
     /// What was asked for, to acquire again after a reconnect.
     requested: (ServerOptions, StreamOptions),
+    /// The properties last sent, to send again after a reconnect.
+    properties: Mutex<Option<ipc::Properties>>,
+    /// Where commands from controllers go (shared with the reader threads).
+    handler: CommandSlot,
+}
+
+/// The command handler of a stream, read by its reader threads.
+type CommandSlot = Arc<Mutex<Option<Arc<dyn Fn(StreamCommand) + Send + Sync>>>>;
+
+/// Read what the daemon sends after `Acquired` until the connection closes:
+/// commands go to the handler, an error is logged.
+fn spawn_reader(connection: &UnixStream, handler: CommandSlot) -> io::Result<()> {
+    let mut reader = BufReader::new(connection.try_clone()?);
+    // Commands come whenever a controller sends one: no read timeout.
+    connection.set_read_timeout(None)?;
+    let span = tracing::Span::current();
+    std::thread::Builder::new()
+        .name("gst-snapcast-daemon-read".into())
+        .spawn(move || {
+            let _entered = span.enter();
+            loop {
+                match ipc::read_message(&mut reader) {
+                    Ok(Some(Message::Command(command))) => {
+                        // Clone it out of the lock: it may take a while.
+                        let handler = handler.lock().unwrap().clone();
+                        match handler {
+                            Some(handler) => handler(command.into()),
+                            None => tracing::info!(
+                                command = %command.command,
+                                "No handler for stream command"
+                            ),
+                        }
+                    }
+                    Ok(Some(Message::Error(e))) => {
+                        tracing::warn!(error = %e.message, "The daemon reported an error");
+                    }
+                    Ok(Some(other)) => {
+                        tracing::warn!(?other, "Unexpected message from the daemon");
+                    }
+                    Ok(None) | Err(_) => break,
+                }
+            }
+        })?;
+    Ok(())
 }
 
 /// Connect to the daemon (starting one if none answers) and acquire `stream`.
@@ -72,6 +123,9 @@ pub(crate) fn acquire(
     stream: &StreamOptions,
 ) -> Result<SharedStream, Failure> {
     let (writer, acquired) = connect_and_acquire(server, stream)?;
+    let handler = CommandSlot::default();
+    spawn_reader(&writer, Arc::clone(&handler))
+        .map_err(|e| Failure::Unavailable(format!("daemon connection: {e}")))?;
     let mut server_options = acquired.server.to_options();
     server_options.mode = Mode::Shared;
     Ok(SharedStream {
@@ -81,6 +135,8 @@ pub(crate) fn acquire(
         control_http_port: acquired.control_http_port,
         server_options,
         requested: (server.clone(), stream.clone()),
+        properties: Mutex::new(None),
+        handler,
     })
 }
 
@@ -256,6 +312,23 @@ fn engine_error(e: IpcError, stream: &StreamOptions) -> EngineError {
 }
 
 impl SharedStream {
+    /// Publish the stream's properties through the daemon (blocks at most
+    /// [`WRITE_TIMEOUT`]).
+    pub(crate) fn set_properties(&self, properties: &StreamProperties) -> Result<(), EngineError> {
+        let properties = ipc::Properties::from(properties);
+        let mut writer = self.writer.lock().unwrap();
+        // Remembered also when sending fails: the reconnect sends it.
+        *self.properties.lock().unwrap() = Some(properties.clone());
+        ipc::write_message(&mut *writer, &Message::Properties(properties))
+            .map_err(|e| EngineError::Daemon(format!("sending stream properties: {e}")))
+    }
+
+    /// Call `handler` for each command a controller sends to the stream (replaces
+    /// a previous one). It runs on a reader thread of this stream.
+    pub(crate) fn on_command(&self, handler: Arc<dyn Fn(StreamCommand) + Send + Sync>) {
+        *self.handler.lock().unwrap() = Some(handler);
+    }
+
     /// Send PCM to the daemon. Blocks while the daemon does not read (at most
     /// [`WRITE_TIMEOUT`]). Reconnects once if the connection broke.
     pub(crate) fn send_pcm(&self, data: Vec<u8>, timestamp_usec: i64) -> Result<(), EngineError> {
@@ -287,8 +360,15 @@ impl SharedStream {
                         "The server's port changed with the new daemon"
                     );
                 }
+                spawn_reader(&new_writer, Arc::clone(&self.handler)).map_err(|e| {
+                    EngineError::Daemon(format!("reconnected, but cannot read: {e}"))
+                })?;
                 *writer = new_writer;
                 tracing::info!("Reconnected to the shared server daemon");
+                if let Some(properties) = self.properties.lock().unwrap().clone() {
+                    ipc::write_message(&mut *writer, &Message::Properties(properties))
+                        .map_err(|_| EngineError::ServerGone)?;
+                }
                 ipc::write_message(&mut *writer, &message).map_err(|_| EngineError::ServerGone)
             }
             Err(Failure::Engine(e)) => Err(e),

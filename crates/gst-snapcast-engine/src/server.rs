@@ -174,11 +174,21 @@ pub enum PlaybackStatus {
 }
 
 impl PlaybackStatus {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Playing => "playing",
             Self::Paused => "paused",
             Self::Stopped => "stopped",
+        }
+    }
+
+    #[cfg_attr(not(feature = "shared"), allow(dead_code))]
+    pub(crate) fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "playing" => Some(Self::Playing),
+            "paused" => Some(Self::Paused),
+            "stopped" => Some(Self::Stopped),
+            _ => None,
         }
     }
 }
@@ -302,7 +312,7 @@ pub struct StreamHandle {
 enum Backend {
     Embedded(EmbeddedStream),
     #[cfg(all(feature = "shared", unix))]
-    Shared(crate::shared::SharedStream),
+    Shared(Box<crate::shared::SharedStream>),
 }
 
 /// A stream of a server in this process.
@@ -388,7 +398,7 @@ impl StreamHandle {
     /// properties as a whole).
     ///
     /// Does not block: fails with [`EngineError::Busy`] if the server's command
-    /// queue is full. Not yet passed on by the shared backend (design step 4).
+    /// queue is full. Shared: sent to the daemon, blocking at most 2 s.
     pub fn set_properties(&self, properties: &StreamProperties) -> Result<(), EngineError> {
         match &self.backend {
             Backend::Embedded(e) => send_command(
@@ -399,18 +409,15 @@ impl StreamHandle {
                 },
             ),
             #[cfg(all(feature = "shared", unix))]
-            Backend::Shared(_) => {
-                tracing::debug!("Stream properties are not passed to the daemon yet");
-                Ok(())
-            }
+            Backend::Shared(shared) => shared.set_properties(properties),
         }
     }
 
     /// Call `handler` for each player command a controller sends to this stream
     /// (replaces a previous handler; removed when the handle is dropped). It runs
-    /// on the engine runtime and must not block. Controllers only offer the
-    /// commands announced in [`StreamProperties::controls`]. Not yet passed on by
-    /// the shared backend (design step 4).
+    /// on an engine thread (the runtime, or the shared stream's reader thread) and
+    /// must not block. Controllers only offer the commands announced in
+    /// [`StreamProperties::controls`].
     pub fn on_command(&self, handler: impl Fn(StreamCommand) + Send + Sync + 'static) {
         match &self.backend {
             Backend::Embedded(e) => {
@@ -421,10 +428,7 @@ impl StreamHandle {
                     .insert(self.name.clone(), Arc::new(handler));
             }
             #[cfg(all(feature = "shared", unix))]
-            Backend::Shared(_) => {
-                drop(handler);
-                tracing::debug!("Stream commands are not passed from the daemon yet");
-            }
+            Backend::Shared(shared) => shared.on_command(Arc::new(handler)),
         }
     }
 
@@ -484,7 +488,7 @@ pub fn acquire_stream(
             match crate::shared::acquire(server, stream) {
                 Ok(shared) => {
                     tracing::info!(port = shared.port, "Stream acquired from the shared server");
-                    Backend::Shared(shared)
+                    Backend::Shared(Box::new(shared))
                 }
                 Err(Failure::Engine(e)) => return Err(e),
                 Err(Failure::Unavailable(reason)) if mode == Mode::Shared => {

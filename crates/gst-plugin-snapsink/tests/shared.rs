@@ -120,5 +120,82 @@ fn modes_choose_between_the_shared_server_and_an_embedded_one() {
 
     a.set_state(gst::State::Null).unwrap();
     b.set_state(gst::State::Null).unwrap();
+
+    tags_and_commands_pass_through_the_daemon();
     let _ = std::fs::remove_dir_all(&runtime_dir);
+}
+
+/// One JSON-RPC request over TCP; the reply (notifications have no `id`).
+fn rpc(port: u16, request: &str) -> serde_json::Value {
+    use std::io::{BufRead, Write};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    writeln!(stream, "{request}").unwrap();
+    let mut reader = std::io::BufReader::new(stream);
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let message: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if message.get("id").is_some() {
+            return message;
+        }
+    }
+}
+
+/// With the daemon running: the sink's tags and `controls` reach the daemon's
+/// control API, and `Stream.Control` comes back as the element message.
+fn tags_and_commands_pass_through_the_daemon() {
+    let port = free_port();
+    let control = free_port();
+    let pipeline = gst::parse::launch(&format!(
+        "audiotestsrc is-live=true ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
+         ! taginject tags=\"title=Song,artist=Band\" \
+         ! snapsink name=sink port={port} stream=tagged mode=shared control-port={control} \
+           controls=next mdns-name=\"\""
+    ))
+    .unwrap();
+    assert_eq!(play(&pipeline), "shared");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let status = rpc(
+            control,
+            r#"{"jsonrpc":"2.0","id":1,"method":"Server.GetStatus"}"#,
+        );
+        let properties = &status["result"]["server"]["streams"][0]["properties"];
+        if properties["metadata"]["title"] == "Song" {
+            assert_eq!(
+                properties["metadata"]["artist"],
+                serde_json::json!(["Band"])
+            );
+            assert_eq!(properties["canGoNext"], true);
+            assert_eq!(properties["playbackStatus"], "playing");
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "tags not shown: {properties}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    rpc(
+        control,
+        r#"{"jsonrpc":"2.0","id":2,"method":"Stream.Control","params":{"id":"tagged","command":"next","params":{}}}"#,
+    );
+    let msg = pipeline
+        .bus()
+        .unwrap()
+        .timed_pop_filtered(
+            gst::ClockTime::from_seconds(5),
+            &[gst::MessageType::Element],
+        )
+        .expect("the command as an element message");
+    let structure = msg.structure().unwrap();
+    assert_eq!(structure.name(), "snapcast-stream-control");
+    assert_eq!(structure.get::<&str>("command").unwrap(), "next");
+    assert_eq!(structure.get::<&str>("stream").unwrap(), "tagged");
+    pipeline.set_state(gst::State::Null).unwrap();
 }

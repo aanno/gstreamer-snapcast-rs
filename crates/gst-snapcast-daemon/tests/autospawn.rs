@@ -8,7 +8,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use gst_snapcast_engine::server::{self, Mode, ServerOptions, StreamOptions};
+use gst_snapcast_engine::server::{
+    self, ControlOptions, Mode, ServerOptions, StreamMetadata, StreamOptions, StreamProperties,
+};
 use gst_snapcast_engine::{PcmFormat, ipc, now_usec};
 
 const BINARY: &str = env!("CARGO_BIN_EXE_gst-snapcast-daemon");
@@ -54,12 +56,43 @@ fn wait_for(what: &str, timeout: Duration, mut condition: impl FnMut() -> bool) 
     }
 }
 
-fn options(port: u16) -> ServerOptions {
+fn options(port: u16, control: u16) -> ServerOptions {
     ServerOptions {
         port,
         buffer_ms: 500,
         mode: Mode::Shared,
+        control: ControlOptions {
+            tcp_port: Some(control),
+            ..ControlOptions::default()
+        },
         ..ServerOptions::default()
+    }
+}
+
+/// The title controllers see for `stream`, from `Server.GetStatus` over TCP.
+fn title(control: u16, stream: &str) -> Option<String> {
+    use std::io::{BufRead, Write};
+    let mut tcp = std::net::TcpStream::connect(("127.0.0.1", control)).ok()?;
+    tcp.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    writeln!(
+        tcp,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"Server.GetStatus"}}"#
+    )
+    .ok()?;
+    let mut reader = std::io::BufReader::new(tcp);
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).ok()?;
+        let reply: serde_json::Value = serde_json::from_str(&line).ok()?;
+        if reply.get("id").is_none() {
+            continue; // a notification
+        }
+        return reply["result"]["server"]["streams"]
+            .as_array()?
+            .iter()
+            .find(|s| s["id"] == stream)?["properties"]["metadata"]["title"]
+            .as_str()
+            .map(Into::into);
     }
 }
 
@@ -95,12 +128,13 @@ fn senders_spawn_one_daemon_survive_its_crash_and_let_it_exit() {
     }
     let socket = ipc::socket_path(&runtime_dir.join(ipc::DIR_NAME));
     let port = free_port();
+    let control = free_port();
 
     // Four senders at once find no daemon; each may spawn one, one wins.
     let handles: Vec<_> = (0..4)
         .map(|i| {
             std::thread::spawn(move || {
-                server::acquire_stream(&options(port), &stream(&format!("s{i}"))).unwrap()
+                server::acquire_stream(&options(port, control), &stream(&format!("s{i}"))).unwrap()
             })
         })
         .collect();
@@ -115,6 +149,18 @@ fn senders_spawn_one_daemon_survive_its_crash_and_let_it_exit() {
         daemons(&runtime_dir).len() == 1
     });
     let first = daemons(&runtime_dir)[0];
+    handles[0]
+        .set_properties(&StreamProperties {
+            metadata: StreamMetadata {
+                title: Some("Before the crash".into()),
+                ..StreamMetadata::default()
+            },
+            ..StreamProperties::default()
+        })
+        .unwrap();
+    wait_for("the title", Duration::from_secs(5), || {
+        title(control, "s0").as_deref() == Some("Before the crash")
+    });
 
     // Kill it: the next sends reconnect, which spawns a new daemon.
     let killed = std::process::Command::new("kill")
@@ -136,6 +182,12 @@ fn senders_spawn_one_daemon_survive_its_crash_and_let_it_exit() {
         }
     }
 
+    // The reconnect sent the last properties to the new daemon.
+    wait_for(
+        "the title after the reconnect",
+        Duration::from_secs(5),
+        || title(control, "s0").as_deref() == Some("Before the crash"),
+    );
     let second = daemons(&runtime_dir);
     let log_path = runtime_dir.join(ipc::DIR_NAME).join("daemon.log");
     assert_eq!(

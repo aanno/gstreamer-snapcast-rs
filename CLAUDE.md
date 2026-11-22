@@ -36,7 +36,8 @@ work. L1 is done: several `snapsink` streams share a server port within one proc
 (runtime streams in the fork). In progress: the per-user shared server daemon across
 processes (`docs/shared-server.md`; steps 1–2 done: IPC, `gst-snapcast-daemon`,
 `snapsink mode=auto|shared|embedded`, lean default build without the control API,
-autospawn, crash reconnect; next: metadata and `Stream.Control` through the daemon). Open timing item: the occasional
+autospawn, crash reconnect, metadata and `Stream.Control`; next: tests in shared mode
+and `make install` with the daemon). Open timing item: the occasional
 snapsrc wander (±1.5…3 ms).
 
 ## Commands

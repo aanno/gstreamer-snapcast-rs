@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use gst_snapcast_engine::ipc::{
-    self, Acquire, Acquired, ErrorKind, Hello, Message, PROTOCOL_VERSION, ServerSettings,
-    StreamSettings,
+    self, Acquire, Acquired, Command, ErrorKind, Hello, Message, PROTOCOL_VERSION, Properties,
+    ServerSettings, StreamSettings,
 };
 use gst_snapcast_engine::{client, now_usec, runtime};
 
@@ -73,6 +73,16 @@ impl Sender {
 
     /// `Hello`, then `Acquire`; returns the answer to `Acquire`.
     fn acquire(socket: &PathBuf, port: u16, stream: &str) -> (Self, Message) {
+        Self::acquire_with_control(socket, port, stream, None)
+    }
+
+    /// As [`Self::acquire`], with the control API over TCP on `control_tcp_port`.
+    fn acquire_with_control(
+        socket: &PathBuf,
+        port: u16,
+        stream: &str,
+        control_tcp_port: Option<u16>,
+    ) -> (Self, Message) {
         let mut sender = Self::connect(socket);
         assert!(matches!(
             sender.hello(PROTOCOL_VERSION),
@@ -83,7 +93,7 @@ impl Sender {
                 port,
                 buffer_ms: 500,
                 mdns_name: None,
-                control_tcp_port: None,
+                control_tcp_port,
                 control_http_port: None,
                 snapweb_dir: None,
             },
@@ -246,5 +256,77 @@ fn pcm_plays_at_its_timestamp_plus_the_buffer() {
     assert!(
         error_us.abs() < 5_000,
         "marker plays {error_us} µs off its timestamp + buffer"
+    );
+}
+
+/// One JSON-RPC request over TCP; the reply (notifications have no `id`).
+fn rpc(port: u16, request: &str) -> serde_json::Value {
+    use std::io::{BufRead, Write};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    writeln!(stream, "{request}").unwrap();
+    let mut reader = BufReader::new(stream);
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let message: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if message.get("id").is_some() {
+            return message;
+        }
+    }
+}
+
+/// Properties go from the sender to the controllers, commands come back.
+#[test]
+fn properties_reach_controllers_and_commands_reach_the_sender() {
+    let socket = start_daemon();
+    let (mut sender, answer) = Sender::acquire_with_control(&socket, 0, "tagged", Some(0));
+    let control = acquired(answer)
+        .control_tcp_port
+        .expect("the daemon serves the control API");
+
+    sender.send(&Message::Properties(Properties {
+        title: Some("Song".into()),
+        artist: vec!["Band".into()],
+        can_go_next: true,
+        playback: Some("playing".into()),
+        ..Properties::default()
+    }));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let status = rpc(
+            control,
+            r#"{"jsonrpc":"2.0","id":1,"method":"Server.GetStatus"}"#,
+        );
+        let properties = &status["result"]["server"]["streams"][0]["properties"];
+        if properties["metadata"]["title"] == "Song" {
+            assert_eq!(
+                properties["metadata"]["artist"],
+                serde_json::json!(["Band"])
+            );
+            assert_eq!(properties["canGoNext"], true);
+            assert_eq!(properties["canPlay"], false);
+            assert_eq!(properties["playbackStatus"], "playing");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "properties not applied: {properties}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    rpc(
+        control,
+        r#"{"jsonrpc":"2.0","id":2,"method":"Stream.Control","params":{"id":"tagged","command":"next","params":{}}}"#,
+    );
+    assert_eq!(
+        sender.recv(),
+        Message::Command(Command {
+            command: "next".into(),
+            params_json: "{}".into(),
+        })
     );
 }

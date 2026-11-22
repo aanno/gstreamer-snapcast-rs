@@ -28,6 +28,7 @@ gst-snapcast-engine = { workspace = true, features = ["server"] }
 gst-snapcast-daemon = { path = "../gst-snapcast-daemon" }
 gst-snapcast-engine = { workspace = true, features = ["shared", "client"] }
 tokio = { workspace = true }
+serde_json = { workspace = true }
 
 [features]
 default = ["shared"]

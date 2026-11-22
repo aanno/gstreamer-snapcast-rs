@@ -2,8 +2,9 @@
 //!
 //! Design and reasons: `docs/shared-server.md`. A sender connects to the daemon's
 //! Unix socket ([`socket_path`]), says [`Hello`], acquires one stream
-//! ([`Acquire`]), then sends [`Message::Pcm`] frames. Closing the connection
-//! releases the stream.
+//! ([`Acquire`]), then sends [`Message::Pcm`] frames and, when they change, the
+//! stream's [`Properties`]. The daemon sends the [`Command`]s that controllers
+//! address to the stream. Closing the connection releases the stream.
 //!
 //! # Framing
 //!
@@ -25,7 +26,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// Version of this protocol; [`Hello`] and [`Welcome`] carry it.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Largest payload of a frame. A PCM frame of 100 ms at 192 kHz, 32 bit, 8 channels
 /// is about 600 kB.
@@ -167,8 +168,42 @@ impl std::fmt::Display for IpcError {
 
 impl std::error::Error for IpcError {}
 
+/// What controllers see of the stream (see `server::StreamProperties`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Properties {
+    /// Track title.
+    pub title: Option<String>,
+    /// Artists.
+    pub artist: Vec<String>,
+    /// Album.
+    pub album: Option<String>,
+    /// Track length in seconds.
+    pub duration_secs: Option<f64>,
+    /// Accepts `play`.
+    pub can_play: bool,
+    /// Accepts `pause` (and `playPause`).
+    pub can_pause: bool,
+    /// Accepts `next`.
+    pub can_go_next: bool,
+    /// Accepts `previous`.
+    pub can_go_previous: bool,
+    /// Accepts `seek` / `setPosition`.
+    pub can_seek: bool,
+    /// `playing`, `paused`, `stopped`, or `None`: not reported.
+    pub playback: Option<String>,
+}
+
+/// A player command from a controller for the stream (JSON-RPC `Stream.Control`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Command {
+    /// The command, as the controller sent it (`play`, `next`, `seek`, …).
+    pub command: String,
+    /// Its parameters as JSON text.
+    pub params_json: String,
+}
+
 /// A message of the protocol.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     /// Sender → daemon, first.
     Hello(Hello),
@@ -180,6 +215,11 @@ pub enum Message {
     Acquired(Acquired),
     /// Daemon → sender; the daemon closes the connection afterwards.
     Error(IpcError),
+    /// Sender → daemon, after `Acquired`: the stream's properties (replace the
+    /// previous ones).
+    Properties(Properties),
+    /// Daemon → sender, after `Acquired`: a controller's command for the stream.
+    Command(Command),
     /// Sender → daemon: interleaved little-endian PCM in the acquired format.
     Pcm {
         /// Server time ([`crate::now_usec`]) of the first frame in `data`.
@@ -195,6 +235,8 @@ const ACQUIRE: u8 = 3;
 const ACQUIRED: u8 = 4;
 const ERROR: u8 = 5;
 const PCM: u8 = 6;
+const PROPERTIES: u8 = 7;
+const COMMAND: u8 = 8;
 
 fn json<T: serde::de::DeserializeOwned>(payload: &[u8]) -> io::Result<T> {
     serde_json::from_slice(payload).map_err(io::Error::from)
@@ -212,6 +254,8 @@ pub fn write_message(w: &mut impl Write, message: &Message) -> io::Result<()> {
         Message::Acquire(m) => (ACQUIRE, serde_json::to_vec(m)?),
         Message::Acquired(m) => (ACQUIRED, serde_json::to_vec(m)?),
         Message::Error(m) => (ERROR, serde_json::to_vec(m)?),
+        Message::Properties(m) => (PROPERTIES, serde_json::to_vec(m)?),
+        Message::Command(m) => (COMMAND, serde_json::to_vec(m)?),
         Message::Pcm {
             timestamp_usec,
             data,
@@ -260,6 +304,8 @@ pub fn read_message(r: &mut impl Read) -> io::Result<Option<Message>> {
         ACQUIRE => Message::Acquire(json(&payload)?),
         ACQUIRED => Message::Acquired(json(&payload)?),
         ERROR => Message::Error(json(&payload)?),
+        PROPERTIES => Message::Properties(json(&payload)?),
+        COMMAND => Message::Command(json(&payload)?),
         PCM => {
             let Some((timestamp, data)) = payload.split_first_chunk::<8>() else {
                 return Err(invalid("PCM frame without timestamp"));
@@ -277,8 +323,11 @@ pub fn read_message(r: &mut impl Read) -> io::Result<Option<Message>> {
 mod convert {
     //! Between the wire types and the engine's server types.
 
-    use super::{ErrorKind, IpcError, ServerSettings, StreamSettings};
-    use crate::server::{ControlOptions, Mode, ServerOptions, StreamOptions};
+    use super::{Command, ErrorKind, IpcError, Properties, ServerSettings, StreamSettings};
+    use crate::server::{
+        ControlOptions, Mode, PlaybackStatus, ServerOptions, StreamCommand, StreamControls,
+        StreamMetadata, StreamOptions, StreamProperties,
+    };
     use crate::{EngineError, PcmFormat};
 
     impl ServerSettings {
@@ -335,6 +384,63 @@ mod convert {
                     channels: self.channels,
                 },
                 log_id: self.log_id.clone(),
+            }
+        }
+    }
+
+    impl From<&StreamProperties> for Properties {
+        fn from(p: &StreamProperties) -> Self {
+            Self {
+                title: p.metadata.title.clone(),
+                artist: p.metadata.artist.clone(),
+                album: p.metadata.album.clone(),
+                duration_secs: p.metadata.duration_secs,
+                can_play: p.controls.play,
+                can_pause: p.controls.pause,
+                can_go_next: p.controls.next,
+                can_go_previous: p.controls.previous,
+                can_seek: p.controls.seek,
+                playback: p.playback.map(|s| s.as_str().to_owned()),
+            }
+        }
+    }
+
+    impl From<&Properties> for StreamProperties {
+        /// An unknown `playback` value counts as not reported.
+        fn from(p: &Properties) -> Self {
+            Self {
+                metadata: StreamMetadata {
+                    title: p.title.clone(),
+                    artist: p.artist.clone(),
+                    album: p.album.clone(),
+                    duration_secs: p.duration_secs,
+                },
+                controls: StreamControls {
+                    play: p.can_play,
+                    pause: p.can_pause,
+                    next: p.can_go_next,
+                    previous: p.can_go_previous,
+                    seek: p.can_seek,
+                },
+                playback: p.playback.as_deref().and_then(PlaybackStatus::from_str),
+            }
+        }
+    }
+
+    impl From<&StreamCommand> for Command {
+        fn from(c: &StreamCommand) -> Self {
+            Self {
+                command: c.command.clone(),
+                params_json: c.params_json.clone(),
+            }
+        }
+    }
+
+    impl From<Command> for StreamCommand {
+        fn from(c: Command) -> Self {
+            Self {
+                command: c.command,
+                params_json: c.params_json,
             }
         }
     }
@@ -420,6 +526,20 @@ mod tests {
         round_trip(Message::Error(IpcError {
             kind: ErrorKind::StreamTaken,
             message: "stream 'music' is already in use".into(),
+        }));
+        round_trip(Message::Properties(Properties {
+            title: Some("Song".into()),
+            artist: vec!["Band".into()],
+            album: None,
+            duration_secs: Some(201.5),
+            can_play: true,
+            can_go_next: true,
+            playback: Some("playing".into()),
+            ..Properties::default()
+        }));
+        round_trip(Message::Command(Command {
+            command: "seek".into(),
+            params_json: r#"{"offset":30}"#.into(),
         }));
         round_trip(Message::Pcm {
             timestamp_usec: -5,
