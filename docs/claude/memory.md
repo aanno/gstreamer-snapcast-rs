@@ -21,8 +21,9 @@ Last updated: 2026-11-22 (L1 done: runtime streams in the fork, several snapsink
    stays rejected. Engine: another stream name on a running port is added at runtime;
    a released stream stays (clients keep their assignment across a sender restart);
    re-acquiring it with another codec/format replaces it. `EngineError::StreamsFixed`
-   and `StreamMismatch` are gone, `StreamNotAdded` is new. **Next: the design doc for
-   the shared-server daemon** (see Decisions), with `snapsink`'s default mode "shared".
+   and `StreamMismatch` are gone, `StreamNotAdded` is new. **Next: the shared-server
+   daemon.** Design doc draft: `docs/shared-server.md` (2026-11-22), five open
+   questions at its end for the user; implement after they are answered.
 3. **Alongside:** the snapsrc wander experiment (Open items), measured as usual.
 4. **Unpushed** (the user pushes): fork `aanno/fixes` `9a4c2b4`, `152dce6`, `7aede14`,
    `5b77ff7`, `4f8cb71`, `da298e3`, `1b5b3b5`; this repo everything since `d256e76`. Earlier fork
@@ -167,8 +168,8 @@ Fixed ones (L2–L5, L7–L10, L12, L13) are in the archive.
 ## Plan
 
 1. ~~**L1 in the fork**~~ done 2026-11-22 (see Resume here).
-2. **Design doc for the shared-server daemon** (outline in Decisions), agreed with the user
-   before implementing it.
+2. **Design doc for the shared-server daemon:** draft `docs/shared-server.md`; agree it
+   with the user (open questions) before implementing it.
 3. **The daemon**, then `snapsink`'s `mode` (shared by default, embedded).
 4. **Alongside:** the wander experiment (Open items).
 

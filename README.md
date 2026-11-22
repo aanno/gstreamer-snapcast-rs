@@ -127,6 +127,7 @@ first).
 │   ├── testing*.md            # tests, host and devcontainer setup, gotchas
 │   ├── gstreamer-plugins/     # design discussion (background)
 │   ├── evaluation.md          # the prototype's evaluation (F1–F5), go
+│   ├── shared-server.md       # design draft: one server per user across processes
 │   └── claude/memory*.md      # current state, decisions, limitations, plan; history
 └── .devcontainer/             # VS Code devcontainer (Rust + GStreamer dev packages)
 ```
