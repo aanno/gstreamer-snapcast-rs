@@ -833,7 +833,9 @@ mod tests {
         ));
     }
 
-    /// One JSON-RPC request over TCP; returns the first reply line.
+    /// One JSON-RPC request over TCP; returns the reply line. Notifications the
+    /// server pushes meanwhile (e.g. `Server.OnUpdate` after a stream was added)
+    /// have no `id` and are skipped.
     #[cfg(feature = "control")]
     fn rpc_over_tcp(port: u16, request: &str) -> String {
         use std::io::{BufRead, Write};
@@ -842,11 +844,15 @@ mod tests {
             .set_read_timeout(Some(std::time::Duration::from_secs(5)))
             .unwrap();
         writeln!(stream, "{request}").unwrap();
-        let mut line = String::new();
-        std::io::BufReader::new(stream)
-            .read_line(&mut line)
-            .unwrap();
-        line
+        let mut reader = std::io::BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let message: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if message.get("id").is_some() {
+                return line;
+            }
+        }
     }
 
     #[cfg(feature = "control")]
