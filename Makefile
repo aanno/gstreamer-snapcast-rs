@@ -1,5 +1,5 @@
 .PHONY: check fmt fmt-fix clippy test doc build release inspect submodule \
-	install uninstall install-system uninstall-system test-interop test-aloop test-mdns doctor \
+	install uninstall install-system uninstall-system test-interop test-aloop test-endurance test-mdns doctor \
 	listen-send listen-recv listen-cpp-client listen-cpp-server listen-pair listen-all listen-show
 
 PLUGIN_PATH := $(CURDIR)/target/debug
@@ -74,7 +74,13 @@ test-interop:
 ## Needs snd-aloop, amixer and (for the C++ cases) snapclient. One test at a time:
 ## they share loopback subdevice 0. See docs/testing.md.
 test-aloop:
-	cargo test -p gst-plugin-snapsrc --test aloop -- --ignored --test-threads=1 --nocapture
+	cargo test -p gst-plugin-snapsrc --test aloop -- --ignored --test-threads=1 --nocapture \
+		--skip aloop_endurance
+
+## F3: snapsrc + C++ snapclient for ENDURANCE_MINUTES (default 60) on snd-aloop; one CSV
+## row per window (target/endurance-*.csv). Same needs as test-aloop. See docs/testing.md.
+test-endurance:
+	cargo test -p gst-plugin-snapsrc --test aloop -- --ignored --exact aloop_endurance --nocapture
 
 ## mDNS: snapsrc without a host finds a snapsink (needs multicast on the network)
 test-mdns:

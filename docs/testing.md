@@ -16,6 +16,7 @@ to do when something doesn't work, is in:
 | `make check` | `fmt` + `clippy -D warnings` + `test` + `doc -D warnings` | as above | — |
 | `make test-interop` | `snapsink` → C++ `snapclient`, and C++ `snapserver` → `snapsrc`, for `pcm` and `flac` | C++ `snapclient`/`snapserver` (`SNAPCLIENT=`/`SNAPSERVER=`) | no (`#[ignore]`) |
 | `make test-aloop` | Timing on a (virtual) sound card: offset between two receivers, and following a drifting card (F2); a sender pause is silent and both receivers are in sync afterwards (F5) | `snd-aloop`, `amixer`, `alsasrc`/`alsasink`, C++ `snapclient` for two of the four tests | no (`#[ignore]`) |
+| `make test-endurance` | F3: snapsrc and the C++ snapclient for an hour (`ENDURANCE_MINUTES`) on the loopback card; one CSV row per minute (dropouts, ticks, offsets, memory) and trend checks at the end | as `make test-aloop` | no (`#[ignore]`) |
 | `make test-mdns` | snapsrc without a host finds a snapsink via mDNS; a missing server gives a clear error within 5 s; snapsink announces its control ports | multicast on the network (works in the devcontainer and on the host) | no (`#[ignore]`) |
 | `make listen-*` | By ear: sender, receivers, combinations with the C++ peers | speakers (host), installed plugins or `LOCAL=1` | no |
 | `make doctor` | Not a test: reports tools, elements, plugins and sound devices | — | — |
@@ -67,6 +68,30 @@ audiotestsrc wave=ticks ! snapsink (embedded server)
 - The tests run one at a time (`--test-threads=1`) because they share subdevice 0. Each takes about 25 s.
 - Settings: `ALOOP_CARD` (default `Loopback`), `ALOOP_SECONDS` (20), `ALOOP_TOLERANCE_US`
   (1000), `ALOOP_TOLERANCE_DRIFT_US` (2500, under emulated drift), `ALOOP_TOLERANCE_SETTLE_US` (5000, see sender pause), `ALOOP_TOLERANCE_PPM` (100), `ALOOP_TOLERANCE_ABS_US` (5000), `SNAPCLIENT`.
+
+## `make test-endurance` (F3)
+
+`aloop_endurance` in the same file, the same setup (snapsrc left, C++ snapclient right),
+but for `ENDURANCE_MINUTES` (default 60), analysed in windows of `ENDURANCE_WINDOW_SECS`
+(default 60) so that memory stays small. The signal is a tick per second over a quiet
+440 Hz sine (`ENDURANCE_SINE_VOLUME`, default 0.05), so a dropout anywhere is a silent gap.
+
+Per window it prints one line and writes one CSV row (`ENDURANCE_CSV`, default
+`target/endurance-<unix time>.csv`): ticks found, silent gaps and their length, offset
+C++ − snapsrc (mean, min, max), each receiver against the server timeline, RSS of the test
+process (sender + snapsrc) and of the C++ client, snapsrc's pipeline latency, the card's
+rate. At the end: trends per hour (memory, snapsrc against the server), and checks: no
+dropouts, no missing ticks, per window a mean offset within `ALOOP_TOLERANCE_US` and every
+tick within `ENDURANCE_TOLERANCE_US` (2500, see below), both receivers within
+`ALOOP_TOLERANCE_ABS_US` of the server, snapsrc's offset wandering at most
+`ENDURANCE_WANDER_US` (1000) from the second to the last window, and the test process
+growing at most `ENDURANCE_RSS_GROWTH_MB` (16) after the first window (warm-up).
+
+**Known wander (2026-11-22):** in about one run in four or five, a snapsrc receiver wanders
+by up to ±1.5…3 ms against the server timeline within the run (the audio sink's
+`resample` slaving; it happened as often before the gap filling of 2026-11-22, 2 of 10
+runs of `aloop_two_snapsrc_are_in_sync`). The 20 s tests then fail their 1 ms bound;
+rerun. The endurance test checks single ticks against 2500 µs for this reason.
 
 Each test prints one line, e.g.:
 

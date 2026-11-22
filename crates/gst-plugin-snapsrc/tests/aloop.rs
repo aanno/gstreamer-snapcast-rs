@@ -195,17 +195,20 @@ impl Drop for Running {
     }
 }
 
-/// The sender, and what it sent: a reference copy of its left channel.
+/// The sender, and what it sent (see [`Reference`]).
 struct Sender {
     running: Running,
     port: u32,
     reference: Arc<Mutex<Reference>>,
 }
 
+/// What the sender sent: the tick onsets of its left channel, in frames since its
+/// first buffer (kept as onsets only, so that hours of sending need little memory).
 #[derive(Default)]
 struct Reference {
     first_pts: Option<gst::ClockTime>,
-    left: Vec<i16>,
+    detector: OnsetDetector,
+    onsets: Vec<f64>,
 }
 
 const TICKS: &str = "audiotestsrc is-live=true wave=ticks freq=1000 volume=0.8";
@@ -239,12 +242,13 @@ fn start_sender_with(source: &str, codec: &str) -> Sender {
                     if r.first_pts.is_none() {
                         r.first_pts = buffer.pts();
                     }
-                    r.left.extend(
+                    let found = r.detector.feed(
                         map.as_chunks::<4>()
                             .0
                             .iter()
                             .map(|f| i16::from_le_bytes([f[0], f[1]])),
                     );
+                    r.onsets.extend(found);
                     Ok(gst::FlowSuccess::Ok)
                 })
                 .build(),
@@ -283,7 +287,7 @@ impl Sender {
         let latency_ns = sink.latency().nseconds() as i64;
         let r = self.reference.lock().unwrap();
         let first_pts = r.first_pts.expect("the sender sent nothing").nseconds() as i64;
-        onsets(&r.left)
+        r.onsets
             .iter()
             .map(|&f| {
                 let pts_ns = first_pts + (f * 1e9 / f64::from(RATE)) as i64;
@@ -431,60 +435,82 @@ struct Capture {
     jitter_ms: f64,
 }
 
-/// Records `WARMUP + seconds` from the capture side of subdevice 0 and keeps the part
-/// after warm-up, checking the receivers on the way.
-fn capture(card: &str, seconds: u64, receivers: &mut [(&str, &mut Receiver)]) -> Capture {
-    let rec = Running::start(&format!(
-        "alsasrc device=hw:{card},1,0 \
-         ! audio/x-raw,format=S16LE,rate={RATE},channels=2 \
-         ! appsink name=out sync=false"
-    ));
-    let appsink = rec
-        .0
-        .by_name("out")
-        .unwrap()
-        .downcast::<gst_app::AppSink>()
-        .unwrap();
+/// The capture side of subdevice 0, read in parts (an endurance run must not keep
+/// hours of audio).
+struct CaptureStream {
+    _rec: Running,
+    appsink: gst_app::AppSink,
+    /// Frames captured so far.
+    frames: usize,
+}
 
-    let warmup_frames = (WARMUP.as_secs() * u64::from(RATE)) as usize;
-    let total_frames = warmup_frames + (seconds * u64::from(RATE)) as usize;
-    let (mut left, mut right) = (Vec::new(), Vec::new());
-    // (arrival time, frames captured so far) of each buffer after warm-up.
-    let mut arrivals: Vec<(f64, f64)> = Vec::new();
-    let mut frames = 0usize;
-    while frames < total_frames {
-        let sample = appsink
-            .try_pull_sample(gst::ClockTime::from_seconds(5))
-            .expect("no audio captured from the loopback device");
-        let map = sample.buffer().unwrap().map_readable().unwrap();
-        for f in map.as_chunks::<4>().0 {
-            if frames >= warmup_frames {
+impl CaptureStream {
+    fn start(card: &str) -> Self {
+        let rec = Running::start(&format!(
+            "alsasrc device=hw:{card},1,0 \
+             ! audio/x-raw,format=S16LE,rate={RATE},channels=2 \
+             ! appsink name=out sync=false"
+        ));
+        let appsink = rec
+            .0
+            .by_name("out")
+            .unwrap()
+            .downcast::<gst_app::AppSink>()
+            .unwrap();
+        Self {
+            _rec: rec,
+            appsink,
+            frames: 0,
+        }
+    }
+
+    /// Records about `seconds` more (whole buffers), checking the receivers on the way.
+    /// The card's rate and the time of frame 0 are fitted over this part only.
+    fn record(&mut self, seconds: f64, receivers: &mut [(&str, &mut Receiver)]) -> Capture {
+        let first_frame = self.frames;
+        let target = first_frame + (seconds * f64::from(RATE)) as usize;
+        let (mut left, mut right) = (Vec::new(), Vec::new());
+        // (arrival time, frames captured so far) of each buffer.
+        let mut arrivals: Vec<(f64, f64)> = Vec::new();
+        while self.frames < target {
+            let sample = self
+                .appsink
+                .try_pull_sample(gst::ClockTime::from_seconds(5))
+                .expect("no audio captured from the loopback device");
+            let map = sample.buffer().unwrap().map_readable().unwrap();
+            for f in map.as_chunks::<4>().0 {
                 left.push(i16::from_le_bytes([f[0], f[1]]));
                 right.push(i16::from_le_bytes([f[2], f[3]]));
             }
-            frames += 1;
+            self.frames += map.len() / 4;
+            arrivals.push((now_usec() as f64 / 1e6, self.frames as f64));
+            for (what, receiver) in receivers.iter_mut() {
+                receiver.assert_alive(what);
+            }
         }
-        if frames > warmup_frames {
-            arrivals.push((now_usec() as f64 / 1e6, frames as f64));
-        }
-        for (what, receiver) in receivers.iter_mut() {
-            receiver.assert_alive(what);
+        let card_rate = slope(&arrivals);
+        // Each buffer arrives (slightly) after its last frame was captured, never before:
+        // the earliest arrival gives the time of frame 0.
+        let starts: Vec<f64> = arrivals.iter().map(|(t, n)| t - n / card_rate).collect();
+        let t0 = starts.iter().copied().fold(f64::MAX, f64::min);
+        let latest = starts.iter().copied().fold(f64::MIN, f64::max);
+        Capture {
+            left,
+            right,
+            card_rate,
+            first_frame,
+            t0,
+            jitter_ms: (latest - t0) * 1000.0,
         }
     }
-    let card_rate = slope(&arrivals);
-    // Each buffer arrives (slightly) after its last frame was captured, never before:
-    // the earliest arrival gives the time of frame 0.
-    let starts: Vec<f64> = arrivals.iter().map(|(t, n)| t - n / card_rate).collect();
-    let t0 = starts.iter().copied().fold(f64::MAX, f64::min);
-    let latest = starts.iter().copied().fold(f64::MIN, f64::max);
-    Capture {
-        left,
-        right,
-        card_rate,
-        first_frame: warmup_frames,
-        t0,
-        jitter_ms: (latest - t0) * 1000.0,
-    }
+}
+
+/// Records `WARMUP + seconds` from the capture side of subdevice 0 and keeps the part
+/// after warm-up, checking the receivers on the way.
+fn capture(card: &str, seconds: u64, receivers: &mut [(&str, &mut Receiver)]) -> Capture {
+    let mut stream = CaptureStream::start(card);
+    stream.record(WARMUP.as_secs_f64(), receivers);
+    stream.record(seconds as f64, receivers)
 }
 
 /// Each tick's offset against the server timeline in ms (positive = late): when it left
@@ -537,29 +563,56 @@ fn slope(points: &[(f64, f64)]) -> f64 {
     sxy / sxx
 }
 
-/// Tick onsets in frames, with linear interpolation between samples.
-fn onsets(channel: &[i16]) -> Vec<f64> {
-    let mut found = Vec::new();
-    let mut last_loud: Option<usize> = None;
-    for (i, &v) in channel.iter().enumerate() {
-        if v.unsigned_abs() < THRESHOLD as u16 {
-            continue;
+/// Finds tick onsets in a stream of samples, chunk by chunk, with linear interpolation
+/// between samples. Frame numbers count on across chunks, from `start`.
+#[derive(Default)]
+struct OnsetDetector {
+    start: usize,
+    n: usize,
+    prev: i16,
+    last_loud: Option<usize>,
+}
+
+impl OnsetDetector {
+    fn starting_at(frame: usize) -> Self {
+        Self {
+            start: frame,
+            n: frame,
+            ..Self::default()
         }
-        let quiet_before = last_loud.is_none_or(|l| i - l > QUIET_FRAMES);
-        // Skip a tick that was already in progress when the capture window opened.
-        if quiet_before && i > 0 && (last_loud.is_some() || i > QUIET_FRAMES) {
-            let (a, b) = (f64::from(channel[i - 1]), f64::from(v));
-            let t = f64::from(THRESHOLD) * b.signum();
-            let frac = if b != a {
-                ((t - a) / (b - a)).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            found.push((i - 1) as f64 + frac);
-        }
-        last_loud = Some(i);
     }
-    found
+
+    fn feed(&mut self, samples: impl IntoIterator<Item = i16>) -> Vec<f64> {
+        let mut found = Vec::new();
+        for v in samples {
+            let i = self.n;
+            self.n += 1;
+            let prev = std::mem::replace(&mut self.prev, v);
+            if v.unsigned_abs() < THRESHOLD as u16 {
+                continue;
+            }
+            let quiet_before = self.last_loud.is_none_or(|l| i - l > QUIET_FRAMES);
+            // Skip a tick that was already in progress when the stream started.
+            let seen = i - self.start;
+            if quiet_before && seen > 0 && (self.last_loud.is_some() || seen > QUIET_FRAMES) {
+                let (a, b) = (f64::from(prev), f64::from(v));
+                let t = f64::from(THRESHOLD) * b.signum();
+                let frac = if b != a {
+                    ((t - a) / (b - a)).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                found.push((i - 1) as f64 + frac);
+            }
+            self.last_loud = Some(i);
+        }
+        found
+    }
+}
+
+/// Tick onsets in frames of `channel`.
+fn onsets(channel: &[i16]) -> Vec<f64> {
+    OnsetDetector::default().feed(channel.iter().copied())
 }
 
 /// Rate error of a receiver against the server timeline, in ppm: its tick period in
@@ -701,28 +754,57 @@ fn aloop_snapsrc_and_cpp_snapclient_follow_a_drifting_card() {
     run(Kind::Snapsrc, Kind::CppSnapclient, Some(DRIFT));
 }
 
-/// Silent gaps (at least 2 ms below 1 % full scale) in a continuous signal, after its
-/// first loud sample: `(start frame, length in frames)`.
-fn silent_gaps(channel: &[i16]) -> Vec<(usize, usize)> {
+/// Finds silent gaps (at least 2 ms below 1 % full scale) in a continuous signal, after
+/// its first loud sample, chunk by chunk: `(start frame, length in frames)`. Frame
+/// numbers count on across chunks, from `start`.
+#[derive(Default)]
+struct GapDetector {
+    n: usize,
+    started: bool,
+    run: usize,
+}
+
+impl GapDetector {
     const QUIET: u16 = 328;
     const MIN_FRAMES: usize = RATE as usize / 500;
-    let Some(start) = channel
-        .iter()
-        .position(|v| v.unsigned_abs() > THRESHOLD as u16)
-    else {
+
+    fn starting_at(frame: usize) -> Self {
+        Self {
+            n: frame,
+            ..Self::default()
+        }
+    }
+
+    fn feed(&mut self, samples: impl IntoIterator<Item = i16>) -> Vec<(usize, usize)> {
+        let mut gaps = Vec::new();
+        for v in samples {
+            let i = self.n;
+            self.n += 1;
+            if !self.started {
+                self.started = v.unsigned_abs() > THRESHOLD as u16;
+                if !self.started {
+                    continue;
+                }
+            }
+            if v.unsigned_abs() < Self::QUIET {
+                self.run += 1;
+                continue;
+            }
+            if self.run >= Self::MIN_FRAMES {
+                gaps.push((i - self.run, self.run));
+            }
+            self.run = 0;
+        }
+        gaps
+    }
+}
+
+/// Silent gaps in `channel` (see [`GapDetector`]); all of it if it is never loud.
+fn silent_gaps(channel: &[i16]) -> Vec<(usize, usize)> {
+    let mut detector = GapDetector::default();
+    let gaps = detector.feed(channel.iter().copied());
+    if !detector.started {
         return vec![(0, channel.len())];
-    };
-    let mut gaps = Vec::new();
-    let mut run = 0;
-    for (i, v) in channel.iter().enumerate().skip(start) {
-        if v.unsigned_abs() < QUIET {
-            run += 1;
-            continue;
-        }
-        if run >= MIN_FRAMES {
-            gaps.push((i - run, run));
-        }
-        run = 0;
     }
     gaps
 }
@@ -964,6 +1046,317 @@ fn aloop_sender_pause_is_silent_and_resumes_in_sync() {
         assert!(
             o.abs() <= bound,
             "receivers {o:+.0} µs apart at {t:+.1} s (bound ±{bound} µs)"
+        );
+    }
+}
+
+/// Resident memory of a process in KiB (`/proc/<pid>/status`), if readable.
+fn rss_kib(pid: &str) -> Option<u64> {
+    std::fs::read_to_string(format!("/proc/{pid}/status"))
+        .ok()?
+        .lines()
+        .find_map(|l| l.strip_prefix("VmRSS:"))?
+        .trim()
+        .trim_end_matches("kB")
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Least-squares slope of `values` over their index, per window.
+fn trend(values: &[f64]) -> f64 {
+    let points: Vec<(f64, f64)> = values
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| (i as f64, v))
+        .collect();
+    if points.len() < 2 {
+        0.0
+    } else {
+        slope(&points)
+    }
+}
+
+/// One window of the endurance run.
+struct Window {
+    end_s: f64,
+    ticks: (usize, usize),
+    gaps: (usize, usize),
+    gap_ms: (f64, f64),
+    pair_us: (f64, f64, f64),
+    abs_a_ms: (f64, f64, f64),
+    abs_b_ms: (f64, f64, f64),
+    rss_kib: (u64, u64),
+    latency_ms: u64,
+    card_ppm: f64,
+}
+
+impl Window {
+    const CSV_HEADER: &str = "end_s,ticks_snapsrc,ticks_cpp,gaps_snapsrc,gaps_cpp,\
+        gap_ms_snapsrc,gap_ms_cpp,pair_mean_us,pair_min_us,pair_max_us,\
+        abs_snapsrc_mean_ms,abs_snapsrc_min_ms,abs_snapsrc_max_ms,\
+        abs_cpp_mean_ms,abs_cpp_min_ms,abs_cpp_max_ms,\
+        rss_test_kib,rss_cpp_kib,latency_snapsrc_ms,card_ppm";
+
+    fn csv(&self) -> String {
+        format!(
+            "{:.0},{},{},{},{},{:.1},{:.1},{:.0},{:.0},{:.0},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{},{},{:.1}",
+            self.end_s,
+            self.ticks.0,
+            self.ticks.1,
+            self.gaps.0,
+            self.gaps.1,
+            self.gap_ms.0,
+            self.gap_ms.1,
+            self.pair_us.0,
+            self.pair_us.1,
+            self.pair_us.2,
+            self.abs_a_ms.0,
+            self.abs_a_ms.1,
+            self.abs_a_ms.2,
+            self.abs_b_ms.0,
+            self.abs_b_ms.1,
+            self.abs_b_ms.2,
+            self.rss_kib.0,
+            self.rss_kib.1,
+            self.latency_ms,
+            self.card_ppm,
+        )
+    }
+}
+
+/// F3, endurance: snapsrc and the C++ snapclient play for `ENDURANCE_MINUTES` (default 60)
+/// on the loopback card. Every `ENDURANCE_WINDOW_SECS` (default 60) one line goes to
+/// stderr and one row to a CSV file (`ENDURANCE_CSV`, default
+/// `target/endurance-<unix time>.csv`): ticks found, silent gaps (dropouts), offset
+/// between the receivers, each receiver against the server timeline, resident memory of
+/// the test process (sender + snapsrc) and of the C++ client, snapsrc's pipeline latency
+/// and the card's rate.
+///
+/// The signal is a tick per second over a quiet 440 Hz sine, so that a dropout anywhere
+/// shows up as a silent gap, not only one that hits a tick.
+///
+/// `ENDURANCE_SINE_VOLUME=0` sends the ticks alone (then every pause between ticks counts
+/// as a gap, so the gap check is skipped).
+///
+/// At the end it checks, for every window: no missing ticks, the receivers' mean offset
+/// within `ALOOP_TOLERANCE_US` (F2) and every single tick within `ENDURANCE_TOLERANCE_US`
+/// (default 2500: snapsrc wanders by up to ±1.5 ms in some runs, the restlessness of the
+/// audio sink's `resample` slaving, see docs/claude/memory.md), both receivers within
+/// `ALOOP_TOLERANCE_ABS_US` of the server timeline; over the whole run: no dropouts, snapsrc's offset against the server not wandering by more
+/// than `ENDURANCE_WANDER_US` (default 1000) between the first and the last window, and
+/// the test process growing by at most `ENDURANCE_RSS_GROWTH_MB` (default 16) after the
+/// first window. Run with `make test-endurance`.
+#[test]
+#[ignore = "needs snd-aloop and the C++ snapclient, runs for an hour (make test-endurance)"]
+fn aloop_endurance() {
+    init();
+    let card = card();
+    let minutes: f64 = env_or("ENDURANCE_MINUTES", 60.0);
+    let window_s: f64 = env_or("ENDURANCE_WINDOW_SECS", 60.0);
+    let tol_us: f64 = env_or("ALOOP_TOLERANCE_US", 1000.0);
+    let tol_tick_us: f64 = env_or("ENDURANCE_TOLERANCE_US", 2500.0);
+    let tol_abs_ms: f64 = env_or("ALOOP_TOLERANCE_ABS_US", 5000.0) / 1000.0;
+    let wander_ms: f64 = env_or("ENDURANCE_WANDER_US", 1000.0) / 1000.0;
+    let rss_growth_kib: f64 = env_or("ENDURANCE_RSS_GROWTH_MB", 16.0) * 1024.0;
+    let csv_path = std::env::var("ENDURANCE_CSV").unwrap_or_else(|_| {
+        format!(
+            "{}/../../target/endurance-{}.csv",
+            env!("CARGO_MANIFEST_DIR"),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        )
+    });
+    let mut csv = std::fs::File::create(&csv_path)
+        .unwrap_or_else(|e| panic!("cannot create {csv_path}: {e}"));
+    use std::io::Write as _;
+    writeln!(csv, "{}", Window::CSV_HEADER).unwrap();
+    eprintln!("aloop: endurance for {minutes} min, windows of {window_s} s, CSV: {csv_path}");
+
+    let _shift = RateShift::set(&card, RATE_SHIFT_NOMINAL);
+    let sine: f64 = env_or("ENDURANCE_SINE_VOLUME", 0.05);
+    let source = if sine > 0.0 {
+        format!(
+            "audiomixer name=mix \
+             {TICKS} ! audio/x-raw,format=S16LE,rate={RATE},channels=2 ! mix. \
+             audiotestsrc is-live=true wave=sine freq=440 volume={sine} \
+               ! audio/x-raw,format=S16LE,rate={RATE},channels=2 ! mix. \
+             mix."
+        )
+    } else {
+        TICKS.to_owned()
+    };
+    let sender = start_sender_with(&source, "pcm");
+    let mut left = Receiver::start(Kind::Snapsrc, Side::Left, sender.port);
+    let mut right = Receiver::start(Kind::CppSnapclient, Side::Right, sender.port);
+    let cpp_pid = match &right {
+        Receiver::Cpp(child) => child.id().to_string(),
+        Receiver::Snapsrc(_) => unreachable!(),
+    };
+
+    let mut stream = CaptureStream::start(&card);
+    stream.record(
+        WARMUP.as_secs_f64(),
+        &mut [("snapsrc", &mut left), ("C++", &mut right)],
+    );
+    let start_frame = stream.frames;
+    let (mut onsets_l, mut onsets_r) = (
+        OnsetDetector::starting_at(start_frame),
+        OnsetDetector::starting_at(start_frame),
+    );
+    let (mut gaps_l, mut gaps_r) = (
+        GapDetector::starting_at(start_frame),
+        GapDetector::starting_at(start_frame),
+    );
+    let windows = (minutes * 60.0 / window_s).round().max(1.0) as usize;
+    let mut results: Vec<Window> = Vec::new();
+    let mut gap_list: Vec<String> = Vec::new();
+    for w in 0..windows {
+        let cap = stream.record(window_s, &mut [("snapsrc", &mut left), ("C++", &mut right)]);
+        sender.running.assert_no_error("sender");
+        let l = onsets_l.feed(cap.left.iter().copied());
+        let r = onsets_r.feed(cap.right.iter().copied());
+        let (gl, gr) = (
+            gaps_l.feed(cap.left.iter().copied()),
+            gaps_r.feed(cap.right.iter().copied()),
+        );
+        let t_of = |frame: usize| (frame - start_frame) as f64 / f64::from(RATE);
+        for (name, gaps) in [("snapsrc", &gl), ("C++", &gr)] {
+            for (at, n) in gaps {
+                gap_list.push(format!(
+                    "{name} at {:.1} s: {:.1} ms",
+                    t_of(*at),
+                    *n as f64 * 1000.0 / f64::from(RATE)
+                ));
+            }
+        }
+        let gap_ms = |g: &[(usize, usize)]| {
+            g.iter().map(|(_, n)| *n as f64).sum::<f64>() * 1000.0 / f64::from(RATE)
+        };
+
+        // Offsets: pair each snapsrc tick with the nearest C++ tick (C++ minus snapsrc).
+        let pairs: Vec<f64> = l
+            .iter()
+            .filter_map(|&lt| {
+                r.iter()
+                    .map(|&rt| rt - lt)
+                    .min_by(|x, y| x.abs().total_cmp(&y.abs()))
+                    .filter(|d| d.abs() < f64::from(RATE) / 2.0)
+                    .map(|d| d * 1e6 / f64::from(RATE))
+            })
+            .collect();
+        let due = sender.due_times();
+        let local = |ticks: &[f64]| -> Vec<f64> {
+            ticks.iter().map(|f| f - cap.first_frame as f64).collect()
+        };
+        let abs_a = absolute_offsets_ms(&local(&l), &cap, &due);
+        let abs_b = absolute_offsets_ms(&local(&r), &cap, &due);
+
+        let window = Window {
+            end_s: t_of(stream.frames),
+            ticks: (l.len(), r.len()),
+            gaps: (gl.len(), gr.len()),
+            gap_ms: (gap_ms(&gl), gap_ms(&gr)),
+            pair_us: stats(&pairs),
+            abs_a_ms: stats(&abs_a),
+            abs_b_ms: stats(&abs_b),
+            rss_kib: (rss_kib("self").unwrap_or(0), rss_kib(&cpp_pid).unwrap_or(0)),
+            latency_ms: left.latency().map_or(0, |l| l.mseconds()),
+            card_ppm: (cap.card_rate / f64::from(RATE) - 1.0) * 1e6,
+        };
+        writeln!(csv, "{}", window.csv()).unwrap();
+        csv.flush().unwrap();
+        eprintln!(
+            "aloop: endurance {:>3}/{windows} {:>6.0} s: ticks {}/{}, gaps {}/{}, \
+             C++−snapsrc {:+.0} µs [{:+.0}..{:+.0}], vs server snapsrc {:+.2} ms, C++ {:+.2} ms, \
+             RSS {} / {} MiB",
+            w + 1,
+            window.end_s,
+            window.ticks.0,
+            window.ticks.1,
+            window.gaps.0,
+            window.gaps.1,
+            window.pair_us.0,
+            window.pair_us.1,
+            window.pair_us.2,
+            window.abs_a_ms.0,
+            window.abs_b_ms.0,
+            window.rss_kib.0 / 1024,
+            window.rss_kib.1 / 1024,
+        );
+        results.push(window);
+    }
+    drop((left, right));
+
+    // Summary and checks.
+    // The first window is warm-up for memory (buffers, caches): trends and the memory
+    // baseline start after it.
+    let col = |f: &dyn Fn(&Window) -> f64| {
+        let skip = usize::from(results.len() > 2);
+        results.iter().skip(skip).map(f).collect::<Vec<f64>>()
+    };
+    let rss_test = col(&|w| w.rss_kib.0 as f64);
+    let rss_cpp = col(&|w| w.rss_kib.1 as f64);
+    let abs_a = col(&|w| w.abs_a_ms.0);
+    let per_hour = 3600.0 / window_s;
+    eprintln!(
+        "aloop: endurance summary: {} windows; trends per hour: RSS test {:+.1} MiB, C++ {:+.1} MiB, \
+         snapsrc vs server {:+.3} ms; gaps: {}",
+        results.len(),
+        trend(&rss_test) * per_hour / 1024.0,
+        trend(&rss_cpp) * per_hour / 1024.0,
+        trend(&abs_a) * per_hour,
+        if sine <= 0.0 {
+            "not checked (no sine)".into()
+        } else if gap_list.is_empty() {
+            "none".into()
+        } else {
+            gap_list.join(", ")
+        }
+    );
+    let expected = window_s.round() as usize;
+    for (i, w) in results.iter().enumerate() {
+        let at = format!("window {} (ending at {:.0} s)", i + 1, w.end_s);
+        assert!(
+            w.ticks.0 + 1 >= expected && w.ticks.1 + 1 >= expected,
+            "{at}: missing ticks: {}/{} of {expected}",
+            w.ticks.0,
+            w.ticks.1
+        );
+        assert!(
+            w.pair_us.0.abs() <= tol_us,
+            "{at}: receivers {:+.0} µs apart on average (tolerance ±{tol_us} µs)",
+            w.pair_us.0
+        );
+        assert!(
+            w.pair_us.1.abs() <= tol_tick_us && w.pair_us.2.abs() <= tol_tick_us,
+            "{at}: receivers {:+.0}..{:+.0} µs apart (tolerance ±{tol_tick_us} µs)",
+            w.pair_us.1,
+            w.pair_us.2
+        );
+        for (name, (_, min, max)) in [("snapsrc", w.abs_a_ms), ("C++", w.abs_b_ms)] {
+            assert!(
+                min.abs() <= tol_abs_ms && max.abs() <= tol_abs_ms,
+                "{at}: {name} {min:+.2}..{max:+.2} ms against the server timeline"
+            );
+        }
+    }
+    if sine > 0.0 {
+        assert!(gap_list.is_empty(), "dropouts: {}", gap_list.join(", "));
+    }
+    let wander = abs_a.last().unwrap() - abs_a[0];
+    assert!(
+        wander.abs() <= wander_ms,
+        "snapsrc wandered {wander:+.2} ms against the server timeline"
+    );
+    if results.len() > 1 {
+        let growth = rss_test.last().unwrap() - rss_test[0];
+        assert!(
+            growth <= rss_growth_kib,
+            "the test process (sender + snapsrc) grew by {:.1} MiB",
+            growth / 1024.0
         );
     }
 }
