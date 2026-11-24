@@ -330,6 +330,52 @@ gst-launch-1.0 audiotestsrc is-live=true ! audio/x-raw,format=S16LE,rate=48000,c
 gst-launch-1.0 snapsrc ! audioconvert ! audioresample ! autoaudiosink
 ```
 
+## Host test plan (from 2026-11-24)
+
+Tests to try one by one, mostly for the shared server daemon (`docs/shared-server.md`).
+Refer to them by number ("host test 3"). The numbers stay fixed: new tests are appended,
+and tests that are done keep their number with a result line.
+
+Already done (2026-11-24): `CONTROL=1 STREAM=a make listen-send` and `STREAM=b make
+listen-send` in two terminals join one server, and Snapweb switches a client between `a`
+and `b`.
+
+The daemon's process name is cut to 15 characters, so `pgrep`/`pkill` need
+`-x gst-snapcast-da`. Its log is `$XDG_RUNTIME_DIR/gst-snapcast/daemon.log`.
+
+1. **Crash recovery.** With the two senders above running, run `pkill -9 -x
+   gst-snapcast-da`. Expect both pipelines to keep running and a new daemon to start
+   within a few seconds. Streams `a` and `b` should come back in Snapweb, with their
+   track titles. Receivers may stop briefly.
+2. **Grace exit.** Stop both senders. About 5 s later the daemon should be gone
+   (`pgrep -x gst-snapcast-da` prints nothing). A new sender starts a new daemon.
+3. **Log and doctor.** Run `make doctor` and read the daemon section. Read `daemon.log`
+   after tests 1 and 2. It should show the connects, the restart after the crash and the
+   grace exit, with no unexpected errors.
+4. **Different options.** With one sender running, start a second one with
+   `BUFFER_MS=500 CONTROL=0`. It joins the existing server, whose options win. Expect a
+   warning from `snapsink` that its effective settings differ. Is the message clear?
+5. **Port conflict.** While the daemon runs, start `MODE=embedded make listen-send`. It
+   wants port 1704 in its own process, so it should fail with a clear error, not hang.
+6. **A second machine.** Run `make listen-recv HOST=<sender-ip>` there, then `HOST=`
+   (mDNS). Open the firewall on the sender first
+   (`sudo firewall-cmd --add-port=1704/tcp --add-service=mdns`). With `SRC=ticks`, all
+   rooms should sound like a single click.
+7. **Mixed clients.** Use `snapsrc` on one device, the C++ `snapclient` on another, and a
+   phone app (Snapdroid) if available. They should stay in sync, and volume and mute
+   should work per client from Snapweb.
+8. **Bluetooth speaker.** Play through a Bluetooth speaker next to a wired output, and
+   raise `LATENCY_MS` on the Bluetooth receiver until the two line up. Note the value.
+9. **Tarball install.** Run `make uninstall`, then `make dist`. Unpack
+   `target/dist/*.tar.gz` outside the tree and run `./install.sh`, then repeat the
+   two-stream test without `LOCAL=1`. This checks the path a user without the source
+   takes, including the PATH note and the `gst-inspect` check. Afterwards
+   `./install.sh --uninstall`, or `make install` again.
+10. **Overnight run.** Leave a file (or `SRC=desktop`) playing with a receiver for hours.
+    Note dropouts, drift you can hear, and the daemon's memory over time
+    (`ps -o rss= -C gst-snapcast-da`). This also feeds the open snapsrc wander item
+    (`docs/claude/memory.md`).
+
 ## Gotchas
 
 General ones are in [testing.md](testing.md#gotchas-both-environments).

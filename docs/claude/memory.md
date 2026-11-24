@@ -34,10 +34,11 @@ Last updated: 2026-11-22, end of session (shared server daemon done; `auth` opti
    - **`make dist`:** a tarball with plugins, daemon, `install.sh` (user, `--system`,
      `--uninstall`), `README.txt`, `BUILD-INFO`. README: a paths table, current status.
 3. **Next session, candidates (the user picks):**
-   - the user's host test of the daemon: `make install`, `make doctor`,
-     `CONTROL=1 STREAM=a make listen-send` and `STREAM=b make listen-send` in two
-     terminals, Snapweb shows both streams, Ctrl+C on the first leaves the second
-     playing; or the same from a `make dist` tarball;
+   - the user's host tests of the daemon: two streams in one server with Snapweb
+     switching between them **passed (2026-11-24)**. The rest is the numbered "Host test
+     plan" in `docs/testing-host.md` (1–10: crash recovery, grace exit, log, option
+     mismatch, port conflict, second machine, mixed clients, Bluetooth, tarball,
+     overnight); the user runs them over the next days and reports by number;
    - the snapsrc wander experiment (Open items), measured as usual;
    - upstream PRs for the 14 fork commits (none opened yet).
    Known, older: `snapcast-control`'s crate doctest calls `serve_http` and fails with
