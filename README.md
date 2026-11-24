@@ -321,7 +321,51 @@ gst-launch-1.0 snapsrc ! audioconvert ! audioresample ! autoaudiosink
 
 More recipes (desktop audio, files, several streams, devices, EQ, recording) and an
 introduction to `gst-launch-1.0`: [docs/pipelines.md](docs/pipelines.md).
-`make listen-show` prints the commands of the listening tests with a note per element.
+### Listening tests
+
+`make listen-<command>` runs a sender or receivers on real speakers
+([scripts/listen.sh](scripts/listen.sh)). Before it runs anything, it prints each command, ready
+to copy, with a note per element. It uses the installed plugins; add `LOCAL=1` to use a fresh
+release build from this tree instead.
+
+| Command | What it runs |
+|---|---|
+| `make listen-send` | sender: `SRC ! snapsink` |
+| `make listen-recv` | receiver: `snapsrc ! SINK` |
+| `make listen-cpp-client` | receiver: the C++ `snapclient` |
+| `make listen-cpp-server` | sender: the C++ `snapserver`, fed by `SRC` through a pipe |
+| `make listen-pair` | `recv` and `cpp-client` together (needs a running sender) |
+| `make listen-all` | `send`, `recv` and `cpp-client` on this machine |
+| `make listen-show WHAT=send` | prints the commands and notes, runs nothing (`WHAT` defaults to `all`) |
+
+Variables go on the command line, e.g. `make listen-send SRC=sine` or
+`SRC=sine make listen-send`:
+
+| Variable | Default | Meaning | Example |
+|---|---|---|---|
+| `SRC` | `ticks` | What the sender plays: `ticks` (a click every second; in sync, several receivers sound like one click), `sine` (440 Hz), `desktop` (what the desktop plays, via PipeWire), `mic`, or `file:<path>` (any format GStreamer decodes) | `SRC=file:assets/audio/freejazz_medley.flac` (CC0, in this repo), `SRC="file:$HOME/Music/My Song.flac"` |
+| `STREAM` | `default` | The stream's name, shown in Snapweb and other controllers. A name, not the audio: that's `SRC` | `STREAM=Kitchen` |
+| `PORT` | `1704` | Stream port of the server (sender) or the one to connect to (receiver) | `PORT=1804` |
+| `HOST` | `127.0.0.1` | Server the receivers connect to; empty finds one via mDNS | `HOST=192.168.1.10`, `HOST=` |
+| `MODE` | `auto` | Where `snapsink`'s server runs: `auto` (shared daemon, else embedded), `shared`, `embedded` | `MODE=embedded` |
+| `CODEC` | `pcm` | Stream codec: `pcm` or `flac` | `CODEC=flac` |
+| `BUFFER_MS` | `1000` | End-to-end buffer: how far ahead of play-out the audio is sent | `BUFFER_MS=500` |
+| `LATENCY_MS` | `0` | Extra output latency of the receivers (e.g. a Bluetooth speaker) | `LATENCY_MS=150` |
+| `CONTROL` | `0` | `1`: the sender also serves JSON-RPC on 1705 and Snapweb on http://<host>:1780/ | `CONTROL=1` |
+| `SNAPWEB_DIR` | `~/.local/share/snapweb` | Snapweb's files for `CONTROL=1` (get them with `scripts/fetch-snapweb.sh`) | `SNAPWEB_DIR=/opt/snapweb` |
+| `SINK` | `autoaudiosink` | GStreamer sink of `listen-recv` | `SINK=pulsesink` |
+| `SOUNDCARD` | `default` | ALSA device of the C++ `snapclient` | `SOUNDCARD=hw:Loopback,0,1` |
+| `SNAPCLIENT`, `SNAPSERVER` | from `PATH` | The C++ binaries | `SNAPCLIENT=/opt/snapcast/bin/snapclient` |
+| `QUIET` | `0` | `1`: print the commands without the notes | `QUIET=1` |
+| `LOCAL` | unset | `1`: use a fresh release build from this tree, not the installed plugins | `LOCAL=1` |
+| `GST_DEBUG` | unset | GStreamer debug log | `GST_DEBUG=snapsink:5,snapcast*:4` |
+
+For example, play a file with Snapweb on the sender, and listen on another machine:
+
+```sh
+make listen-send CONTROL=1 STREAM=Music SRC="file:$HOME/Music/My Song.flac"
+make listen-recv HOST=192.168.1.10        # on the receiver machine
+```
 
 ### Sender and receivers on different machines
 
