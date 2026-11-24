@@ -7,9 +7,9 @@ the prototype (P1–P4 in detail, every decision with its reasons, the fixed lim
 L2–L13, all measurements) is in [memory-old-2026-11-22.md](memory-old-2026-11-22.md),
 frozen; the evaluation in [../evaluation.md](../evaluation.md).
 
-Last updated: 2026-11-22, end of session (shared server daemon done; `auth` optional in the fork; `make dist`).
+Last updated: 2026-11-24, end of session (host test plan; DLNA design agreed, PoC step 1 prepared).
 
-## Resume here (2026-11-22)
+## Resume here (2026-11-24)
 
 1. **The feasibility prototype is done: go** (user, 2026-11-22, agreeing to
    `docs/evaluation.md`). F1–F5 met; F1 and F2 with caveats (see Open items).
@@ -46,15 +46,22 @@ Last updated: 2026-11-22, end of session (shared server daemon done; `auth` opti
      `go-gst` + `snapsink` for the PoC. Forks are submodules `dlna/dms`,
      `dlna/gmrender-resurrect` (branch `aanno/fixes`). PoC step 1 prepared
      (2026-11-24): dms `-snapcastStream`, gmrender `--snapcast-formats`, `make
-     dlna-build`, recipe in `docs/dlna.md` ("Running PoC step 1"); checked by hand with
-     SOAP. Waiting for the user's run with BubbleUPnP (cases A–C); then step 2;
+     dlna-build`; checked by hand with SOAP. Tests and setup: `docs/dlna-tests.md`
+     (numbered 0–6). **First host run (2026-11-24): BubbleUPnP did not find gmrender**
+     started on the host; suspected cause the Fedora firewall (SSDP, UDP 1900), not
+     yet confirmed (DLNA test 0). Then tests 1–3 (cases A–C), then PoC step 2;
    - the snapsrc wander experiment (Open items), measured as usual;
    - upstream PRs for the 14 fork commits (none opened yet).
    Known, older: `snapcast-control`'s crate doctest calls `serve_http` and fails with
    `--no-default-features` (a small fork fix).
-4. **Pushed** by the user on 2026-11-22: the fork up to `1b5b3b5`, this repo up to
-   `9985ef8`. **Not pushed yet:** fork `60cb098`; this repo `d2a2201`, `31b23f3`,
-   `0ba5055`, `4c682d3` and the session-end commit.
+4. **Done on 2026-11-24:** `listen.sh` rejects a file path in `STREAM` (it's the
+   name; the audio is `SRC=file:…`); README table of the listening-test variables; the
+   numbered host test plan (`docs/testing-host.md`); DLNA design `docs/dlna.md` and
+   tests `docs/dlna-tests.md`; forks `dlna/dms`, `dlna/gmrender-resurrect` added;
+   `make dlna-build`. **Pushed** by the user up to `1d0ff94` (this repo). **Not pushed
+   yet:** dms fork `5e97329`, gmrender fork `f5997b3` (push those first), this repo
+   `052289a` and later. The user's `.devcontainer/Dockerfile` change (Go, libupnp) is
+   theirs to commit.
 5. **Housekeeping:** the xerj index (`ax-docs`, `ax-snapcast-rs-docs`) is a snapshot from
    before 2026-11-21; reindex on the host before relying on it (`docs/claude/mcp-xerj.md`).
 6. **Offer, not done:** start the C++ client in `listen.sh pair` with `--instance 2`, if the
