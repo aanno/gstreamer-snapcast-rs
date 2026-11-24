@@ -58,10 +58,9 @@ Last updated: 2026-11-24, end of session (host test plan; DLNA design agreed, Po
    name; the audio is `SRC=file:…`); README table of the listening-test variables; the
    numbered host test plan (`docs/testing-host.md`); DLNA design `docs/dlna.md` and
    tests `docs/dlna-tests.md`; forks `dlna/dms`, `dlna/gmrender-resurrect` added;
-   `make dlna-build`. **Pushed** by the user up to `1d0ff94` (this repo). **Not pushed
-   yet:** dms fork `5e97329`, gmrender fork `f5997b3` (push those first), this repo
-   `052289a` and later. The user's `.devcontainer/Dockerfile` change (Go, libupnp) is
-   theirs to commit.
+   `make dlna-build`. **Pushed** by the user up to `df00590` (this repo, including the
+   devcontainer with Go and libupnp). **Not pushed yet:** this repo's session-end
+   commit; check the forks `5e97329` (dms) and `f5997b3` (gmrender) are pushed too.
 5. **Housekeeping:** the xerj index (`ax-docs`, `ax-snapcast-rs-docs`) is a snapshot from
    before 2026-11-21; reindex on the host before relying on it (`docs/claude/mcp-xerj.md`).
 6. **Offer, not done:** start the C++ client in `listen.sh pair` with `--instance 2`, if the
