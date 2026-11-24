@@ -345,14 +345,16 @@ resource); not part of the PoC.
 
 ## PoC steps
 
-1. **Control point check, no code:** does BubbleUPnP (and one more control point) pass a
+1. **Control point check:** does BubbleUPnP (and one more control point) pass a
    `snapcast` resource to a renderer that advertises it, and does it **prefer** it over
    the HTTP resource (order in the listing, order in `SinkProtocolInfo`)? Does it send
-   all of the item's resources in `CurrentURIMetaData` (the renderer-side fallback)? Test with a hand-written DIDL
-   item (a static file served by dms or a tiny test server) and a renderer that only
-   logs `SetAVTransportURI`. If control points filter the resource out, the design
-   needs a fallback (e.g. an `http-get` resource whose URL redirects or describes the
-   session). This is the biggest risk, so it comes first.
+   all of the item's resources in `CurrentURIMetaData` (the renderer-side fallback)?
+   If control points filter the resource out, the design needs a fallback (e.g. an
+   `http-get` resource whose URL redirects or describes the session). This is the
+   biggest risk, so it comes first. How to run it: below.
+   Prepared 2026-11-24 (dms `-snapcastStream`, gmrender `--snapcast-formats`, both PoC
+   options in the forks); checked by hand with SOAP requests, waiting for real
+   control points.
 2. **`snapsrc` URI handler and stream join**, tested with
    `gst-launch-1.0 playbin uri=snapcast://…` against a `snapsink` stream.
 3. **gmrender** plays `snapcast://` URIs, advertises them, maps Pause/Seek/position.
@@ -366,6 +368,46 @@ resource); not part of the PoC.
    The ffmpeg and daemon-socket feed replaces GStreamer in dms only if the PoC succeeds
    and dms upstream is interested.
 5. **Two renderers, one control point**, then the overnight test as for the daemon.
+
+### Running PoC step 1
+
+Build both forks into `target/dlna` (needs Go, libupnp, autotools and GStreamer's
+development files; all are in the devcontainer, and the devcontainer is on the home
+network, so control points on the LAN see both):
+
+```sh
+make dlna-build
+```
+
+Terminal 1, the media server, with any folder of music. Every audio item gets a
+Snapcast resource first, pointing at one fixed stream on this machine:
+
+```sh
+target/dlna/dms -path ~/Music -friendlyName "dms snapcast PoC" \
+    -snapcastStream 'snapcast://{host}:1704/default?control=1705'
+```
+
+Terminal 2, the renderer. `--snapcast-formats` puts `snapcast:*:audio/L16:*` (and
+FLAC) first in its `SinkProtocolInfo`; `-I` is the network interface for UPnP:
+
+```sh
+target/dlna/gmediarender -f "gmrender snapcast PoC" -I eno1 --logfile stdout \
+    --snapcast-formats audio/L16,audio/flac 2>&1 | grep --line-buffered -E 'AVTransportURI|snapcast'
+```
+
+Then, in the control point (BubbleUPnP, and one more if possible): pick "gmrender snapcast
+PoC" as the renderer, browse "dms snapcast PoC", play a track. Nothing will sound yet
+(`snapsrc` has no URI handler until step 2); the log is the result:
+
+| Case | Run gmrender | What to read in the log |
+|---|---|---|
+| A | as above | `AVTransportURI:` is `snapcast://…` (chosen and preferred) or `http://…` (ignored) |
+| B | as above | `AVTransportURIMetaData:` lists both `<res>`, or only the chosen one (renderer-side fallback possible?) |
+| C | without `--snapcast-formats` | `AVTransportURI:` is `http://…`: the fallback for renderers without Snapcast works |
+
+Also note whether the control point complains about the item (unsupported, proxying).
+dms itself can be checked without a control point (`just browse-root` in `dlna/dms`, with
+`host` set to its address).
 
 ## Repository layout during the PoC
 

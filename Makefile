@@ -1,5 +1,5 @@
 .PHONY: setup check fmt fmt-fix clippy test doc build release inspect submodule \
-	dist install uninstall install-system uninstall-system test-interop test-aloop test-aloop-shared test-endurance test-mdns doctor \
+	dist dlna-build install uninstall install-system uninstall-system test-interop test-aloop test-aloop-shared test-endurance test-mdns doctor \
 	listen-send listen-recv listen-cpp-client listen-cpp-server listen-pair listen-all listen-show
 
 PLUGIN_PATH := $(CURDIR)/target/debug
@@ -141,6 +141,18 @@ test-endurance:
 ## mDNS: snapsrc without a host finds a snapsink (needs multicast on the network)
 test-mdns:
 	cargo test -p gst-plugin-snapsrc --test mdns -- --ignored
+
+## DLNA PoC (docs/dlna.md): build the dms and gmrender-resurrect forks into target/dlna.
+## Needs Go, libupnp (Debian libupnp-dev, Fedora libupnp-devel), autotools and the
+## GStreamer development files.
+DLNA_DIR := $(CURDIR)/target/dlna
+dlna-build:
+	cd dlna/dms && go build -o $(DLNA_DIR)/dms .
+	cd dlna/gmrender-resurrect && test -x configure || ./autogen.sh
+	install -d $(DLNA_DIR)/gmrender-build
+	cd $(DLNA_DIR)/gmrender-build && { test -f Makefile || $(CURDIR)/dlna/gmrender-resurrect/configure; } && $(MAKE)
+	ln -sf gmrender-build/src/gmediarender $(DLNA_DIR)/gmediarender
+	@echo "Built $(DLNA_DIR)/dms and $(DLNA_DIR)/gmediarender"
 
 ## Report tools, elements and sound devices needed for building and testing
 doctor:
