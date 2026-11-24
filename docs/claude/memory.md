@@ -44,8 +44,10 @@ Last updated: 2026-11-22, end of session (shared server daemon done; `auth` opti
      over HTTP; gmrender + `snapsrc` URI handler; one session per item (independent
      playback not needed); pause/seek global, stop leaves; item's own rate; dms uses
      `go-gst` + `snapsink` for the PoC. Forks are submodules `dlna/dms`,
-     `dlna/gmrender-resurrect` (branch `aanno/fixes`). Next: PoC step 1 (do control
-     points pass and prefer the resource; which protocolInfo parameters they need);
+     `dlna/gmrender-resurrect` (branch `aanno/fixes`). PoC step 1 prepared
+     (2026-11-24): dms `-snapcastStream`, gmrender `--snapcast-formats`, `make
+     dlna-build`, recipe in `docs/dlna.md` ("Running PoC step 1"); checked by hand with
+     SOAP. Waiting for the user's run with BubbleUPnP (cases A–C); then step 2;
    - the snapsrc wander experiment (Open items), measured as usual;
    - upstream PRs for the 14 fork commits (none opened yet).
    Known, older: `snapcast-control`'s crate doctest calls `serve_http` and fails with
