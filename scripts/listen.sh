@@ -27,7 +27,7 @@
 #   SOUNDCARD  ALSA PCM for the C++ snapclient (default: default), e.g. hw:Loopback,0,1
 #   HOST       server for receivers (default 127.0.0.1; empty, i.e. HOST=, finds one via mDNS)
 #   PORT       stream port (default 1704)
-#   STREAM     stream name (default: default)
+#   STREAM     stream name shown in Snapweb (default: default); not the audio, see SRC
 #   CODEC      pcm (default) | flac
 #   BUFFER_MS  end-to-end buffer (default 1000)
 #   LATENCY_MS extra output latency for snapsrc/snapclient (default 0)
@@ -380,6 +380,18 @@ if [ "$mode" = show ]; then
     explain_footer
     exit 0
 fi
+
+case "$SRC" in
+    file:*) if [ ! -r "${SRC#file:}" ]; then
+                echo "SRC: cannot read '${SRC#file:}'" >&2; exit 2
+            fi ;;
+esac
+case "$STREAM" in
+    */*|*.flac|*.mp3|*.ogg|*.opus|*.wav|*.m4a)
+        echo "STREAM is the stream's name in Snapcast, not what it plays: did you mean" >&2
+        echo "SRC=file:$STREAM ? (use a plain name for STREAM, e.g. STREAM=Music)" >&2
+        exit 2 ;;
+esac
 
 if [ "$SRC" = desktop ] && [ "$what" = all ]; then
     echo "SRC=desktop with 'all' is a feedback loop (the receivers play into the captured" >&2
