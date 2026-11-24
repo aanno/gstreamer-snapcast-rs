@@ -11,3 +11,9 @@
 	url = https://github.com/snapcast/snapweb.git
 	shallow = true
 	update = none
+[submodule "dlna/gmrender-resurrect"]
+	path = dlna/gmrender-resurrect
+	url = git@github.com:aanno/gmrender-resurrect.git
+[submodule "dlna/dms"]
+	path = dlna/dms
+	url = git@github.com:aanno/dms.git

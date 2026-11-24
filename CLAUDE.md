@@ -96,6 +96,16 @@ Run `make check` before declaring work done.
   snapcast-rs when the right fix belongs in the library (e.g. runtime `add_stream`/`remove_stream`).
 - Keep the `version` of the path deps in sync with `snapcast-rs/Cargo.toml`.
 
+## DLNA submodules (PoC, `docs/dlna.md`)
+
+- `dlna/dms` (fork `aanno/dms` of `anacrolix/dms`, Go) and `dlna/gmrender-resurrect`
+  (fork `aanno/gmrender-resurrect` of `hzeller/gmrender-resurrect`, C), both on branch
+  `aanno/fixes`. Same workflow as `snapcast-rs`: develop and commit in the fork, then bump
+  the pointer here as its own commit (`build(deps): bump dms (<what>)`).
+- They are not part of `make check` and not of the Cargo workspace. Follow each
+  project's own conventions; keep changes small and upstreamable where possible, and mark
+  PoC-only hacks as such.
+
 ## Reference submodules (read-only)
 
 - `reference/snapcast` (C++ Snapcast, v0.35.0) and `reference/snapweb` (v0.9.3) are
