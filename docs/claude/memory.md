@@ -39,12 +39,13 @@ Last updated: 2026-11-22, end of session (shared server daemon done; `auth` opti
      plan" in `docs/testing-host.md` (1–10: crash recovery, grace exit, log, option
      mismatch, port conflict, second machine, mixed clients, Bluetooth, tarball,
      overnight); the user runs them over the next days and reports by number;
-   - **DLNA/UPnP PoC** (new goal, 2026-11-24): design `docs/dlna.md` (proposed, the
-     user's decisions in it): dms offers a `snapcast://` resource, preferred over HTTP;
-     gmrender + `snapsrc` URI handler; one session per item; pause/seek global; dms
-     uses `go-gst` + `snapsink` for the PoC. Waiting for the user's review of the doc
-     and for the forks `aanno/dms`, `aanno/gmrender-resurrect` (submodules under
-     `dlna/`). PoC step 1 (do control points pass and prefer the resource) comes first;
+   - **DLNA/UPnP PoC** (new goal, 2026-11-24): design `docs/dlna.md` **agreed**:
+     dms offers a `snapcast://host:port/stream?control=` resource (no volume), preferred
+     over HTTP; gmrender + `snapsrc` URI handler; one session per item (independent
+     playback not needed); pause/seek global, stop leaves; item's own rate; dms uses
+     `go-gst` + `snapsink` for the PoC. Forks are submodules `dlna/dms`,
+     `dlna/gmrender-resurrect` (branch `aanno/fixes`). Next: PoC step 1 (do control
+     points pass and prefer the resource; which protocolInfo parameters they need);
    - the snapsrc wander experiment (Open items), measured as usual;
    - upstream PRs for the 14 fork commits (none opened yet).
    Known, older: `snapcast-control`'s crate doctest calls `serve_http` and fails with

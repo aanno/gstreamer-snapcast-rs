@@ -1,6 +1,7 @@
 # DLNA/UPnP with Snapcast streams (design)
 
-Status: **proposed** (2026-11-24), nothing implemented yet. Targets for the proof of
+Status: **agreed** (2026-11-24, open question 1 is left to PoC step 1), nothing
+implemented yet. Targets for the proof of
 concept: the media server [dms](https://github.com/anacrolix/dms) (Go) and the renderer
 [gmrender-resurrect](https://github.com/hzeller/gmrender-resurrect) (C, GStreamer). Both
 are used at home and work there. Background: `docs/gstreamer-plugins/dlna-rs-gstreamer-1.md`
@@ -29,7 +30,9 @@ with as little new protocol as possible:
 3. **The control point starts and pauses the stream**, as in any DLNA use case.
 4. **Pause and seek are global:** they act on the session, for all renderers in it.
 5. **A second renderer joins** a running session.
-6. **The URI** names host, port and stream, and can carry an initial volume.
+6. **The URI** names host, port and stream. An initial volume was considered and
+   dropped (2026-11-24): it would be the same for every room, and the Snapcast server
+   already remembers each room's volume.
 7. **dms uses GStreamer for the PoC** (`snapsink` in a `go-gst` pipeline) for
    Snapcast sessions; ffmpeg stays for everything else. Not a clean design, but quick.
 8. **The renderer must know the new type and prefer it** over the HTTP resource
@@ -50,12 +53,12 @@ with as little new protocol as possible:
 
 ### In the listing (DIDL-Lite)
 
-An item lists several `<res>` elements. dms adds one more:
+An item lists several `<res>` elements. dms adds one more, first (decision 8):
 
 ```xml
-<res protocolInfo="http-get:*:audio/flac:*">http://nas:1338/res?path=...</res>
-<res protocolInfo="snapcast:*:audio/flac;rate=44100;channels=2;bits=16:DLNA.ORG_OP=00;DLNA.ORG_FLAGS=...">
+<res protocolInfo="snapcast:*:audio/flac;rate=44100;channels=2;bits=16:*">
   snapcast://nas:1704/dms-3f9a1c?control=1705</res>
+<res protocolInfo="http-get:*:audio/flac:*">http://nas:1338/res?path=...</res>
 ```
 
 ### protocolInfo
@@ -73,14 +76,15 @@ ConnectionManager:
   A renderer advertises what its client decodes, e.g. `snapcast:*:audio/flac:*` and
   `snapcast:*:audio/L16:*`. A matching control point compares the MIME type; the
   parameters tell the renderer what to expect.
-- **additionalInfo:** `DLNA.ORG_OP=00` (no byte or time ranges over HTTP; seeking goes
-  through the session, below). The DLNA flags mark a live stream where needed; which
-  ones control points expect is an item for the PoC.
+- **additionalInfo:** start with `*`, as gmrender advertises its own types. Add DLNA
+  parameters (`DLNA.ORG_OP=00`: no byte or time ranges, seeking goes through the
+  session; flags for a live stream) only if a control point turns out to need them
+  (PoC step 1).
 
 One item gets **one** Snapcast resource. Two (say `pcm` and `flac`) would be two
 sessions fed separately, and renderers picking different ones would not play in sync.
 Default codec `flac` (lossless, about half of PCM's bit rate, safer over Wi-Fi). The
-sample rate is the item's own (44.1 kHz for a CD rip), so dms does not resample;
+sample rate is the item's own (decided 2026-11-24) (44.1 kHz for a CD rip), so dms does not resample;
 Snapcast clients resample to their device anyway.
 
 ### Preferring the Snapcast resource (decision 8)
@@ -105,7 +109,7 @@ PoC step 1 checks which of these the control points at hand honour.
 ### URI
 
 ```text
-snapcast://<host>[:<port>]/<stream>[?control=<port>][&volume=<0..100>]
+snapcast://<host>[:<port>]/<stream>[?control=<port>]
 ```
 
 | Part | Default | Meaning |
@@ -114,16 +118,12 @@ snapcast://<host>[:<port>]/<stream>[?control=<port>][&volume=<0..100>]
 | `port` | `1704` | Its stream port |
 | `stream` | (required) | The Snapcast stream (= the session), percent-encoded |
 | `control` | `1705` | Its JSON-RPC port. The renderer needs it to join the stream and to send Play/Pause/Seek |
-| `volume` | unset | Initial volume of a renderer that joins, in percent |
 
 Format details are not in the URI: they are in `protocolInfo`, and the Snapcast stream
 announces them again to every client (its codec header).
 
-On `volume`: the URI is the same for every renderer that joins, so its volume is the
-same for all of them. It applies once, when a renderer joins. After that the renderer's
-own volume (RenderingControl, below) wins. The Snapcast server remembers each client's
-volume across sessions, so without `volume` a room keeps its last level. The PoC should
-show whether an initial volume in the URI is worth having (Open questions).
+Volume is not in the URI (decision 6): each room keeps its own, through
+RenderingControl and the Snapcast server's memory of each client.
 
 ## Sessions
 
@@ -132,7 +132,7 @@ the same moment; that is what the Snapcast server does.
 
 **Stream name per item** (`dms-<hash of the item id>`): every renderer given the same
 item joins the same session. Playing the same item in two rooms independently is
-therefore not possible. If that turns out to matter, a `session` part can be added later.
+therefore not possible, and not needed (2026-11-24).
 
 ### How a session runs
 
@@ -163,7 +163,7 @@ control point          renderer A / B (gmrender + snapsrc)     daemon           
   therefore also sees a pause that came from B.
 - **Join (decision 5):** `Play` on a session that is already playing changes nothing.
   The renderer simply joins in.
-- **Stop is local** (proposal): `Stop` makes that renderer leave the session; the others
+- **Stop is local** (decided 2026-11-24): `Stop` makes that renderer leave the session; the others
   go on playing. Pause is for the whole session; Stop is how one room drops out. When the
   last renderer has left and the session is paused or stopped, dms closes it after a
   while (idle timeout).
@@ -283,8 +283,7 @@ gmrender plays every URI through `playbin`, and passes it on without filtering b
 (`output_gstreamer.c`, `output_gstreamer_set_uri`). So most of the work is in `snapsrc`:
 
 - **`snapcast://` URI handler** (GStreamer's `GstURIHandler`): `playbin` then picks
-  `snapsrc` for such a URI by itself. The URI sets host, port, stream, control port and
-  volume.
+  `snapsrc` for such a URI by itself. The URI sets host, port, stream and control port.
 - **Joining a stream:** `snapsrc` connects as today, then, via JSON-RPC on the control
   port, finds its own group (`Server.GetStatus`, by its client id) and sets it to the
   stream (`Group.SetStream`). Today `snapsrc` plays whatever the server assigned.
@@ -378,11 +377,14 @@ libupnp plus autotools (gmrender). After the PoC, the DLNA integration may move 
 
 ## Open questions
 
-1. Do control points pass a `snapcast` resource through, and prefer it (PoC step 1)?
-   Which DLNA flags do they expect for a live stream?
-2. Is the initial `volume` in the URI worth having, given that it's the same for every
-   renderer and the Snapcast server remembers each room's volume?
-3. One session per item: is independent playback of the same item in two rooms needed?
-4. Stop leaves the session (proposal above): or should Stop stop the session for all?
-5. Does dms resample to one rate per session, or keep the item's own rate (proposal)?
-   Gapless playback across tracks with different rates is out of scope either way.
+1. Do control points pass a `snapcast` resource through, and prefer it? Which DLNA
+   parameters do they expect in protocolInfo? No way to decide this on paper: PoC
+   step 1 answers it. Start with `*` (no DLNA parameters) and add only what a control
+   point demands.
+
+Answered (2026-11-24, the user):
+
+- Initial `volume` in the URI: dropped (decision 6).
+- Independent playback of the same item in two rooms: not needed; one session per item.
+- Stop: leaves the session; the others play on.
+- Sample rate: the item's own; dms does not resample.
