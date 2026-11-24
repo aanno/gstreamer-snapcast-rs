@@ -29,6 +29,8 @@ RUN apt-get update \
         # Avahi's dns_sd compat library: snapcast-rs's own snapserver-rs (astro-dnssd)
         # needs it to build. Our plugins use the pure-Rust mdns-sd instead.
         libavahi-compat-libdnssd-dev \
+        # DLNA/UPnP PoC dependencies (dms, gmrender-resurrect)
+        golang libupnp-dev libupnp-doc \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
