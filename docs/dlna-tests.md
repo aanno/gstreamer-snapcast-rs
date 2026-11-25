@@ -14,10 +14,20 @@ make dlna-build
 ```
 
 On the Fedora host, `make dlna-build` works too (`sudo dnf install golang libupnp-devel
-autoconf automake libtool gstreamer1-devel gstreamer1-plugins-base-devel`), or build
-gmrender by hand in `dlna/gmrender-resurrect` (`./autogen.sh && ./configure && make`).
-gmrender runs from the build tree without installing; only its icons are missing then
-(harmless errors in the log).
+autoconf automake libtool gstreamer1-devel gstreamer1-plugins-base-devel`). It builds
+gmrender out of tree and **installs** it into `target/dlna/gmrender`. A build by hand in
+`dlna/gmrender-resurrect` must also be installed, into a prefix of its own:
+
+```sh
+./autogen.sh && ./configure --prefix=$HOME/.local/opt/gmrender-poc && make && make install
+$HOME/.local/opt/gmrender-poc/bin/gmediarender ...
+```
+
+Run from the build tree (`./src/gmediarender`), gmrender has no icons: its description
+lists them, but fetching them fails ("Could not stat …grender-64x64.png"). A by-hand
+build in place also blocks `make dlna-build` (`make distclean` there first). Write logs
+outside the submodule (e.g. `| tee /tmp/gmr.log`), so they don't show up as untracked
+files in it.
 
 Terminal 1, the media server. Every audio item gets a Snapcast resource first,
 pointing at one fixed stream on this machine:
@@ -45,10 +55,9 @@ installed one).
 
 ### Firewall (Fedora host)
 
-Discovery uses SSDP: control points send a search to UDP 1900 (multicast) and wait for
-answers. Fedora's default zone (FedoraWorkstation) opens 1025–65535 but not 1900, so a
-renderer or server on the host is **not found** (2026-11-24: gmrender started on the
-host was not found by BubbleUPnP; cause not yet confirmed, see test 0).
+Only if firewalld runs (the user's host has none, 2026-11-25). Discovery uses SSDP:
+control points send a search to UDP 1900 (multicast) and wait for answers. Fedora's
+default zone (FedoraWorkstation) opens 1025–65535 but not 1900.
 
 ```sh
 sudo firewall-cmd --get-active-zones; sudo firewall-cmd --list-all
@@ -68,8 +77,13 @@ sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if
      machine lists it? If not, multicast doesn't get through (firewall above; Wi-Fi
      client isolation or a guest network).
    Record which fix was needed; it goes into the gotchas of `testing-host.md`.
-   Result 2026-11-24: not found. 2026-11-25: dms and gmrender start; the PoC gmrender
-   is not listed next to the installed one: same default UUID suspected, retry with `-u`.
+   - The PoC gmrender runs installed (icons), not from its build tree (Setup)?
+   Result 2026-11-24: not found. 2026-11-25: the host has no firewall; the installed
+   gmrender (`-f classic`) appears in BubbleUPnP, the PoC build run from its build tree
+   (`./src/gmediarender`) does not. Both used the default UUID; BubbleUPnP fetched the
+   classic one's icon (a sign it added the device), the PoC's icons were missing. From
+   the devcontainer, the PoC build with its own UUID answers an SSDP search and serves
+   a valid description. Next: the PoC build installed (icons) and with `-u`.
 1. **Chosen and preferred (case A).** In BubbleUPnP, pick the renderer, browse dms, play
    a track. Nothing sounds yet (no `snapcast://` handler before PoC step 2). Read
    `AVTransportURI:` in gmrender's log: `snapcast://…` means the control point passed
