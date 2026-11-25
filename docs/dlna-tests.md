@@ -127,6 +127,16 @@ sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if
    the fallback works, and only the combination fails (the control point picks
    `snapcast` but can't handle it). c fails: the setup, not Snapcast.
 
+   Results (BubbleUPnP):
+   - **a, 2026-11-25: plays over HTTP.** The renderer's `snapcast:` entries do not
+     disturb BubbleUPnP; the problem needs the Snapcast resource in the item.
+     Side findings: BubbleUPnP sends **its own DIDL** (own namespaces `sec:`, `pv:`)
+     with **only the chosen `<res>`**, so the renderer-side fallback (test 2) is
+     unlikely to work with it. It reached dms over **IPv6** (`http://[fd0d:…]:1338`),
+     so `{host}` in a `snapcast://` URI would be an IPv6 address too: check that the
+     Snapcast server and `snapsrc` handle IPv6 (or let dms prefer IPv4) before step 2.
+   - b: open. c: not needed (a plays).
+
 Later steps get their tests here when they are built: `playbin uri=snapcast://…`
 (PoC step 2), gmrender playing it with Pause/Seek going to the session (step 3), dms
 feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
