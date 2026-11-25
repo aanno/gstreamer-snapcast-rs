@@ -185,7 +185,18 @@ sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if
    Results 2026-11-25: **a: nothing plays, no `SetAVTransportURI`**; the log excerpt
    shows no subscription from BubbleUPnP either, so it should be repeated with the
    renderer surely selected. b: first attempt failed on the command line (dms needs
-   `-snapcastStream` and a space before `-snapcastFormat`).
+   `-snapcastStream` and a space before `-snapcastFormat`). **b, second attempt:**
+   no sound, BubbleUPnP shows "playing"; dms logged `snapcast session requested` 7×
+   within a second (every track of the album) from the **phone's** address, while
+   gmrender's log has no subscription after its restart: BubbleUPnP was playing on
+   the phone (local renderer), not on gmrender, and its queue preloaded the session
+   URLs. So: with `audio/flac`, BubbleUPnP uses the resource; and a client unaware of
+   Snapcast gets the one-line answer instead of audio, which content negotiation would
+   avoid. Repeat a and b with the renderer re-selected (below).
+
+   **After restarting gmrender, re-select it in BubbleUPnP** and check for
+   `Subscription request` in gmrender's log before playing: otherwise BubbleUPnP may
+   play on the phone.
 
 Later steps get their tests here when they are built: `playbin uri=snapcast://…`
 (PoC step 2), gmrender playing it with Pause/Seek going to the session (step 3), dms
