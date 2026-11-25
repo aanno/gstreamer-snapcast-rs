@@ -76,14 +76,17 @@ sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if
    - `gssdp-discover -i <iface> --timeout=5` (package `gupnp-tools`) on another Linux
      machine lists it? If not, multicast doesn't get through (firewall above; Wi-Fi
      client isolation or a guest network).
-   Record which fix was needed; it goes into the gotchas of `testing-host.md`.
+   Record which fix was needed; it goes into the gotchas of `testing-host.md` (done).
    - The PoC gmrender runs installed (icons), not from its build tree (Setup)?
    Result 2026-11-24: not found. 2026-11-25: the host has no firewall; the installed
    gmrender (`-f classic`) appears in BubbleUPnP, the PoC build run from its build tree
    (`./src/gmediarender`) does not. Both used the default UUID; BubbleUPnP fetched the
    classic one's icon (a sign it added the device), the PoC's icons were missing. From
    the devcontainer, the PoC build with its own UUID answers an SSDP search and serves
-   a valid description. Next: the PoC build installed (icons) and with `-u`.
+   a valid description. **Passed 2026-11-25:** the PoC build, installed into a prefix
+   (icons) and with its own UUID (`-u`), appears in BubbleUPnP, also with
+   `--snapcast-formats`. Both were changed at once, so which one was needed is open;
+   always use both (Setup).
 1. **Chosen and preferred (case A).** In BubbleUPnP, pick the renderer, browse dms, play
    a track. Nothing sounds yet (no `snapcast://` handler before PoC step 2). Read
    `AVTransportURI:` in gmrender's log: `snapcast://…` means the control point passed
