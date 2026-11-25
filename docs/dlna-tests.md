@@ -182,6 +182,11 @@ sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if
    same URL for the session, e.g. `Accept: audio/x-snapcast`, and gets the
    `snapcast://` URI). No extra resource, no unknown type for the control point.
 
+   Results 2026-11-25: **a: nothing plays, no `SetAVTransportURI`**; the log excerpt
+   shows no subscription from BubbleUPnP either, so it should be repeated with the
+   renderer surely selected. b: first attempt failed on the command line (dms needs
+   `-snapcastStream` and a space before `-snapcastFormat`).
+
 Later steps get their tests here when they are built: `playbin uri=snapcast://…`
 (PoC step 2), gmrender playing it with Pause/Seek going to the session (step 3), dms
 feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
