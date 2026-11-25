@@ -163,6 +163,24 @@ sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if
    Ready 2026-11-25 (dms `5d1cad6`, gmrender `80b078d`; setup above). Also check the
    old tests in passing: the track must still play over HTTP when gmrender runs
    without `--snapcast-formats` (like test 7b).
+   Result 2026-11-25: **no `SetAVTransportURI`** again, and dms never logged
+   `snapcast session requested`: BubbleUPnP also refuses an `http-get` resource of a
+   MIME type it doesn't know (`audio/x-snapcast`), silently. Next: test 9.
+
+9. **Which MIME type does BubbleUPnP accept for the session resource?** No code
+   needed: dms takes the type as `-snapcastFormat`, gmrender advertises what
+   `--snapcast-formats` lists. Same check as test 8 (`AVTransportURI:` is dms's
+   `/snapcast?path=…` URL):
+
+   | Variant | dms | gmrender |
+   |---|---|---|
+   | a: a playlist type BubbleUPnP knows | `-snapcastFormat audio/x-scpls` | `--snapcast-formats audio/x-scpls` |
+   | b: a plain audio type | `-snapcastFormat audio/flac` | `--snapcast-formats audio/flac` |
+
+   If b works, a cleaner design follows: **content negotiation on one resource** (dms's
+   audio URL serves the music to every renderer; a Snapcast-aware renderer asks the
+   same URL for the session, e.g. `Accept: audio/x-snapcast`, and gets the
+   `snapcast://` URI). No extra resource, no unknown type for the control point.
 
 Later steps get their tests here when they are built: `playbin uri=snapcast://…`
 (PoC step 2), gmrender playing it with Pause/Seek going to the session (step 3), dms
