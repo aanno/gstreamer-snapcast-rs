@@ -32,9 +32,16 @@ first in its `SinkProtocolInfo`; `-I` is the network interface for UPnP, `-p` fi
 HTTP port (easier for the firewall):
 
 ```sh
-target/dlna/gmediarender -f "gmrender snapcast PoC" -I eno1 -p 49494 --logfile stdout \
+target/dlna/gmediarender -f "gmrender snapcast PoC" -I eno1 --logfile stdout \
+    -u 6a1c4e2f-5b3d-4c7a-9e10-2f8b6d4a1c01 -p 49500 \
     --snapcast-formats audio/L16,audio/flac 2>&1 | grep --line-buffered -E 'AVTransportURI|snapcast|Registered'
 ```
+
+**Own UUID and port** (`-u`, `-p`): every gmrender build without a compile-time UUID
+uses `GMediaRender-1_0-000-000-002` and port 49494. A second gmrender on the LAN (e.g.
+the one installed on the host) then looks like the same device, and control points show
+only one of them (2026-11-25: the PoC renderer did not appear in BubbleUPnP next to the
+installed one).
 
 ### Firewall (Fedora host)
 
@@ -46,7 +53,7 @@ host was not found by BubbleUPnP; cause not yet confirmed, see test 0).
 ```sh
 sudo firewall-cmd --get-active-zones; sudo firewall-cmd --list-all
 sudo firewall-cmd --add-service=ssdp                 # add --permanent to keep it
-sudo firewall-cmd --add-port=49494/tcp --add-port=1338/tcp   # gmrender, dms (if not open)
+sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if not open)
 ```
 
 ## Tests
@@ -54,13 +61,15 @@ sudo firewall-cmd --add-port=49494/tcp --add-port=1338/tcp   # gmrender, dms (if
 0. **Discovery.** Start gmrender (and dms) as above on the host. BubbleUPnP lists
    "gmrender snapcast PoC" as a renderer and "dms snapcast PoC" as a library (rescan
    after starting). If not:
-   - gmrender's log has `Registered IPv4 <ip>:49494`? If not, `-I` is wrong.
-   - `http://<host-ip>:49494/description.xml` opens on the phone? If not, TCP is blocked.
+   - Another gmrender on the LAN with the same UUID? Then use `-u` (above).
+   - gmrender's log has `Registered IPv4 <ip>:49500`? If not, `-I` is wrong.
+   - `http://<host-ip>:49500/description.xml` opens on the phone? If not, TCP is blocked.
    - `gssdp-discover -i <iface> --timeout=5` (package `gupnp-tools`) on another Linux
      machine lists it? If not, multicast doesn't get through (firewall above; Wi-Fi
      client isolation or a guest network).
    Record which fix was needed; it goes into the gotchas of `testing-host.md`.
-   Result 2026-11-24: not found yet (before opening the firewall).
+   Result 2026-11-24: not found. 2026-11-25: dms and gmrender start; the PoC gmrender
+   is not listed next to the installed one: same default UUID suspected, retry with `-u`.
 1. **Chosen and preferred (case A).** In BubbleUPnP, pick the renderer, browse dms, play
    a track. Nothing sounds yet (no `snapcast://` handler before PoC step 2). Read
    `AVTransportURI:` in gmrender's log: `snapcast://…` means the control point passed
