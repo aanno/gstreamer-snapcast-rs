@@ -92,6 +92,9 @@ sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if
    `AVTransportURI:` in gmrender's log: `snapcast://…` means the control point passed
    the resource through and preferred it; `http://…` means it ignored or filtered it.
    Also note any complaint ("unsupported format") or proxying by BubbleUPnP.
+   Result 2026-11-25 (BubbleUPnP, dms with `-snapcastStream`, gmrender with
+   `--snapcast-formats`): **no `SetAVTransportURI` at all**: BubbleUPnP subscribed to
+   the renderer's services but never handed it a track. Narrowing down with test 7.
 2. **All resources in the metadata (case B).** In the same log, does
    `AVTransportURIMetaData:` list both `<res>` (snapcast and http), or only the chosen
    one? Both means the renderer-side fallback (gmrender picks the Snapcast resource
@@ -110,6 +113,19 @@ sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if
 6. **dms without a control point.** In `dlna/dms`, `just browse-root` (set `host` in the
    justfile to dms's address) shows the Snapcast `<res>` first for audio items, with the
    host the request used.
+
+7. **Which side stops the control point?** Only if test 1 sends nothing. Play the same
+   track in four combinations and look for `AVTransportURI:` in gmrender's log; also
+   note what BubbleUPnP shows (error, "unsupported", spinner, plays on the phone):
+
+   | | dms with `-snapcastStream` | dms without |
+   |---|---|---|
+   | gmrender with `--snapcast-formats` | test 1 | a |
+   | gmrender without | b (= test 3) | c (upstream behaviour, must play) |
+
+   a sends `http://`: the item's Snapcast resource is the problem. b sends `http://`:
+   the fallback works, and only the combination fails (the control point picks
+   `snapcast` but can't handle it). c fails: the setup, not Snapcast.
 
 Later steps get their tests here when they are built: `playbin uri=snapcast://…`
 (PoC step 2), gmrender playing it with Pause/Seek going to the session (step 3), dms
