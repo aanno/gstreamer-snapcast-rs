@@ -106,6 +106,9 @@ sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if
    Kodi as a control point, foobar2000/upplay on the desktop, or Hi-Fi Cast). Control
    points differ in how they choose resources; one that works is enough for the PoC,
    but knowing which ones fail tells how much the renderer-side fallback matters.
+   Result 2026-11-25: upplay and muspnp tried, neither got working with this setup.
+   Another control point is hard to come by; BubbleUPnP is the one in use, so the
+   design must work with it (the `http-get` wrapper, test 8).
 5. **What does the control point decide by?** Only if test 1 gives `http://`: restart
    dms with `-snapcastFormat 'audio/flac;rate=44100;channels=2'` (and gmrender as
    before), play again. If that changes the result, the control point matches by MIME
