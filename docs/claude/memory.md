@@ -7,7 +7,7 @@ the prototype (P1–P4 in detail, every decision with its reasons, the fixed lim
 L2–L13, all measurements) is in [memory-old-2026-11-22.md](memory-old-2026-11-22.md),
 frozen; the evaluation in [../evaluation.md](../evaluation.md).
 
-Last updated: 2026-11-25 (DLNA PoC step 1 done; http-get wrapper decided and built).
+Last updated: 2026-11-25, end of session (DLNA PoC: BubbleUPnP findings, tests 0–9).
 
 ## Resume here (2026-11-25)
 
@@ -52,9 +52,15 @@ Last updated: 2026-11-25 (DLNA PoC step 1 done; http-get wrapper decided and bui
      the session is an `http-get:*:audio/x-snapcast:*` resource (dms `/snapcast?path=`
      answers with the `snapcast://` URI, IPv4 preferred); gmrender
      `--snapcast-formats audio/x-snapcast` advertises it first. Built in the forks (dms
-     `5d1cad6`, gmrender `80b078d`). Next: the user's DLNA test 8 (BubbleUPnP sends
-     that URL), then step 2 (gmrender resolves the URL; `snapsrc` `snapcast://`
-     handler; IPv6 check). Gotcha: a self-built gmrender needs installing (icons) and
+     `5d1cad6`, gmrender `80b078d`). **But test 8 failed too:** BubbleUPnP also
+     refuses the unknown MIME type `audio/x-snapcast`. Test 9b (`-snapcastFormat
+     audio/flac`) looked promising, but played on the phone, not gmrender (not
+     re-selected after a restart). **Next session:** start from "Where we stand" in
+     `docs/dlna-tests.md`: repeat 9b/9a with gmrender re-selected; if 9b reaches
+     gmrender, build content negotiation (one audio resource; dms answers a
+     Snapcast-aware renderer, e.g. `Accept: audio/x-snapcast`, with the `snapcast://`
+     URI), then step 2. The user found the day's back-and-forth confusing: start with
+     a short, plain recap. Gotcha: a self-built gmrender needs installing (icons) and
      its own `-u` UUID (no firewall on the host);
    - the snapsrc wander experiment (Open items), measured as usual;
    - upstream PRs for the 14 fork commits (none opened yet).

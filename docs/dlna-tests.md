@@ -68,7 +68,21 @@ sudo firewall-cmd --add-service=ssdp                 # add --permanent to keep i
 sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if not open)
 ```
 
-## Tests
+## Where we stand (2026-11-25, end of day)
+
+In short, with BubbleUPnP as the control point:
+
+- **Works:** discovery of the PoC gmrender (installed, own UUID); playing over HTTP,
+  with or without the Snapcast extras.
+- **Does not work:** a session resource with protocol `snapcast:` (test 1) or with an
+  unknown MIME type `audio/x-snapcast` (test 8). BubbleUPnP silently sends nothing.
+- **Promising, not confirmed:** with type `audio/flac`, BubbleUPnP uses the session
+  resource (test 9b), but that run played on the phone, not on gmrender.
+- **Next:** repeat test 9b, then 9a, with gmrender re-selected in BubbleUPnP after
+  each restart (`Subscription request` in its log). If 9b reaches gmrender: build
+  content negotiation (one resource, the audio URL; dms answers a Snapcast-aware
+  renderer with the `snapcast://` URI), then PoC step 2.
+
 
 0. **Discovery.** Start gmrender (and dms) as above on the host. BubbleUPnP lists
    "gmrender snapcast PoC" as a renderer and "dms snapcast PoC" as a library (rescan
