@@ -135,7 +135,22 @@ sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if
      unlikely to work with it. It reached dms over **IPv6** (`http://[fd0d:…]:1338`),
      so `{host}` in a `snapcast://` URI would be an IPv6 address too: check that the
      Snapcast server and `snapsrc` handle IPv6 (or let dms prefer IPv4) before step 2.
-   - b: open. c: not needed (a plays).
+   - **b, 2026-11-25: plays over HTTP** (`http://192.168.10.139:1338/res?…`): with a
+     renderer that doesn't advertise `snapcast`, BubbleUPnP ignores the item's
+     Snapcast resource. Renderers without Snapcast keep working.
+   - c: not needed (a plays).
+
+   **Conclusion (2026-11-25): BubbleUPnP fails exactly when both sides offer
+   `snapcast`:** it matches the resource, apparently chooses it, then sends nothing,
+   silently, without falling back to HTTP. It does not pass a `snapcast` protocol
+   resource through. Next: test 4 (another control point) and test 8 (the
+   `http-get` wrapper).
+
+8. **The `http-get` wrapper** (proposed after test 7, see [dlna.md](dlna.md),
+   "Finding: BubbleUPnP and the `snapcast` protocol"). dms offers the session as
+   `http-get:*:audio/x-snapcast:*` first, gmrender advertises the same first. Play from
+   BubbleUPnP: `AVTransportURI:` must be dms's `/snapcast?…` URL, and the DIDL must
+   carry `audio/x-snapcast`. Needs a small change in both forks first.
 
 Later steps get their tests here when they are built: `playbin uri=snapcast://…`
 (PoC step 2), gmrender playing it with Pause/Seek going to the session (step 3), dms

@@ -125,6 +125,39 @@ announces them again to every client (its codec header).
 Volume is not in the URI (decision 6): each room keeps its own, through
 RenderingControl and the Snapcast server's memory of each client.
 
+### Finding: BubbleUPnP and the `snapcast` protocol (2026-11-25)
+
+DLNA tests 1 and 7 ([dlna-tests.md](dlna-tests.md)): BubbleUPnP sends nothing to the
+renderer when the item offers a `snapcast:` resource **and** the renderer advertises
+`snapcast:`; with only one of the two it plays the HTTP resource. It does not pass a
+`snapcast` protocol resource through, and it does not fall back. It also sends its own
+DIDL with only the chosen `<res>` (so the renderer-side fallback above won't work with
+it), and it may reach dms over IPv6.
+
+**Proposed (not yet agreed): the session as an `http-get` resource** with its own MIME
+type, first in the listing and first in the renderer's `SinkProtocolInfo`:
+
+```xml
+<res protocolInfo="http-get:*:audio/x-snapcast:*">http://nas:1338/snapcast?path=…</res>
+<res protocolInfo="http-get:*:audio/flac:…">http://nas:1338/res?path=…</res>
+```
+
+- To a control point it is an ordinary HTTP resource whose MIME type the renderer
+  accepts exactly (BubbleUPnP matches MIME types exactly, per gmrender's source).
+- The renderer recognizes a session by the MIME type of the chosen `<res>` (BubbleUPnP
+  keeps the protocolInfo in its DIDL) or by the response's Content-Type, fetches the URL,
+  and gets the `snapcast://host:port/stream?control=…` URI to play with `snapsrc`.
+- **Sessions on demand get simpler:** the renderer's fetch tells dms to open the
+  session (start the `snapsink` pipeline) before it answers. The daemon IPC v3
+  (`Provide`/`Open`/`Close`) and the snapcast-rs hook below would not be needed.
+- dms answers with an address the Snapcast server listens on (e.g. IPv4), however the
+  renderer reached dms.
+- Format details go into MIME parameters (`audio/x-snapcast;codec=flac;rate=44100;…`)
+  or into the fetched description.
+
+Checks before deciding: DLNA test 4 (does another control point pass `snapcast:`?)
+and test 8 (BubbleUPnP with the wrapper).
+
 ## Sessions
 
 **A session is one Snapcast stream.** All renderers playing it play the same audio at
