@@ -1,7 +1,10 @@
 # DLNA/UPnP with Snapcast streams (design)
 
-Status: **agreed** (2026-11-24, open question 1 is left to PoC step 1), nothing
-implemented yet. Targets for the proof of
+Status: **agreed** (2026-11-24); **changed 2026-11-25**: the session is offered as an
+`http-get` resource of MIME type `audio/x-snapcast`, not with a `snapcast:` protocol,
+because BubbleUPnP doesn't pass that on (see "Finding: BubbleUPnP and the `snapcast`
+protocol"). PoC step 1 done, the wrapper is in both forks (DLNA test 8 pending).
+Targets for the proof of
 concept: the media server [dms](https://github.com/anacrolix/dms) (Go) and the renderer
 [gmrender-resurrect](https://github.com/hzeller/gmrender-resurrect) (C, GStreamer). Both
 are used at home and work there. Background: `docs/gstreamer-plugins/dlna-rs-gstreamer-1.md`
@@ -134,7 +137,7 @@ renderer when the item offers a `snapcast:` resource **and** the renderer advert
 DIDL with only the chosen `<res>` (so the renderer-side fallback above won't work with
 it), and it may reach dms over IPv6.
 
-**Proposed (not yet agreed): the session as an `http-get` resource** with its own MIME
+**Decided (2026-11-25, the user): the session as an `http-get` resource** with its own MIME
 type, first in the listing and first in the renderer's `SinkProtocolInfo`:
 
 ```xml
@@ -155,8 +158,11 @@ type, first in the listing and first in the renderer's `SinkProtocolInfo`:
 - Format details go into MIME parameters (`audio/x-snapcast;codec=flac;rate=44100;…`)
   or into the fetched description.
 
-Checks before deciding: DLNA test 4 (does another control point pass `snapcast:`?)
-and test 8 (BubbleUPnP with the wrapper).
+This replaces the `snapcast:` protocol in "In the listing", "protocolInfo" and
+"Preferring the Snapcast resource" above, and makes "Sessions on demand" (dms side)
+much smaller; those sections still describe the first design and get rewritten when
+the PoC confirms the wrapper (DLNA test 8). DLNA test 4 (another control point) found
+none that works here (2026-11-25), so the design must work with BubbleUPnP.
 
 ## Sessions
 

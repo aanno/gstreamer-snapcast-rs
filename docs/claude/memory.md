@@ -7,49 +7,16 @@ the prototype (P1–P4 in detail, every decision with its reasons, the fixed lim
 L2–L13, all measurements) is in [memory-old-2026-11-22.md](memory-old-2026-11-22.md),
 frozen; the evaluation in [../evaluation.md](../evaluation.md).
 
-Last updated: 2026-11-24, end of session (host test plan; DLNA design agreed, PoC step 1 prepared).
-
-## Resume here (2026-11-24)
-
-1. **The feasibility prototype is done: go** (user, 2026-11-22, agreeing to
-   `docs/evaluation.md`). F1–F5 met; F1 and F2 with caveats (see Open items).
-2. **Done on 2026-11-22, after P4** (details: `docs/shared-server.md`, the commits):
-   - **L1** (fork `1b5b3b5`): `ServerCommand::AddAudioStream` for embedder-fed streams,
-     `RemoveStream` stops the encoder; URI-based `Stream.AddStream` stays rejected. The
-     engine adds further stream names to a running port; a released stream stays.
-   - **Shared server daemon, all five design steps:** `gst-snapcast-daemon`, IPC protocol
-     v2 (`gst_snapcast_engine::ipc`), `snapsink mode=auto|shared|embedded` (default
-     `auto`) and read-only `active-mode`, autospawn, one daemon per user (lock file),
-     5 s grace period, one reconnect after a crash, metadata and `Stream.Control`
-     through it. `make test-aloop-shared`: all 10 aloop tests pass with the same numbers
-     as embedded. Discussed and rejected (recorded in the design doc): GStreamer as the
-     transport, timestamps in the daemon, `GstReferenceTimestampMeta` without embedded
-     mode.
-   - **Lean `snapsink`:** features `shared` (default) and `control` (off); `make
-     install` builds it lean and installs the daemon into `~/.local/bin`.
-   - **Fork `60cb098`:** JWT authentication of `snapcast-control` is the optional feature
-     `auth`, **off by default (the user's wish)**, failing closed without it;
-     `snapserver-rs` enables it. Effect: `snapsink` with `control` 4.9 MB / 174 crates
-     (was 5.8 / 239), the daemon 5.0 MB (was 6.0), lean `snapsink` 3.1 MB / 127.
-   - **`make dist`:** a tarball with plugins, daemon, `install.sh` (user, `--system`,
-     `--uninstall`), `README.txt`, `BUILD-INFO`. README: a paths table, current status.
-3. **Next session, candidates (the user picks):**
-   - the user's host tests of the daemon: two streams in one server with Snapweb
-     switching between them **passed (2026-11-24)**. The rest is the numbered "Host test
-     plan" in `docs/testing-host.md` (1–10: crash recovery, grace exit, log, option
-     mismatch, port conflict, second machine, mixed clients, Bluetooth, tarball,
-     overnight); the user runs them over the next days and reports by number;
-   - **DLNA/UPnP PoC** (new goal, 2026-11-24): design `docs/dlna.md` **agreed**:
-     dms offers a `snapcast://host:port/stream?control=` resource (no volume), preferred
-     over HTTP; gmrender + `snapsrc` URI handler; one session per item (independent
-     playback not needed); pause/seek global, stop leaves; item's own rate; dms uses
-     `go-gst` + `snapsink` for the PoC. Forks are submodules `dlna/dms`,
-     `dlna/gmrender-resurrect` (branch `aanno/fixes`). PoC step 1 prepared
-     (2026-11-24): dms `-snapcastStream`, gmrender `--snapcast-formats`, `make
-     dlna-build`; checked by hand with SOAP. Tests and setup: `docs/dlna-tests.md`
-     (numbered 0–6). **First host run (2026-11-24): BubbleUPnP did not find gmrender**
-     started on the host; suspected cause the Fedora firewall (SSDP, UDP 1900), not
-     yet confirmed (DLNA test 0). Then tests 1–3 (cases A–C), then PoC step 2;
+Last updated: 2026-11-24, end of session (host test plan; DLNA design agreed, PoC step 1 done (2026-11-25, `docs/dlna-tests.md` tests 0–7): BubbleUPnP does
+     **not** pass a `snapcast:` protocol resource on (sends nothing when both sides
+     offer it; HTTP works otherwise); it sends its own DIDL with only the chosen
+     `<res>`. **Decided:** the session is an `http-get:*:audio/x-snapcast:*` resource
+     (dms `/snapcast?path=` answers with the `snapcast://` URI, IPv4 preferred);
+     gmrender `--snapcast-formats audio/x-snapcast` advertises it first. In the forks
+     (dms `5d1cad6`, gmrender `80b078d`); DLNA test 8 (BubbleUPnP sends that URL) is
+     the user's next run. Then step 2: gmrender resolves the URL, `snapsrc`
+     `snapcast://` handler. Gotcha: a self-built gmrender needs install (icons) and
+     its own `-u` UUID;
    - the snapsrc wander experiment (Open items), measured as usual;
    - upstream PRs for the 14 fork commits (none opened yet).
    Known, older: `snapcast-control`'s crate doctest calls `serve_http` and fails with

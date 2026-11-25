@@ -29,22 +29,25 @@ build in place also blocks `make dlna-build` (`make distclean` there first). Wri
 outside the submodule (e.g. `| tee /tmp/gmr.log`), so they don't show up as untracked
 files in it.
 
-Terminal 1, the media server. Every audio item gets a Snapcast resource first,
-pointing at one fixed stream on this machine:
+Terminal 1, the media server. Every audio item gets a Snapcast session resource first
+(`http-get:*:audio/x-snapcast:*`, URL `/snapcast?path=…`), for one fixed stream on this
+machine. Fetching that URL answers with the stream's `snapcast://` URI, and dms logs
+`snapcast session requested` (since 2026-11-25; before, the resource used the protocol
+`snapcast:`, which BubbleUPnP doesn't pass on: tests 1 and 7):
 
 ```sh
 target/dlna/dms -path ~/Music -friendlyName "dms snapcast PoC" \
     -snapcastStream 'snapcast://{host}:1704/default?control=1705'
 ```
 
-Terminal 2, the renderer. `--snapcast-formats` puts `snapcast:*:audio/L16:*` (and FLAC)
-first in its `SinkProtocolInfo`; `-I` is the network interface for UPnP, `-p` fixes its
+Terminal 2, the renderer. `--snapcast-formats audio/x-snapcast` puts
+`http-get:*:audio/x-snapcast:*` first in its `SinkProtocolInfo`; `-I` is the network interface for UPnP, `-p` fixes its
 HTTP port (easier for the firewall):
 
 ```sh
 target/dlna/gmediarender -f "gmrender snapcast PoC" -I eno1 --logfile stdout \
     -u 6a1c4e2f-5b3d-4c7a-9e10-2f8b6d4a1c01 -p 49500 \
-    --snapcast-formats audio/L16,audio/flac 2>&1 | grep --line-buffered -E 'AVTransportURI|snapcast|Registered'
+    --snapcast-formats audio/x-snapcast 2>&1 | grep --line-buffered -E 'AVTransportURI|snapcast|Registered'
 ```
 
 **Own UUID and port** (`-u`, `-p`): every gmrender build without a compile-time UUID
@@ -153,7 +156,13 @@ sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if
    "Finding: BubbleUPnP and the `snapcast` protocol"). dms offers the session as
    `http-get:*:audio/x-snapcast:*` first, gmrender advertises the same first. Play from
    BubbleUPnP: `AVTransportURI:` must be dms's `/snapcast?…` URL, and the DIDL must
-   carry `audio/x-snapcast`. Needs a small change in both forks first.
+   carry `audio/x-snapcast`. dms's log shows `snapcast session requested` when gmrender
+   fetches it. Nothing sounds: gmrender hands the URL to GStreamer, which can't decode
+   the one-line answer (an error in the log is expected). Resolving it to the
+   `snapcast://` URI and playing that is PoC step 2/3.
+   Ready 2026-11-25 (dms `5d1cad6`, gmrender `80b078d`; setup above). Also check the
+   old tests in passing: the track must still play over HTTP when gmrender runs
+   without `--snapcast-formats` (like test 7b).
 
 Later steps get their tests here when they are built: `playbin uri=snapcast://…`
 (PoC step 2), gmrender playing it with Pause/Seek going to the session (step 3), dms
