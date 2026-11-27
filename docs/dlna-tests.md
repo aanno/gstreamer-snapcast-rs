@@ -326,7 +326,19 @@ feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
       Four seeks, one volume send per change, pause and resume, and the end of the
       track (STOPPED) all worked. Not yet tried: several items or rooms at once (needs
       `--mode shared`), and the idle close.
+    - **Second host run, 2026-11-27, with `--mode shared --idle-exit 120`: passed** (a,
+      b; one item).
+      - dms opened the session on gmrender's GET and had it ready within the second
+        (`Session ready`). There was no fallback warning, so the daemon served it.
+      - Pause and resume (twice), a seek to 25 s, volume changes (one send each) and
+        the end of the track (gmrender STOPPED) all worked.
+      - dms was stopped before the 120 s idle close.
+      - Still open: c (several items) and d (the idle close).
     - Found on the way:
+      - `make dlna-build` on the host failed after a devcontainer build: the shared
+        `target/dlna/gmrender-build` kept dependency files with `/workspaces/…`
+        paths (`No rule to make target …/main.c`). Fixed: the target wipes a build
+        tree that belongs to another checkout path (`docs/testing-host.md`).
       - `-snapcastFeeder ../session-sender --mode shared …` without quotes made dms
         reject `-mode`: the helper's options must be quoted with it (dms's help now
         says so; `dlna/dms/README-snapcast.md`).
