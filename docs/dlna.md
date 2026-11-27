@@ -230,7 +230,9 @@ session URI.
 
 ### Feeding the session (built, PoC step 4)
 
-`dlna/dms/snapcast_feeder.go` in the fork. Feeding sits behind an interface:
+`dlna/dms/snapcast_feeder.go` in the fork. How to run it (options, building and
+placing the helper, logs, troubleshooting): `dlna/dms/README-snapcast.md`. Feeding
+sits behind an interface:
 
 ```go
 type SessionFeeder interface {
