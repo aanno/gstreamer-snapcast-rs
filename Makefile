@@ -142,7 +142,8 @@ test-endurance:
 test-mdns:
 	cargo test -p gst-plugin-snapsrc --test mdns -- --ignored
 
-## DLNA PoC (docs/dlna.md): build the dms and gmrender-resurrect forks into target/dlna.
+## DLNA PoC (docs/dlna.md): build the dms and gmrender-resurrect forks, and dms's session
+## feeder (snapsink's example session-sender), into target/dlna.
 ## Needs Go, libupnp (Debian libupnp-dev, Fedora libupnp-devel), autotools and the
 ## GStreamer development files.
 DLNA_DIR := $(CURDIR)/target/dlna
@@ -159,7 +160,10 @@ dlna-build:
 		  $(CURDIR)/dlna/gmrender-resurrect/configure --prefix=$(DLNA_DIR)/gmrender; } && \
 		$(MAKE) && $(MAKE) install
 	ln -sf gmrender/bin/gmediarender $(DLNA_DIR)/gmediarender
-	@echo "Built $(DLNA_DIR)/dms and $(DLNA_DIR)/gmediarender"
+	# dms's session feeder (-snapcastFeeder): plays an item into a Snapcast stream.
+	cargo build --release -p gst-plugin-snapsink --features control --example session-sender
+	ln -sf $(RELEASE_DIR)/examples/session-sender $(DLNA_DIR)/session-sender
+	@echo "Built $(DLNA_DIR)/dms, $(DLNA_DIR)/gmediarender and $(DLNA_DIR)/session-sender"
 
 ## DLNA PoC: a file as a Snapcast session that obeys play/pause/seek (stands in for dms
 ## until it feeds sessions): SESSION_FILE, STREAM (default), PORT (1704; control: PORT+1).

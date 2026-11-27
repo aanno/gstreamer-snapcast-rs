@@ -11,13 +11,27 @@
 //!
 //! ```sh
 //! cargo run -p gst-plugin-snapsink --features control --example session-sender -- \
+//!     [--mode embedded|auto|shared] [--paused] [--idle-exit SECS] \
+//!     [--port PORT] [--control-port PORT] \
 //!     assets/audio/freejazz_medley.flac [stream [port [control-port]]]
 //! ```
 //!
-//! The server runs in this process (`mode=embedded`) on `port` (1704) with JSON-RPC
-//! on `control-port` (1705), and the stream is named `stream` (`default`).
+//! - `stream` (default `default`), `port` (1704) and `control-port` (port + 1): the
+//!   stream and the server.
+//! - `--mode`: where the server runs. `embedded` (the default) runs it in this
+//!   process, alone on its port. `shared` uses the per-user daemon, so several
+//!   senders (sessions) share one server. That's how dms runs it, one process per
+//!   session. (`auto` falls back to embedded without the daemon, and then a second
+//!   session can't bind the port.)
+//! - `--paused`: preroll, but wait for a `play` command.
+//! - `--idle-exit SECS`: exit after the session hasn't played for that long
+//!   (paused, or ended). dms relies on that to close sessions.
+//!
+//! Once the stream exists on the server, it prints one line
+//! `Session ready: snapcast-tcp://<this host>:<port>/<stream>?control=<control-port>`.
+//! dms waits for that line before answering the renderer.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gst::prelude::*;
 
@@ -42,37 +56,139 @@ fn seek_to(pipeline: &gst::Element, secs: f64) {
     }
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(file) = args.first() else {
-        eprintln!("usage: session-sender <file or URI> [stream [port [control-port]]]");
-        std::process::exit(2);
-    };
-    let stream = args.get(1).map_or("default", String::as_str);
-    let port: u16 = args.get(2).map_or(1704, |p| p.parse().expect("port"));
-    let control: u16 = args
-        .get(3)
-        .map_or(port + 1, |p| p.parse().expect("control port"));
+struct Options {
+    file: String,
+    stream: String,
+    port: u16,
+    control: u16,
+    mode: String,
+    paused: bool,
+    idle_exit: Option<Duration>,
+}
 
+fn usage() -> ! {
+    eprintln!(
+        "usage: session-sender [--mode embedded|auto|shared] [--paused] [--idle-exit SECS] \\
+         [--port PORT] [--control-port PORT] <file or URI> [stream [port [control-port]]]"
+    );
+    std::process::exit(2);
+}
+
+fn port_arg(arg: Option<String>) -> u16 {
+    arg.and_then(|p| p.parse().ok()).unwrap_or_else(|| usage())
+}
+
+fn options() -> Options {
+    let mut positional = Vec::new();
+    let mut mode = "embedded".to_owned();
+    let mut paused = false;
+    let mut idle_exit = None;
+    let (mut port_opt, mut control_opt) = (None, None);
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--mode" => mode = args.next().unwrap_or_else(|| usage()),
+            "--paused" => paused = true,
+            "--port" => port_opt = Some(port_arg(args.next())),
+            "--control-port" => control_opt = Some(port_arg(args.next())),
+            "--idle-exit" => {
+                let secs: u64 = args
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or_else(|| usage());
+                idle_exit = Some(Duration::from_secs(secs));
+            }
+            a if a.starts_with("--") => usage(),
+            _ => positional.push(arg),
+        }
+    }
+    let mut positional = positional.into_iter();
+    let file = positional.next().unwrap_or_else(|| usage());
+    let stream = positional.next().unwrap_or_else(|| "default".to_owned());
+    // Ports as positional arguments (after the stream) or as options.
+    let port = positional
+        .next()
+        .map(|p| port_arg(Some(p)))
+        .or(port_opt)
+        .unwrap_or(1704);
+    let control = positional
+        .next()
+        .map(|p| port_arg(Some(p)))
+        .or(control_opt)
+        .unwrap_or(port + 1);
+    Options {
+        file,
+        stream,
+        port,
+        control,
+        mode,
+        paused,
+        idle_exit,
+    }
+}
+
+fn main() {
+    let o = options();
     gst::init().expect("GStreamer");
     gstsnapsink::plugin_register_static().expect("snapsink");
     let pipeline = gst::parse::launch(&format!(
         "uridecodebin uri=\"{}\" ! audioconvert ! audioresample \
-         ! audio/x-raw,format=S16LE ! snapsink name=sink stream={stream} port={port} \
-           mode=embedded control-port={control} controls=play+pause+seek",
-        uri_of(file)
+         ! audio/x-raw,format=S16LE ! snapsink name=sink stream=\"{}\" port={} \
+           mode={} control-port={} controls=play+pause+seek",
+        uri_of(&o.file),
+        o.stream,
+        o.port,
+        o.mode,
+        o.control
     ))
     .expect("pipeline");
-    pipeline
-        .set_state(gst::State::Playing)
-        .expect("start playing");
+    let initial = if o.paused {
+        gst::State::Paused
+    } else {
+        gst::State::Playing
+    };
+    pipeline.set_state(initial).expect("start");
+    // Prerolled: snapsink has its caps, so the stream exists on the server.
+    let (result, _, _) = pipeline.state(gst::ClockTime::from_seconds(10));
+    if result.is_err() {
+        let bus = pipeline.bus().expect("bus");
+        while let Some(message) = bus.pop_filtered(&[gst::MessageType::Error]) {
+            if let gst::MessageView::Error(e) = message.view() {
+                eprintln!("error: {} ({:?})", e.error(), e.debug());
+            }
+        }
+        eprintln!("the pipeline didn't start");
+        std::process::exit(1);
+    }
     println!(
-        "Session: snapcast-tcp://<this host>:{port}/{stream}?control={control} (playing {file})"
+        "Session ready: snapcast-tcp://<this host>:{}/{}?control={} ({}, {})",
+        o.port,
+        o.stream,
+        o.control,
+        o.file,
+        if o.paused { "paused" } else { "playing" }
     );
 
     let bus = pipeline.bus().expect("bus");
     let mut ended = false;
-    for message in bus.iter_timed(gst::ClockTime::NONE) {
+    let mut last_played = Instant::now();
+    loop {
+        let (_, state, _) = pipeline.state(gst::ClockTime::ZERO);
+        if state == gst::State::Playing && !ended {
+            last_played = Instant::now();
+        } else if o
+            .idle_exit
+            .is_some_and(|idle| last_played.elapsed() >= idle)
+        {
+            println!(
+                "idle: the session hasn't played for {:?}, closing it",
+                o.idle_exit.unwrap_or_default()
+            );
+            break;
+        }
+        let Some(message) = bus.timed_pop(gst::ClockTime::from_seconds(1)) else {
+            continue;
+        };
         match message.view() {
             gst::MessageView::Eos(_) => {
                 println!("end of the track: the session is stopped (play starts it again)");
