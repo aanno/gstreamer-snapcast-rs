@@ -60,6 +60,28 @@
 //! The properties follow the client's events, not the audio: a C++ snapserver
 //! sends no audio at all to a muted client, so snapsrc then produces no buffers.
 //!
+//! # Sessions
+//!
+//! With `stream` set (or a `snapcast-tcp://host/stream` URI), the client joins that
+//! stream and keeps a control connection to the server (`gst-snapcast-engine`,
+//! `client::session`), so that an application can treat the stream as a shared
+//! session, e.g. a DLNA renderer (`docs/dlna-snapcast-protocol.md`):
+//!
+//! - The stream's properties are posted as an element message `snapcast-session`
+//!   whenever they change: `stream`, `playback-status` (`playing`, `paused`,
+//!   `stopped`, or empty), `position` and `duration` (seconds, -1 if unknown),
+//!   `title`, `can-play`, `can-pause`, `can-seek`, and `properties` (all of them as
+//!   JSON).
+//! - The action signal `stream-control(command, params-json)` sends
+//!   `Stream.Control` for the stream (e.g. `pause`, or `setPosition` with
+//!   `{"position":90}`). It acts on the session, so on every client playing it.
+//! - The action signal `set-server-volume(percent, mute)` sets this client's volume
+//!   on the server (`Client.SetVolume`). It comes back as `volume`/`mute`, and
+//!   Snapweb shows it.
+//!
+//! While the session is paused, the server sends nothing and snapsrc fills silence
+//! ("Gaps"); the pipeline itself keeps playing.
+
 //! # Gaps
 //!
 //! When the server sends nothing (the sender is paused, the server is gone, or a
@@ -96,7 +118,9 @@ use gst::subclass::prelude::*;
 use gst_base::prelude::*;
 use gst_base::subclass::base_src::CreateSuccess;
 use gst_base::subclass::prelude::*;
-use gst_snapcast_engine::client::{self, ClientHandle, ClientOptions};
+use gst_snapcast_engine::client::{
+    self, ClientHandle, ClientOptions, SessionControl, SessionProperties,
+};
 use gst_snapcast_engine::{now_usec, runtime};
 
 use super::align::{self, Aligner};
@@ -119,6 +143,8 @@ const DEFAULT_CLIENT_NAME: &str = "gst-snapsrc";
 const DEFAULT_INSTANCE: u32 = 0;
 const DEFAULT_LATENCY_MS: i32 = 0;
 const DEFAULT_ADJUST_SINK: bool = true;
+/// Name of the element message with the session's stream properties.
+const SESSION_MESSAGE: &str = "snapcast-session";
 
 /// How long `create()` waits for a frame before it checks for a gap to fill.
 const GAP_POLL: std::time::Duration = std::time::Duration::from_millis(10);
@@ -196,6 +222,9 @@ pub struct SnapSrc {
     /// Atomics for the same reason as `pipeline_latency_ns`.
     volume: AtomicU32,
     muted: AtomicBool,
+    /// Commands to the session (with `stream` set). Not in `state`, for the same
+    /// reason: the action signals must not wait for `create()`.
+    session: Mutex<Option<SessionControl>>,
 }
 
 impl Default for SnapSrc {
@@ -207,6 +236,7 @@ impl Default for SnapSrc {
             pipeline_latency_ns: AtomicU64::new(0),
             volume: AtomicU32::new(100),
             muted: AtomicBool::new(false),
+            session: Mutex::default(),
         }
     }
 }
@@ -258,6 +288,80 @@ impl SnapSrc {
                 }
             }
         });
+    }
+
+    /// Posts the session's stream properties on the bus as they change (see
+    /// "Sessions" in the module docs). The task ends with the client or the element.
+    fn watch_session(
+        &self,
+        stream: String,
+        mut properties: watch::Receiver<Option<SessionProperties>>,
+    ) {
+        let element = self.obj().downgrade();
+        runtime().spawn(async move {
+            loop {
+                let current = properties.borrow_and_update().clone();
+                let Some(obj) = element.upgrade() else { break };
+                if let Some(p) = current {
+                    gst::debug!(CAT, obj = obj, "Session properties {}", p.json);
+                    let s = gst::Structure::builder(SESSION_MESSAGE)
+                        .field("stream", &stream)
+                        .field("playback-status", p.playback.as_deref().unwrap_or(""))
+                        .field("position", p.position_secs.unwrap_or(-1.0))
+                        .field("duration", p.duration_secs.unwrap_or(-1.0))
+                        .field("title", p.title.as_deref().unwrap_or(""))
+                        .field("can-play", p.can_play)
+                        .field("can-pause", p.can_pause)
+                        .field("can-seek", p.can_seek)
+                        .field("properties", &p.json)
+                        .build();
+                    let _ = obj.post_message(gst::message::Element::builder(s).src(&obj).build());
+                }
+                drop(obj);
+                if properties.changed().await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    /// The `stream-control` action signal.
+    fn stream_control(&self, command: &str, params: &str) -> bool {
+        let Some(session) = self.session.lock().unwrap().clone() else {
+            gst::warning!(
+                CAT,
+                imp = self,
+                "stream-control {command}: no session (set 'stream')"
+            );
+            return false;
+        };
+        gst::info!(CAT, imp = self, "Session command {command} {params}");
+        session
+            .stream_control(command, params)
+            .inspect_err(|e| gst::warning!(CAT, imp = self, "stream-control {command}: {e}"))
+            .is_ok()
+    }
+
+    /// The `set-server-volume` action signal.
+    fn set_server_volume(&self, percent: u32, muted: bool) -> bool {
+        let Some(session) = self.session.lock().unwrap().clone() else {
+            gst::warning!(
+                CAT,
+                imp = self,
+                "set-server-volume: no session (set 'stream')"
+            );
+            return false;
+        };
+        let percent = percent.min(100) as u16;
+        gst::info!(
+            CAT,
+            imp = self,
+            "Setting server volume {percent} %, mute {muted}"
+        );
+        session
+            .set_server_volume(percent, muted)
+            .inspect_err(|e| gst::warning!(CAT, imp = self, "set-server-volume: {e}"))
+            .is_ok()
     }
 
     /// The first audio sink downstream, following pads into and out of bins
@@ -329,6 +433,42 @@ impl ObjectSubclass for SnapSrc {
 }
 
 impl ObjectImpl for SnapSrc {
+    fn signals() -> &'static [glib::subclass::Signal] {
+        static SIGNALS: LazyLock<Vec<glib::subclass::Signal>> = LazyLock::new(|| {
+            vec![
+                // stream-control(command, params-json) -> accepted
+                glib::subclass::Signal::builder("stream-control")
+                    .param_types([String::static_type(), String::static_type()])
+                    .return_type::<bool>()
+                    .action()
+                    .class_handler(|args| {
+                        let obj = args[0].get::<super::SnapSrc>().expect("signal arg");
+                        let command = args[1].get::<String>().expect("signal arg");
+                        let params = args[2].get::<Option<String>>().expect("signal arg");
+                        Some(
+                            obj.imp()
+                                .stream_control(&command, params.as_deref().unwrap_or(""))
+                                .to_value(),
+                        )
+                    })
+                    .build(),
+                // set-server-volume(percent, mute) -> accepted
+                glib::subclass::Signal::builder("set-server-volume")
+                    .param_types([u32::static_type(), bool::static_type()])
+                    .return_type::<bool>()
+                    .action()
+                    .class_handler(|args| {
+                        let obj = args[0].get::<super::SnapSrc>().expect("signal arg");
+                        let percent = args[1].get::<u32>().expect("signal arg");
+                        let muted = args[2].get::<bool>().expect("signal arg");
+                        Some(obj.imp().set_server_volume(percent, muted).to_value())
+                    })
+                    .build(),
+            ]
+        });
+        SIGNALS.as_ref()
+    }
+
     fn properties() -> &'static [glib::ParamSpec] {
         static PROPERTIES: LazyLock<Vec<glib::ParamSpec>> = LazyLock::new(|| {
             vec![
@@ -581,10 +721,11 @@ impl BaseSrcImpl for SnapSrc {
             latency_ms: settings.latency_ms,
             host_id: settings.host_id,
             mdns_name: settings.mdns_name,
-            stream: settings.stream,
+            stream: settings.stream.clone(),
             control_port: settings.control_port as u16,
             log_id: self.obj().name().to_string(),
         };
+        let options_stream = settings.stream.clone();
         let client = client::connect(&options)
             .map_err(|e| gst::error_msg!(gst::ResourceError::OpenRead, ["{e}"]))?;
         let (host, port) = client.server();
@@ -595,6 +736,10 @@ impl BaseSrcImpl for SnapSrc {
             client.instance()
         );
         self.watch_volume(client.volume());
+        if let Some(properties) = client.session_properties() {
+            self.watch_session(options_stream.clone(), properties);
+        }
+        *self.session.lock().unwrap() = client.session_control();
         // Downstream elements change state before us, so the sink (and the child of
         // an autoaudiosink) exists by now.
         if settings.adjust_sink {
@@ -616,7 +761,8 @@ impl BaseSrcImpl for SnapSrc {
     }
 
     fn stop(&self) -> Result<(), gst::ErrorMessage> {
-        // Dropping the handle stops the client.
+        // Dropping the handle stops the client (and its session).
+        *self.session.lock().unwrap() = None;
         *self.state.lock().unwrap() = None;
         gst::info!(CAT, imp = self, "Stopped");
         Ok(())

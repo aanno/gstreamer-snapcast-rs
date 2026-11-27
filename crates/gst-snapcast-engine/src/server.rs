@@ -202,6 +202,9 @@ pub struct StreamProperties {
     pub controls: StreamControls,
     /// Playback state (`None`: not reported).
     pub playback: Option<PlaybackStatus>,
+    /// Playback position in seconds (`None`: not reported), as Snapcast's
+    /// `position` property. Listeners hear it about the server buffer later.
+    pub position_secs: Option<f64>,
 }
 
 impl StreamProperties {
@@ -219,6 +222,9 @@ impl StreamProperties {
         ]);
         if let Some(playback) = self.playback {
             map.insert("playbackStatus".to_owned(), playback.as_str().into());
+        }
+        if let Some(position) = self.position_secs {
+            map.insert("position".to_owned(), position.into());
         }
         map
     }
@@ -1034,6 +1040,7 @@ mod tests {
                 ..StreamControls::default()
             },
             playback: Some(PlaybackStatus::Playing),
+            position_secs: Some(12.0),
         })
         .unwrap();
         let (command_tx, command_rx) = std::sync::mpsc::channel();

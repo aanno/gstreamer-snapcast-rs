@@ -191,6 +191,10 @@ pub struct Properties {
     pub can_seek: bool,
     /// `playing`, `paused`, `stopped`, or `None`: not reported.
     pub playback: Option<String>,
+    /// Playback position in seconds. Optional on the wire (absent from older
+    /// peers).
+    #[serde(default)]
+    pub position_secs: Option<f64>,
 }
 
 /// A player command from a controller for the stream (JSON-RPC `Stream.Control`).
@@ -401,6 +405,7 @@ mod convert {
                 can_go_previous: p.controls.previous,
                 can_seek: p.controls.seek,
                 playback: p.playback.map(|s| s.as_str().to_owned()),
+                position_secs: p.position_secs,
             }
         }
     }
@@ -423,6 +428,7 @@ mod convert {
                     seek: p.can_seek,
                 },
                 playback: p.playback.as_deref().and_then(PlaybackStatus::from_str),
+                position_secs: p.position_secs,
             }
         }
     }

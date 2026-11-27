@@ -279,3 +279,110 @@ fn playbin_plays_a_snapcast_tcp_uri_and_joins_its_stream() {
         p.set_state(gst::State::Null).unwrap();
     }
 }
+
+/// The latest `snapcast-session` message on `bus` that satisfies `want`.
+fn wait_for_session(bus: &gst::Bus, what: &str, want: impl Fn(&gst::StructureRef) -> bool) {
+    let deadline = Instant::now() + TIMEOUT;
+    while Instant::now() < deadline {
+        let Some(message) = bus.timed_pop_filtered(
+            gst::ClockTime::from_mseconds(100),
+            &[gst::MessageType::Element, gst::MessageType::Error],
+        ) else {
+            continue;
+        };
+        if let gst::MessageView::Error(e) = message.view() {
+            panic!("error while waiting for {what}: {}", e.error());
+        }
+        let s = message.structure().unwrap();
+        if s.name() == "snapcast-session" && want(s) {
+            return;
+        }
+    }
+    panic!("timed out waiting for {what}");
+}
+
+/// A session (`docs/dlna.md`, PoC step 3): snapsrc follows the stream's properties
+/// (`snapcast-session` messages) and sends `Stream.Control` and `Client.SetVolume`
+/// (action signals); the sender acts on the command as dms will.
+#[test]
+fn snapsrc_follows_and_controls_a_session() {
+    init();
+    let (port, control_port) = (free_port(), free_port());
+    let sender = gst::parse::launch(&format!(
+        "audiotestsrc is-live=true ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
+         ! taginject tags=\"title=Song,duration=(guint64)90000000000\" \
+         ! snapsink port={port} mode=embedded stream=s mdns-name=\"\" buffer-ms=300 \
+           control-port={control_port} controls=play+pause+seek"
+    ))
+    .unwrap();
+    sender.set_state(gst::State::Playing).unwrap();
+    wait_until("the control port", || {
+        TcpStream::connect(("127.0.0.1", control_port)).ok()
+    });
+
+    let receiver = gst::parse::launch(&format!(
+        "snapsrc name=src port={port} stream=s control-port={control_port} ! fakesink sync=false"
+    ))
+    .unwrap();
+    receiver.set_state(gst::State::Playing).unwrap();
+    let src = receiver
+        .downcast_ref::<gst::Bin>()
+        .unwrap()
+        .by_name("src")
+        .unwrap();
+    let bus = receiver.bus().unwrap();
+
+    // Playing, with a position, the tags and what the stream accepts.
+    wait_for_session(&bus, "a playing session with a position", |s| {
+        s.get::<&str>("playback-status") == Ok("playing")
+            && s.get::<f64>("position").is_ok_and(|p| p >= 0.0)
+    });
+    wait_for_session(&bus, "the session's title and controls", |s| {
+        s.get::<&str>("title") == Ok("Song")
+            && s.get::<f64>("duration") == Ok(90.0)
+            && s.get::<bool>("can-pause") == Ok(true)
+            && s.get::<bool>("can-seek") == Ok(true)
+            && s.get::<&str>("stream") == Ok("s")
+    });
+
+    // Pause from the receiver reaches the sender, which pauses; the receiver sees it.
+    assert!(src.emit_by_name::<bool>("stream-control", &[&"pause", &""]));
+    let message = sender
+        .bus()
+        .unwrap()
+        .timed_pop_filtered(
+            gst::ClockTime::from_seconds(10),
+            &[gst::MessageType::Element],
+        )
+        .expect("no snapcast-stream-control message");
+    let command = message.structure().unwrap();
+    assert_eq!(command.get::<&str>("command").unwrap(), "pause");
+    sender.set_state(gst::State::Paused).unwrap();
+    wait_for_session(&bus, "the paused session", |s| {
+        s.get::<&str>("playback-status") == Ok("paused")
+    });
+
+    // setPosition carries its parameters.
+    assert!(src.emit_by_name::<bool>("stream-control", &[&"setPosition", &r#"{"position":42}"#]));
+    let message = sender
+        .bus()
+        .unwrap()
+        .timed_pop_filtered(
+            gst::ClockTime::from_seconds(10),
+            &[gst::MessageType::Element],
+        )
+        .expect("no snapcast-stream-control message");
+    let command = message.structure().unwrap();
+    assert_eq!(command.get::<&str>("command").unwrap(), "setPosition");
+    let params: Value = serde_json::from_str(command.get::<&str>("params").unwrap()).unwrap();
+    assert_eq!(params["position"], 42);
+
+    // The volume goes to this client on the server and comes back.
+    assert!(src.emit_by_name::<bool>("set-server-volume", &[&40u32, &false]));
+    wait_until("the server volume back at snapsrc", || {
+        (src.property::<u32>("volume") == 40).then_some(())
+    });
+
+    receiver.set_state(gst::State::Null).unwrap();
+    sender.set_state(gst::State::Null).unwrap();
+}

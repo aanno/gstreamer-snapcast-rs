@@ -26,7 +26,47 @@ use tracing::Instrument;
 use crate::{EngineError, runtime};
 
 mod instance;
-mod join;
+mod session;
+
+pub use session::SessionProperties;
+
+/// Sends commands to a session's stream and server (see
+/// [`ClientHandle::session_control`]). Requests are queued while the control
+/// connection is down; they fail only when the queue is full or the client is gone.
+#[derive(Debug, Clone)]
+pub struct SessionControl {
+    requests: mpsc::Sender<session::Request>,
+}
+
+impl SessionControl {
+    /// A player command for the session's stream (`Stream.Control`): `command`
+    /// such as `play`, `pause`, `setPosition`, with its parameters as JSON text
+    /// (e.g. `{"position":90}`; empty: none).
+    pub fn stream_control(&self, command: &str, params_json: &str) -> Result<(), EngineError> {
+        self.send(session::Request::StreamControl {
+            command: command.to_owned(),
+            params_json: params_json.to_owned(),
+        })
+    }
+
+    /// This client's volume on the server (`Client.SetVolume`), as a controller
+    /// would set it; the server sends it back as the client's volume.
+    pub fn set_server_volume(&self, percent: u16, muted: bool) -> Result<(), EngineError> {
+        self.send(session::Request::SetVolume {
+            percent: percent.min(100),
+            muted,
+        })
+    }
+
+    fn send(&self, request: session::Request) -> Result<(), EngineError> {
+        self.requests.try_send(request).map_err(|e| match e {
+            mpsc::error::TrySendError::Full(_) => EngineError::Busy,
+            mpsc::error::TrySendError::Closed(_) => {
+                EngineError::InvalidConfig("the session's client is gone".into())
+            }
+        })
+    }
+}
 
 /// Client options.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +93,8 @@ pub struct ClientOptions {
     pub host_id: String,
     /// A stream to play instead of the one the server assigns (empty: the server's
     /// choice). The client then joins it via the control API, after every
-    /// (re)connect (see the `join` module).
+    /// (re)connect, and follows it as a session (see the `session` module and
+    /// [`ClientHandle::session_properties`]).
     pub stream: String,
     /// The server's JSON-RPC control port (TCP) for joining `stream`; 0: the stream
     /// port + 1 (Snapcast's default layout, 1704/1705).
@@ -136,6 +177,8 @@ pub struct ClientHandle {
     server: (String, u16),
     /// The server's volume (percent) and mute state for this client.
     volume: watch::Receiver<(u16, bool)>,
+    /// The control connection of [`ClientOptions::stream`], if set.
+    session: Option<session::Session>,
     /// Keeps the instance number claimed while the client lives.
     _instance_lock: Option<instance::InstanceLock>,
 }
@@ -146,15 +189,6 @@ impl std::fmt::Debug for ClientHandle {
             .field("status", &self.status)
             .finish_non_exhaustive()
     }
-}
-
-/// Where and as whom to join [`ClientOptions::stream`].
-#[derive(Debug, Clone)]
-struct JoinTarget {
-    host: String,
-    port: u16,
-    client_id: String,
-    stream: String,
 }
 
 /// The snapcast-client configuration for `options`.
@@ -253,16 +287,26 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
     );
     let event_status = Arc::clone(&status);
     let client_latency = options.latency_ms;
-    let join = (!options.stream.is_empty()).then(|| JoinTarget {
-        host: options.host.clone(),
-        port: if options.control_port == 0 {
-            options.port.saturating_add(1)
-        } else {
-            options.control_port
-        },
-        client_id: join::client_id(&options.host_id, instance),
-        stream: options.stream.clone(),
+    let mut tasks = vec![run_task];
+    let session = (!options.stream.is_empty()).then(|| {
+        let _runtime = rt.enter(); // session::start spawns its task
+        let (session, task) = {
+            session::start(session::Target {
+                host: options.host.clone(),
+                port: if options.control_port == 0 {
+                    options.port.saturating_add(1)
+                } else {
+                    options.control_port
+                },
+                client_id: session::client_id(&options.host_id, instance),
+                stream: options.stream.clone(),
+            })
+        };
+        tasks.push(task);
+        session
     });
+    let rejoin = session.as_ref().map(|s| Arc::clone(&s.rejoin));
+    let mut was_disconnected = false;
     let event_task = rt.spawn(
         async move {
             while let Some(event) = events.recv().await {
@@ -277,16 +321,12 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
                     } => {
                         status.buffer_ms = Some((buffer_ms - latency - client_latency).max(0));
                         volume_tx.send_replace((volume, muted));
-                        // Connected (again): the server knows this client now.
-                        if let Some(t) = &join {
-                            let t = t.clone();
-                            tokio::spawn(
-                                async move {
-                                    join::join_stream(&t.host, t.port, &t.client_id, &t.stream)
-                                        .await;
-                                }
-                                .in_current_span(),
-                            );
+                        // Connected again: the server may have put this client on
+                        // another stream (the first connection joins by itself).
+                        if std::mem::take(&mut was_disconnected)
+                            && let Some(rejoin) = &rejoin
+                        {
+                            rejoin.notify_one();
                         }
                     }
                     ClientEvent::VolumeChanged { volume, muted } => {
@@ -296,6 +336,7 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
                         status.time_synced = true;
                     }
                     ClientEvent::Disconnected { reason } => {
+                        was_disconnected = true;
                         status.time_synced = false;
                         status.last_error = Some(reason);
                     }
@@ -311,7 +352,11 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
         cmd_tx,
         status,
         time_provider,
-        tasks: vec![run_task, event_task],
+        tasks: {
+            tasks.push(event_task);
+            tasks
+        },
+        session,
         instance,
         server: (options.host.clone(), options.port),
         volume: volume_rx,
@@ -366,6 +411,21 @@ impl ClientHandle {
     /// The instance number this client uses (see [`ClientOptions::instance`]).
     pub fn instance(&self) -> u32 {
         self.instance
+    }
+
+    /// The session's stream properties as the server reports them (`None` until
+    /// known), updated on every change. `None` without [`ClientOptions::stream`].
+    pub fn session_properties(&self) -> Option<watch::Receiver<Option<SessionProperties>>> {
+        self.session.as_ref().map(|s| s.properties.clone())
+    }
+
+    /// A handle to send commands to the session (`None` without
+    /// [`ClientOptions::stream`]). It can be cloned and used from any thread,
+    /// independent of this handle.
+    pub fn session_control(&self) -> Option<SessionControl> {
+        self.session.as_ref().map(|s| SessionControl {
+            requests: s.requests.clone(),
+        })
     }
 
     /// Last error reported by the client, if any.

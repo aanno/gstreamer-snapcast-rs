@@ -191,8 +191,12 @@ pub struct SnapSink {
     state: Mutex<Option<Active>>,
     /// All tags received so far (merged), also before the stream is acquired.
     tags: Mutex<Option<gst::TagList>>,
-    /// Playback status reported to controllers, from the element's state.
+    /// Playback status reported to controllers, from the element's state (and
+    /// `stopped` after EOS).
     playback: Mutex<Option<PlaybackStatus>>,
+    /// Playback position reported to controllers, in whole seconds of stream time
+    /// (see `track_position`).
+    position_secs: Mutex<Option<u64>>,
     /// Set by `unlock()` to interrupt the pacing wait in `render()`.
     flushing: AtomicBool,
 }
@@ -227,6 +231,7 @@ impl SnapSink {
                 .unwrap_or_default(),
             controls: self.settings.lock().unwrap().controls.to_stream_controls(),
             playback: *self.playback.lock().unwrap(),
+            position_secs: self.position_secs.lock().unwrap().map(|s| s as f64),
         };
         if active.published.as_ref() == Some(&properties) {
             return;
@@ -240,6 +245,37 @@ impl SnapSink {
             Ok(()) => active.published = Some(properties),
             Err(e) => gst::warning!(CAT, imp = self, "Cannot publish stream properties: {e}"),
         }
+    }
+
+    /// Follows the stream position of `buffer` for the `position` property (DLNA
+    /// renderers show it, `docs/dlna.md`), in whole seconds, so that controllers
+    /// get one update per second. It is what is being sent now, which listeners hear
+    /// one Snapcast buffer later, so that much is subtracted. Rendering after EOS (a
+    /// seek back, a restart) also means playing again. Returns whether anything
+    /// changed.
+    fn track_position(&self, buffer: &gst::BufferRef) -> bool {
+        let mut changed = false;
+        {
+            let mut playback = self.playback.lock().unwrap();
+            if *playback == Some(PlaybackStatus::Stopped) {
+                *playback = Some(PlaybackStatus::Playing);
+                changed = true;
+            }
+        }
+        let segment = self.obj().segment();
+        let stream_time = segment
+            .downcast_ref::<gst::ClockTime>()
+            .and_then(|s| s.to_stream_time(buffer.pts()?));
+        if let Some(stream_time) = stream_time {
+            let buffer_ms = u64::from(self.settings.lock().unwrap().buffer_ms);
+            let heard = stream_time.mseconds().saturating_sub(buffer_ms) / 1000;
+            let mut position = self.position_secs.lock().unwrap();
+            if *position != Some(heard) {
+                *position = Some(heard);
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Republishes the stream properties if a stream is active.
@@ -518,7 +554,18 @@ impl ElementImpl for SnapSink {
             gst::StateChange::PausedToReady => None,
             _ => return Ok(ret),
         };
-        *self.playback.lock().unwrap() = playback;
+        {
+            let mut current = self.playback.lock().unwrap();
+            // Stopped (EOS) stays stopped when the pipeline is merely paused.
+            if !(*current == Some(PlaybackStatus::Stopped)
+                && playback == Some(PlaybackStatus::Paused))
+            {
+                *current = playback;
+            }
+        }
+        if playback.is_none() {
+            *self.position_secs.lock().unwrap() = None;
+        }
         self.republish();
         Ok(ret)
     }
@@ -582,6 +629,12 @@ impl BaseSinkImpl for SnapSink {
     }
 
     fn event(&self, event: gst::Event) -> bool {
+        if let gst::EventView::Eos(_) = event.view() {
+            // The end of the track: controllers (and DLNA renderers following the
+            // session) see `stopped`.
+            *self.playback.lock().unwrap() = Some(PlaybackStatus::Stopped);
+            self.republish();
+        }
         if let gst::EventView::Tag(tag) = event.view() {
             {
                 let mut tags = self.tags.lock().unwrap();
@@ -709,6 +762,9 @@ impl BaseSinkImpl for SnapSink {
         };
 
         let timestamp_usec = self.server_timestamp(buffer, active);
+        if self.track_position(buffer) {
+            self.publish_properties(active);
+        }
         // Pacing (see the module docs): wait in small steps, so that unlock() can
         // interrupt us within 10 ms.
         loop {
