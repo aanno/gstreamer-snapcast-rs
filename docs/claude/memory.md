@@ -7,7 +7,7 @@ the prototype (P1–P4 in detail, every decision with its reasons, the fixed lim
 L2–L13, all measurements) is in [memory-old-2026-11-22.md](memory-old-2026-11-22.md),
 frozen; the evaluation in [../evaluation.md](../evaluation.md).
 
-Last updated: 2026-11-27, evening (DLNA PoC steps 2–4 done).
+Last updated: 2026-11-27, end of session (DLNA PoC steps 1–4 done, step 5 prepared).
 
 ## Resume here (2026-11-27)
 
@@ -39,21 +39,46 @@ Last updated: 2026-11-27, evening (DLNA PoC steps 2–4 done).
      plan" in `docs/testing-host.md` (1–10: crash recovery, grace exit, log, option
      mismatch, port conflict, second machine, mixed clients, Bluetooth, tarball,
      overnight); the user runs them over the next days and reports by number;
-   - **DLNA/UPnP PoC** (new goal, 2026-11-24): design `docs/dlna.md` **agreed**:
-     dms offers a `snapcast://host:port/stream?control=` resource (no volume), preferred
-     over HTTP; gmrender + `snapsrc` URI handler; one session per item (independent
-     playback not needed); pause/seek global, stop leaves; item's own rate; dms uses
-     `go-gst` + `snapsink` for the PoC. Forks are submodules `dlna/dms`,
-     `dlna/gmrender-resurrect` (branch `aanno/fixes`), `make dlna-build`. Tests and
-     setup: `docs/dlna-tests.md`. **PoC step 1 done (2026-11-25, tests 0–7):**
-     BubbleUPnP does **not** pass a `snapcast:` protocol resource on (sends nothing
-     when both sides offer it; HTTP works otherwise), and sends its own DIDL with only
-     the chosen `<res>`; no second control point works here. **Decided (2026-11-25):**
-     the session is an `http-get:*:audio/x-snapcast:*` resource (dms `/snapcast?path=`
-     answers with the `snapcast://` URI, IPv4 preferred); gmrender
-     `--snapcast-formats audio/x-snapcast` advertises it first. Built in the forks (dms
-     `5d1cad6`, gmrender `80b078d`). **2026-11-27: the wrapper reaches gmrender** (tests 9a `audio/x-scpls` and 9b `audio/flac`, renderer re-selected): BubbleUPnP sends the `/snapcast?path=` URL, gmrender fetches it, dms answers with the `snapcast://` URI; `playbin` then fails with `Missing decoder: text/uri-list` (expected). Test 8 repeated: BubbleUPnP refuses unknown MIME types. **Decided and built 2026-11-27 (the user): content negotiation** on the ordinary resource (`docs/dlna-snapcast-protocol.md`, the protocol for implementers; `docs/dlna.md` rewritten): gmrender `--snapcast-sessions` sends HEAD/GET with `Accept: audio/x-snapcast-tcp` (list built from the GStreamer registry's URI handlers; warning at startup without snapsrc), dms `-snapcastStream <uri>` (repeatable, one per transport, chosen by Accept q) answers with the `snapcast-tcp://` URI; snapsrc is the URI handler (properties `stream`, `control-port`) and joins the stream via JSON-RPC (`gst-snapcast-engine` `client/join.rs`). Naming: `snapcast-tcp`, `snapcast-ws` reserved (decision). PoC step 2 done (integration test + SOAP by hand in the devcontainer). **DLNA test 10 passed on the host (2026-11-27):** BubbleUPnP → gmrender → dms negotiation → snapsrc plays `make listen-send`'s stream. **Step 3 built (2026-11-27):** engine `client/session.rs` (persistent control connection: properties in, `Stream.Control`/`Client.SetVolume` out), snapsrc message `snapcast-session` + action signals `stream-control`/`set-server-volume`, snapsink position/duration/`stopped` at EOS, example `session-sender` (`make dlna-session`), gmrender maps Pause/Seek/position/volume/end of track (SOAP e2e passed in the devcontainer). Test 11 passed on the host (seek needed a locale fix in gmrender; volume curve changed to C++'s). **Step 4 built (2026-11-27):** dms `SessionFeeder` (`snapcast_feeder.go`), `ProcessFeeder` runs `session-sender --mode shared --idle-exit N` per session (`-snapcastFeeder`), stream per item `{stream}` = `dms-<sha1 of path>`; not go-gst (only v0.0.x, 2 days old; dms stays pure Go). SOAP e2e in the devcontainer passed incl. a second room. **Next:** DLNA test 12 on the host, then step 5 (two renderers with BubbleUPnP, long run). Open: snapsink publishing session URIs per transport. Open: how snapsink publishes session URIs per transport (step 4). Forks: dms `f698f87`, gmrender newest on `aanno/fixes`; nothing pushed. Start each session with a short, plain recap. Gotcha: a self-built gmrender needs installing (icons) and
-     its own `-u` UUID (no firewall on the host);
+   - **DLNA/UPnP PoC: continue with DLNA tests 13 and 14 on the host** (step 5:
+     two renderers with BubbleUPnP; a night of playing with `scripts/dlna-soak.sh`),
+     plus test 12 c/d (several items at once, idle close). State at the end of
+     2026-11-27 (details: `docs/dlna.md` status and PoC steps, `docs/dlna-tests.md`
+     "Where we stand"):
+     - **Steps 1–4 done, step 5 prepared.** The chain works on the host with
+       BubbleUPnP (tests 10–12):
+       1. BubbleUPnP sends the item's ordinary `/res` URL.
+       2. gmrender (`--snapcast-sessions`) asks with HEAD/GET and
+          `Accept: audio/x-snapcast-tcp`.
+       3. dms (`-snapcastStream 'snapcast-tcp://{host}:1704/{stream}?control=1705'`,
+          `-snapcastFeeder "<session-sender> --mode shared --idle-exit N"`) opens a
+          session per item (`dms-<sha1 of path>`, one helper process each) and
+          answers with the URI.
+       4. `snapsrc` joins it.
+       5. Pause, seek, volume (room's Snapcast volume) and the end of the track go
+          through the session.
+
+       Two renderers in one session passed in the devcontainer (SOAP).
+     - **Where the code is:**
+       - engine `client/session.rs`: join, properties in, `Stream.Control` /
+         `Client.SetVolume` out;
+       - snapsrc: URI handler `uri.rs`, message `snapcast-session`, signals
+         `stream-control` / `set-server-volume`;
+       - snapsink: position, duration, `stopped` at EOS, a bus warning when `auto`
+         falls back to embedded;
+       - `snapsink/examples/session-sender.rs`: the helper;
+       - dms fork: `snapcast.go`, `snapcast_feeder.go`, `README-snapcast.md`;
+       - gmrender fork: `snapcast_session.c` and the session branch in
+         `output_gstreamer.c`.
+     - **Docs:** `docs/dlna.md` (design and history), `docs/dlna-snapcast-protocol.md`
+       (for implementers), `docs/dlna-tests.md` (tests 0–14), gotchas in
+       `docs/testing-host.md`.
+     - **Open:** how `snapsink` (or the daemon) publishes the session URIs per
+       transport, so that dms needs no `-snapcastStream`; an ffmpeg `SessionFeeder`
+       (maybe); gapless `SetNextAVTransportURI` into a session.
+     - **Not pushed:** everything since 2026-11-25. Forks first (dms `7c44a4b`,
+       gmrender `099f641`, both on `aanno/fixes`), then this repo.
+     - The user found long back-and-forth days confusing: start each session with a
+       short, plain recap.
    - the snapsrc wander experiment (Open items), measured as usual;
    - upstream PRs for the 14 fork commits (none opened yet).
    Known, older: `snapcast-control`'s crate doctest calls `serve_http` and fails with
@@ -92,6 +117,10 @@ What works, with the tests that cover it (all details in the archive and in
   audio sink to `slave-method=resample` (`adjust-sink`); provides no clock; fills gaps with
   silence flagged GAP; reconnects; client id with automatic `instance`; server volume/mute;
   mDNS discovery.
+- **DLNA PoC** (`docs/dlna.md`): Snapcast sessions negotiated on a media server's
+  ordinary resource URL, `snapsrc` as `snapcast-tcp://` URI handler that follows and
+  controls a session, dms feeding a session per item, gmrender mapping its actions to
+  the session. Host tests 10–12 passed with BubbleUPnP.
 - **Logging:** `tracing`/`log` bridged into the GStreamer debug log (`snapcast-*`
   categories); `GST_SNAPCAST_TRACING=0` turns it off.
 - **Tests:** `make check` (unit, loopback, lifecycle, control, logging, reconnect),
@@ -194,6 +223,21 @@ Short form; dates and reasons in the archive. CLAUDE.md has the coding rules.
 - 2026-11-22 (user): **`snapsink` is lean by default** (features `shared` on, `control`
   off; the daemon serves the control API), and **`snapcast-control`'s JWT
   authentication is an optional feature `auth`, off by default** (fork `60cb098`).
+- 2026-11-27 (user): **DLNA: content negotiation, not a second resource.** A renderer
+  asks for the item's ordinary URL with `Accept: audio/x-snapcast-tcp` and gets the
+  session URI; control points stay unchanged. BubbleUPnP passes on neither a
+  `snapcast:` protocol nor an unknown MIME type (tests 1–9). Transports are chosen
+  by `Accept` q values, and each side's list comes from what it can serve or play
+  (gmrender: the GStreamer registry's URI handlers).
+- 2026-11-27 (user): **naming `snapcast-tcp`** (URI scheme `snapcast-tcp://`, MIME
+  `audio/x-snapcast-tcp`); `snapcast-ws` reserved for WebSocket audio.
+- 2026-11-27 (user): **dms feeds sessions through a `SessionFeeder`**, scoped to the
+  session feed, not a configurable media backend. The PoC implementation is one
+  `session-sender` helper process per session (GStreamer, `snapsink mode=shared`),
+  not `go-gst` (only v0.0.x, days old). dms stays pure Go.
+- 2026-11-27 (user): **`mode=auto` falling back to embedded posts a bus WARNING**; a
+  daemon socket path too long for a Unix socket is a configuration error in every
+  mode.
 - 2026-11-27 (user): **snapsrc applies the server volume with the C++ snapclient's
   curve** `(10^v − 1) / 9` (default software mixer), not linearly like snapclient-rs:
   even dB steps, and the same loudness as C++ rooms at the same percent (DLNA test 11d).

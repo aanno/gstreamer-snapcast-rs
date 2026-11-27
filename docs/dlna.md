@@ -3,14 +3,17 @@
 Status: **agreed** (2026-11-24); the way the session is offered changed twice after
 tests with BubbleUPnP. Since **2026-11-27** it is **HTTP content negotiation on the
 item's ordinary resource**, with `snapcast-tcp` as the name of the transport.
-**PoC steps 2 to 4 are done** (2026-11-27):
+**PoC steps 1 to 4 are done, and step 5 is prepared** (2026-11-27):
 
 - `snapsrc` plays `snapcast-tcp://` URIs and joins the session's stream.
 - dms answers the negotiation, and feeds a session per item.
 - gmrender asks before playing, and plays the session.
 - Pause, Seek, position, volume and the end of a track go through the session.
 
-Next is step 5: two renderers with BubbleUPnP, and a long run.
+- Two renderers in one session work (devcontainer, SOAP).
+
+Next: tests 13 (two renderers with BubbleUPnP) and 14 (a night of playing) on the
+host.
 
 The wire protocol, for anyone implementing it in another server or renderer, is in
 [dlna-snapcast-protocol.md](dlna-snapcast-protocol.md). Tests are in
@@ -442,6 +445,13 @@ Worth designing for now; not part of the PoC.
    helper process per session (`session-sender`), opened on the renderer's `GET`,
    with an idle close. Tested by hand in the devcontainer; test 12 is for the host.
 5. **Two renderers, one control point**, then the overnight test as for the daemon.
+   Prepared 2026-11-27:
+   - in the devcontainer (two gmrenders, SOAP), one session for both rooms passed:
+     a pause in one room showed as paused in the other, a seek from either moved
+     both, the volume stayed per room, Stop left one room playing, and the end of
+     the track stopped both;
+   - on the host: DLNA test 13 (two renderers with BubbleUPnP) and test 14 (a night
+     of playing, monitored by `scripts/dlna-soak.sh`).
 
 ### Running the PoC
 
