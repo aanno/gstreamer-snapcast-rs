@@ -1,206 +1,133 @@
 # DLNA/UPnP with Snapcast streams (design)
 
-Status: **agreed** (2026-11-24); **changed 2026-11-25**: the session is offered as an
-`http-get` resource of MIME type `audio/x-snapcast`, not with a `snapcast:` protocol,
-because BubbleUPnP doesn't pass that on (see "Finding: BubbleUPnP and the `snapcast`
-protocol"). PoC step 1 done, the wrapper is in both forks. **2026-11-27:** the
-wrapper reaches gmrender only with MIME types BubbleUPnP knows, and the names become
-`snapcast-tcp` (see "Finding: only known MIME types pass" and "Naming").
-Targets for the proof of
-concept: the media server [dms](https://github.com/anacrolix/dms) (Go) and the renderer
-[gmrender-resurrect](https://github.com/hzeller/gmrender-resurrect) (C, GStreamer). Both
-are used at home and work there. Background: `docs/gstreamer-plugins/dlna-rs-gstreamer-1.md`
-(the original idea of a `snapcast://` URI and `snapsrc` in gmrender).
+Status: **agreed** (2026-11-24); the way the session is offered changed twice after
+tests with BubbleUPnP. Since **2026-11-27** it is **HTTP content negotiation on the
+item's ordinary resource**, with `snapcast-tcp` as the name of the transport. **PoC
+step 2 is done:**
+
+- `snapsrc` plays `snapcast-tcp://` URIs and joins the session's stream.
+- dms answers the negotiation.
+- gmrender asks before playing, and plays the session.
+
+The wire protocol, for anyone implementing it in another server or renderer, is in
+[dlna-snapcast-protocol.md](dlna-snapcast-protocol.md). Tests are in
+[dlna-tests.md](dlna-tests.md).
+
+Targets for the proof of concept:
+
+- the media server [dms](https://github.com/anacrolix/dms) (Go);
+- the renderer [gmrender-resurrect](https://github.com/hzeller/gmrender-resurrect)
+  (C, GStreamer).
+
+Both are used at home and work there. Background:
+`docs/gstreamer-plugins/dlna-rs-gstreamer-1.md` (the original idea of a Snapcast URI
+and `snapsrc` in gmrender).
 
 ## Goal
 
 Synchronized playback on several DLNA renderers, driven by ordinary DLNA control points,
 with as little new protocol as possible:
 
-- The **media server** offers a Snapcast stream as one more resource of an item, next to
-  the usual HTTP resource, the same way it offers a transcoded variant.
-- The usual **negotiation** decides which resource a renderer gets. A renderer without
-  Snapcast support gets the HTTP resource, as it does today.
-- Renderers that get the same Snapcast resource play **one shared session**, in sync.
+- The **media server** offers a Snapcast session for an item, next to the media
+  itself.
+- **Negotiation** decides what a renderer gets. A renderer without Snapcast support
+  gets the media, as it does today.
+- Renderers that get the same item play **one shared session**, in sync.
+- **Control points stay as they are.**
 
-## Decisions so far (2026-11-24, the user)
+## Decisions
+
+From 2026-11-24 (the user), with later changes marked:
 
 1. **The media server provides the stream**, not a renderer: it is the media server's
    job to give the renderer a URL for the media, and to serve the media itself when
-   needed (transcoding). A Snapcast stream is one more such offer. (A gmrender instance
+   needed (transcoding). A Snapcast session is one more such offer. (A gmrender instance
    with `snapsink` as its output, as a "virtual renderer", was discussed and rejected:
    it works around DLNA instead of using it.)
-2. **Negotiation as in DLNA:** the details of the Snapcast stream (codec, sample rate,
-   bit depth, channels) go into `protocolInfo`. The HTTP resource is the fallback.
+2. **Negotiation decides, and the media is the fallback.** *Changed 2026-11-27:* it
+   is HTTP content negotiation on the resource URL, not `protocolInfo`, because
+   control points pass on only what they know (see "How we got here"). Format details
+   aren't negotiated: the Snapcast stream announces its codec and format to each client.
 3. **The control point starts and pauses the stream**, as in any DLNA use case.
 4. **Pause and seek are global:** they act on the session, for all renderers in it.
 5. **A second renderer joins** a running session.
-6. **The URI** names host, port and stream. An initial volume was considered and
-   dropped (2026-11-24): it would be the same for every room, and the Snapcast server
-   already remembers each room's volume.
+6. **The URI** names host, port and stream (and the control port). An initial volume
+   was considered and dropped: it would be the same for every room, and the Snapcast
+   server already remembers each room's volume.
 7. **dms uses GStreamer for the PoC** (`snapsink` in a `go-gst` pipeline) for
    Snapcast sessions; ffmpeg stays for everything else. Not a clean design, but quick.
-8. **The renderer must know the new type and prefer it** over the HTTP resource
-   (see "Preferring the Snapcast resource").
+8. **The renderer must know the new type and prefer it.** *Since 2026-11-27:* a
+   renderer with sessions enabled (gmrender `--snapcast-sessions`) asks for a
+   session first and plays it whenever the server offers one.
 9. **Video with the audio split off** (video to a TV, audio as Snapcast to several
    devices) is a valid scenario. It is designed for here but comes after audio.
+10. **Naming** (2026-11-27): not plain "snapcast" but the transport, `snapcast-tcp`:
+    the URI scheme `snapcast-tcp://`, the MIME type `audio/x-snapcast-tcp`.
+    `snapcast-ws` is reserved for Snapcast over WebSocket.
+11. **Transport variants** (2026-11-27): the renderer's `Accept` header lists the
+    transports it can play, and the server picks one. The renderer's list comes from
+    the GStreamer registry (URI handlers). The server's list comes from its Snapcast
+    server, by hand in the PoC, later published by `snapsink`.
+12. **One session per item, Stop leaves, the item's own sample rate** (2026-11-24):
+    see "Sessions".
 
 ## Roles
 
 | Role | DLNA | Here | Changes |
 |---|---|---|---|
-| Media server | ContentDirectory, HTTP | dms | Offers a `snapcast` resource; feeds the session into the Snapcast server |
-| Snapcast server | none | `gst-snapcast-daemon` on the media server's machine | Creates sessions on demand for dms (new, below) |
-| Renderer | AVTransport, RenderingControl, ConnectionManager | gmrender + `snapsrc` | Accepts `snapcast://` URIs; maps actions to the session |
-| Control point | Browse, picks the resource, Play/Pause/Seek | BubbleUPnP, any | None. Must pass an unknown URI scheme through (to verify early) |
+| Media server | ContentDirectory, HTTP | dms | Answers the negotiation; feeds the session into the Snapcast server |
+| Snapcast server | none | `gst-snapcast-daemon` on the media server's machine | Serves the sessions (started by `snapsink`) |
+| Renderer | AVTransport, RenderingControl, ConnectionManager | gmrender + `snapsrc` | Asks for a session; plays `snapcast-tcp://` URIs; maps actions to the session |
+| Control point | Browse, picks the resource, Play/Pause/Seek | BubbleUPnP, any | **None** |
 
-## The Snapcast resource
+## Offering the session
 
-### In the listing (DIDL-Lite)
+Details: [dlna-snapcast-protocol.md](dlna-snapcast-protocol.md). In short:
 
-An item lists several `<res>` elements. dms adds one more, first (decision 8):
+1. The listing is unchanged: the item has its ordinary `http-get` resource.
+2. The control point sends that URL to the renderer, as always.
+3. Before playing it, the renderer sends a `HEAD` request for it with
+   `Accept: audio/x-snapcast-tcp` (one MIME type for each transport it can play).
+4. A media server that offers a session answers with that `Content-Type`. The
+   renderer then sends a `GET` with the same header and gets the session URI
+   (one line):
 
-```xml
-<res protocolInfo="snapcast:*:audio/flac;rate=44100;channels=2;bits=16:*">
-  snapcast://nas:1704/dms-3f9a1c?control=1705</res>
-<res protocolInfo="http-get:*:audio/flac:*">http://nas:1338/res?path=...</res>
-```
+   ```text
+   snapcast-tcp://<host>[:<port>]/<stream>[?control=<port>]
+   ```
 
-### protocolInfo
+   | Part | Default | Meaning |
+   |---|---|---|
+   | `host` | (required) | The Snapcast server (the media server's machine), name or IP |
+   | `port` | `1704` | Its stream port |
+   | `stream` | (required) | The Snapcast stream (= the session), percent-encoded |
+   | `control` | port + 1 | Its JSON-RPC port, to join the stream (and later to send Play/Pause/Seek) |
 
-`<protocol>:<network>:<contentFormat>:<additionalInfo>`, as in the UPnP
-ConnectionManager:
+5. The renderer plays that URI. `snapsrc` connects and joins the stream.
+6. Any other server answers the `HEAD` with the media's type, and the renderer plays
+   the URL as usual.
 
-- **protocol** `snapcast`: the renderer connects to a Snapcast server. It is not a file
-  to download, so it is not `http-get`.
-- **contentFormat** is the codec on the Snapcast wire, with the stream's format as MIME
-  parameters. DLNA already does this for LPCM (`audio/L16;rate=44100;channels=2`):
-  - `audio/L16;rate=…;channels=…` for codec `pcm` (16 bit; `audio/L24` for 24 bit),
-  - `audio/flac;rate=…;channels=…;bits=…` for codec `flac`,
-  - `audio/opus;…` only if the renderer's client decodes it (not needed for the PoC).
-  A renderer advertises what its client decodes, e.g. `snapcast:*:audio/flac:*` and
-  `snapcast:*:audio/L16:*`. A matching control point compares the MIME type; the
-  parameters tell the renderer what to expect.
-- **additionalInfo:** start with `*`, as gmrender advertises its own types. Add DLNA
-  parameters (`DLNA.ORG_OP=00`: no byte or time ranges, seeking goes through the
-  session; flags for a live stream) only if a control point turns out to need them
-  (PoC step 1).
+The renderer's `GET` is also dms's cue to **open the session**. That makes sessions
+on demand simple (below).
 
-One item gets **one** Snapcast resource. Two (say `pcm` and `flac`) would be two
-sessions fed separately, and renderers picking different ones would not play in sync.
-Default codec `flac` (lossless, about half of PCM's bit rate, safer over Wi-Fi). The
-sample rate is the item's own (decided 2026-11-24) (44.1 kHz for a CD rip), so dms does not resample;
-Snapcast clients resample to their device anyway.
+### How we got here
 
-### Preferring the Snapcast resource (decision 8)
-
-DLNA has no explicit preference. The control point picks one `<res>` that matches the
-renderer's `SinkProtocolInfo`, and the HTTP resource matches too. So the preference has
-to be built from what control points look at, on three levels:
-
-1. **Order in the listing:** dms lists the `snapcast` resource **first**. Most control
-   points take the first resource that matches.
-2. **Order in the renderer's `SinkProtocolInfo`:** gmrender lists its `snapcast:` entries
-   **first**. Some control points rank resources by the renderer's order.
-3. **The renderer decides itself (fallback):** `SetAVTransportURI` also carries
-   `CurrentURIMetaData`, the item's DIDL-Lite. If a control point chose the HTTP
-   resource but the metadata also lists a `snapcast` resource, gmrender plays the
-   Snapcast one instead. This works only with control points that send the item's
-   resources in the metadata (many send just the chosen one). It also needs to be a
-   configurable switch, so that a single room can still play on its own.
-
-PoC step 1 checks which of these the control points at hand honour.
-
-### URI
-
-```text
-snapcast://<host>[:<port>]/<stream>[?control=<port>]
-```
-
-| Part | Default | Meaning |
+| Date | Design | Result with BubbleUPnP (DLNA test) |
 |---|---|---|
-| `host` | (required) | The Snapcast server (the media server's machine), name or IP |
-| `port` | `1704` | Its stream port |
-| `stream` | (required) | The Snapcast stream (= the session), percent-encoded |
-| `control` | `1705` | Its JSON-RPC port. The renderer needs it to join the stream and to send Play/Pause/Seek |
+| 2026-11-24 | A second `<res>` with its own protocol, `snapcast:*:audio/flac:*`, listed first by dms and by the renderer | Never sent to the renderer, no fallback (tests 1, 7) |
+| 2026-11-25 | A second `<res>` as `http-get` with its own MIME type `audio/x-snapcast`, whose URL answers with the session URI | Never sent either (test 8, confirmed 2026-11-27) |
+| 2026-11-27 | The same with a type BubbleUPnP knows (`audio/flac`, `audio/x-scpls`) | Reaches gmrender (tests 9a, 9b). But any renderer would get the one-line answer instead of music, and nothing in the DIDL can mark it as a session |
+| 2026-11-27 | **Content negotiation on the ordinary resource** | Nothing changes for the control point; built and tested by hand (PoC step 2) |
 
-Format details are not in the URI: they are in `protocolInfo`, and the Snapcast stream
-announces them again to every client (its codec header).
+Other findings from those tests:
 
-Volume is not in the URI (decision 6): each room keeps its own, through
-RenderingControl and the Snapcast server's memory of each client.
-
-### Finding: BubbleUPnP and the `snapcast` protocol (2026-11-25)
-
-DLNA tests 1 and 7 ([dlna-tests.md](dlna-tests.md)): BubbleUPnP sends nothing to the
-renderer when the item offers a `snapcast:` resource **and** the renderer advertises
-`snapcast:`; with only one of the two it plays the HTTP resource. It does not pass a
-`snapcast` protocol resource through, and it does not fall back. It also sends its own
-DIDL with only the chosen `<res>` (so the renderer-side fallback above won't work with
-it), and it may reach dms over IPv6.
-
-**Decided (2026-11-25, the user): the session as an `http-get` resource** with its own MIME
-type, first in the listing and first in the renderer's `SinkProtocolInfo`:
-
-```xml
-<res protocolInfo="http-get:*:audio/x-snapcast:*">http://nas:1338/snapcast?path=…</res>
-<res protocolInfo="http-get:*:audio/flac:…">http://nas:1338/res?path=…</res>
-```
-
-- To a control point it is an ordinary HTTP resource whose MIME type the renderer
-  accepts exactly (BubbleUPnP matches MIME types exactly, per gmrender's source).
-- The renderer recognizes a session by the MIME type of the chosen `<res>` (BubbleUPnP
-  keeps the protocolInfo in its DIDL) or by the response's Content-Type, fetches the URL,
-  and gets the `snapcast://host:port/stream?control=…` URI to play with `snapsrc`.
-- **Sessions on demand get simpler:** the renderer's fetch tells dms to open the
-  session (start the `snapsink` pipeline) before it answers. The daemon IPC v3
-  (`Provide`/`Open`/`Close`) and the snapcast-rs hook below would not be needed.
-- dms answers with an address the Snapcast server listens on (e.g. IPv4), however the
-  renderer reached dms.
-- Format details go into MIME parameters (`audio/x-snapcast;codec=flac;rate=44100;…`)
-  or into the fetched description.
-
-This replaces the `snapcast:` protocol in "In the listing", "protocolInfo" and
-"Preferring the Snapcast resource" above, and makes "Sessions on demand" (dms side)
-much smaller; those sections still describe the first design and get rewritten when
-the PoC confirms the wrapper (DLNA test 8). DLNA test 4 (another control point) found
-none that works here (2026-11-25), so the design must work with BubbleUPnP.
-
-### Finding: only known MIME types pass (2026-11-27)
-
-- **What the tests show:**
-  - With a type BubbleUPnP knows, the wrapper works end to end up to `playbin`. This
-    held for `audio/flac` (DLNA test 9b) and `audio/x-scpls` (9a). BubbleUPnP
-    probes the URL once, sends it to gmrender, and gmrender fetches it. dms then
-    answers with the URI.
-  - BubbleUPnP refuses the own type `audio/x-snapcast` (test 8, confirmed).
-  - BubbleUPnP rewrites the 4th field of protocolInfo
-    (`DLNA.ORG_FLAGS=…;DLNA.ORG_OP=01`), so no marker can go there either.
-- **Consequence:** the DIDL can't mark a session in a way that reaches the renderer.
-  The renderer has to ask the server.
-- **Proposal (to be decided): content negotiation on the ordinary audio resource.**
-  - dms keeps one normal `<res>` per track. No extra session resource, and nothing
-    unknown for the control point.
-  - gmrender with Snapcast support first sends the server a `HEAD` request for the URL,
-    with `Accept: audio/x-snapcast-tcp`.
-  - A Snapcast-aware dms answers with that Content-Type, and a `GET` with the same
-    header returns the URI.
-  - Any other server answers with the audio type, and gmrender plays the URL as
-    usual. The price is one extra `HEAD` per track.
-  - This also covers the problem seen in test 9b: a renderer that doesn't know
-    Snapcast gets the music, not the one-line answer.
-
-### Naming: `snapcast-tcp` (the user, 2026-11-27)
-
-"snapcast" alone is misleading: Snapcast clients connect over TCP (the binary
-protocol on port 1704) or over WebSocket. The names say which one:
-- the URI scheme is `snapcast-tcp://host[:port]/<stream>[?control=<port>]`;
-- the MIME type is `audio/x-snapcast-tcp`;
-- `snapcast-ws` is reserved for a WebSocket variant, which snapcast-rs doesn't
-  implement yet.
-
-The current fork code and the older sections here still say `snapcast`/`x-snapcast`.
-They get renamed in PoC step 2.
+- BubbleUPnP sends its own DIDL in `CurrentURIMetaData`, with only the chosen
+  `<res>`. It rewrites the fourth protocolInfo field.
+- Before sending a URL to the renderer, BubbleUPnP probes it once.
+- It may reach dms over IPv6, so dms answers with an address the Snapcast server
+  listens on (IPv4 if the interface has one).
+- No other control point worked here (test 4), so the design must work with
+  BubbleUPnP.
 
 ## Sessions
 
@@ -209,26 +136,30 @@ the same moment; that is what the Snapcast server does.
 
 **Stream name per item** (`dms-<hash of the item id>`): every renderer given the same
 item joins the same session. Playing the same item in two rooms independently is
-therefore not possible, and not needed (2026-11-24).
+therefore not possible, and not needed (2026-11-24). The sample rate is the item's own
+(dms does not resample; Snapcast clients resample to their device anyway). The default
+codec is `flac`: lossless, about half of PCM's bit rate, and safer over Wi-Fi.
 
 ### How a session runs
 
+Design. The negotiation and the join are built; Play, Pause and the session state
+on the renderer come in PoC steps 3 and 4.
+
 ```text
-control point          renderer A / B (gmrender + snapsrc)     daemon           dms
-     │ Browse ─────────────────────────────────────────────────────────────────▶ │
-     │ GetProtocolInfo ──▶ A: "snapcast:*:audio/flac:*, http-get:…"              │
-     │ SetAVTransportURI(snapcast://nas:1704/dms-3f9a1c) ──▶ A                    │
-     │                         A: connect 1704, Group.SetStream(dms-3f9a1c) ──▶   │
-     │                                                  unknown, prefix "dms-":  │
-     │                                                  Open(dms-3f9a1c) ──────▶ │
-     │                                                  ◀────── Acquire (paused) │
-     │                         A: STOPPED (session ready)                         │
-     │ Play ─────────────────▶ A: Stream.Control play ─▶ Command ──────────────▶ │
-     │                                                  ◀───── PCM from position │
-     │                         A: PLAYING (follows the session's playback state)  │
-     │ SetAVTransportURI + Play ──▶ B: same stream, already playing: B joins      │
-     │ Pause ────────────────▶ B: Stream.Control pause ─▶ ─────────────────────▶ │
-     │                         A and B: PAUSED (Stream.OnProperties)              │
+control point        renderer A / B (gmrender + snapsrc)          dms (+ snapsink, daemon)
+   │ Browse ───────────────────────────────────────────────────────────────────▶ │
+   │ SetAVTransportURI(http://nas:1338/res?path=song.flac) ──▶ A                  │
+   │                      A: HEAD/GET, Accept: audio/x-snapcast-tcp ───────────▶ │
+   │                                         opens session dms-3f9a1c (paused) │
+   │                      A ◀── snapcast-tcp://nas:1704/dms-3f9a1c?control=1705  │
+   │                      A: connect 1704, Group.SetStream(dms-3f9a1c)            │
+   │                      A: STOPPED (session ready)                              │
+   │ Play ──────────────▶ A: Stream.Control play ─────────────────────────────▶ │
+   │                                                  ◀────── audio from position │
+   │                      A: PLAYING (follows the session's playback state)       │
+   │ SetAVTransportURI + Play ──▶ B: same item → same session, already playing    │
+   │ Pause ─────────────▶ B: Stream.Control pause ────────────────────────────▶ │
+   │                      A and B: PAUSED (Stream.OnProperties)                   │
 ```
 
 - **Start (decision 3):** the control point's `Play` on a renderer becomes
@@ -240,10 +171,10 @@ control point          renderer A / B (gmrender + snapsrc)     daemon           
   therefore also sees a pause that came from B.
 - **Join (decision 5):** `Play` on a session that is already playing changes nothing.
   The renderer simply joins in.
-- **Stop is local** (decided 2026-11-24): `Stop` makes that renderer leave the session; the others
-  go on playing. Pause is for the whole session; Stop is how one room drops out. When the
-  last renderer has left and the session is paused or stopped, dms closes it after a
-  while (idle timeout).
+- **Stop is local** (decided 2026-11-24): `Stop` makes that renderer leave the
+  session; the others go on playing. Pause is for the whole session; Stop is how one
+  room drops out. When the last renderer has left and the session is paused or
+  stopped, dms closes it after a while (idle timeout).
 - **End of the track:** dms reports playback `stopped`, every renderer goes to STOPPED,
   and the control point moves on as usual, by `SetAVTransportURI` with the next item
   (or `SetNextAVTransportURI`). Each renderer is told separately but gets the same next
@@ -262,7 +193,7 @@ would be a Snapcast protocol extension (later, if at all).
 
 | UPnP action | On the renderer | On the session |
 |---|---|---|
-| `SetAVTransportURI(snapcast://…)` | `snapsrc` connects, joins the stream | Opened on demand (dms) |
+| `SetAVTransportURI(http://…)` | Negotiation; with a session: `snapsrc` connects and joins the stream (**built**) | Opened by dms on the `GET` |
 | `Play` | follows the session | `Stream.Control play` (no-op when playing) |
 | `Pause` | follows the session | `Stream.Control pause` |
 | `Seek(REL_TIME)` | follows the session | `Stream.Control setPosition` |
@@ -272,7 +203,22 @@ would be a Snapcast protocol extension (later, if at all).
 | `Next`/`Previous` | as today (the control point's playlist) | none |
 | RenderingControl `SetVolume`/`SetMute` | this room only | `Client.SetVolume` of this renderer's client |
 
+The renderer keeps reporting the control point's URL as `AVTransportURI`, never the
+session URI.
+
 ## Media server side (dms)
+
+### The negotiation (built)
+
+`dlna/dms/snapcast.go` in the fork:
+
+- `-snapcastStream <uri>` gives the session URI for a transport. It can be repeated,
+  once per transport, and `{host}` stands for this machine.
+- A request for an audio item's `/res` whose `Accept` header names one of those
+  transports gets the best match instead of the media.
+- In the PoC, the URI is fixed (one stream for every item), and something else feeds
+  that stream (e.g. `make listen-send`). Stream names per item and feeding come with
+  step 4.
 
 ### Feeding the session, PoC: GStreamer in dms
 
@@ -300,21 +246,16 @@ bus messages with the commands never reach dms. A `snapsink` that was fed while 
 and then resumed, or one that seeks, must keep a continuous timeline on the server. That
 needs testing (running time after a flushing seek).
 
-On-demand sessions (below) still need dms to hear "open this stream" from the daemon,
-which a `snapsink` cannot pass on. So the PoC first uses streams that dms opens itself
-(PoC step 4a). For on-demand sessions, dms opens a small control-only connection to the
-daemon (`Provide`, `Open`, `Close`, no PCM).
-
 ### Feeding the session, later: ffmpeg and the daemon socket
 
 The clean design without GStreamer in dms: dms already transcodes with ffmpeg. For a
-Snapcast session it runs ffmpeg to raw PCM at
-the item's rate and feeds it into the daemon over its Unix socket
-(`docs/shared-server.md`, the IPC protocol): `Hello`, `Acquire`, then `Pcm` frames,
-`Properties` for title, artist, album, duration, position and playback state, and
-`Command`s back for play, pause and seek. No GStreamer is needed in dms. The protocol is
-small (a frame is type, length and payload; control messages are JSON). A Go client is
-a few hundred lines, and is the first producer of the daemon that is not `snapsink`.
+Snapcast session it runs ffmpeg to raw PCM at the item's rate and feeds it into the
+daemon over its Unix socket (`docs/shared-server.md`, the IPC protocol): `Hello`,
+`Acquire`, then `Pcm` frames, `Properties` for title, artist, album, duration, position
+and playback state, and `Command`s back for play, pause and seek. No GStreamer is
+needed in dms. The protocol is small (a frame is type, length and payload; control
+messages are JSON). A Go client is a few hundred lines, and is the first producer of
+the daemon that is not `snapsink`.
 
 - **Timestamps:** each `Pcm` frame carries its capture time on `CLOCK_MONOTONIC`
   (`golang.org/x/sys/unix.ClockGettime`). dms paces the feed in real time, as
@@ -329,64 +270,60 @@ a few hundred lines, and is the first producer of the daemon that is not `snapsi
 ### Sessions on demand
 
 A session must exist before a renderer can join it, but dms cannot create one for every
-item it lists (a folder can hold hundreds). So the daemon learns to create streams on
-demand:
+item it lists (a folder can hold hundreds). With content negotiation, **the renderer's
+`GET` tells dms which item to open**: dms starts the session (a `snapsink` pipeline,
+paused, with the item's tags) and answers once the stream exists. `snapsrc` retries the
+join for a few seconds anyway. When a session has had no clients for a while, dms
+closes it.
 
-- dms connects once and **registers as the provider** of a stream-name prefix (`dms-`).
-- When a client asks to join an unknown stream with that prefix (`Group.SetStream`),
-  the daemon asks the provider to **open** it. dms looks the item up by the hash,
-  acquires the stream (paused, with its properties), and the daemon then completes the
-  join.
-- When a session has no clients and is not playing for a while, the daemon tells the
-  provider to **close** it.
+This replaces the earlier plan (2026-11-24), in which the daemon asked dms to open
+unknown streams: a daemon IPC v3 (`Provide`/`Open`/`Close`) and a "streams on demand"
+hook in snapcast-rs. Neither is needed now.
 
-That is new in two places:
+What is still needed: `Properties` gets a `position` (seconds), which it lacks
+today. Snapcast's stream properties already define one.
 
-- **The daemon's IPC protocol** (version 3): `Provide { prefix }`, and `Open { stream }`
-  and `Close { stream }` from the daemon to the provider.
-- **snapcast-rs** (the fork, as an upstream PR candidate): a hook in the server that
-  resolves an unknown stream name before `Group.SetStream` fails ("streams on demand").
-  Today a stream must exist before a group can be set to it.
+### Which transports (later)
 
-`Properties` also needs a `position` (seconds), which it lacks today. Snapcast's stream
-properties already define one.
-
-In the PoC (GStreamer in dms), the `Open` reaches dms over that control-only
-connection, and dms answers by starting a `snapsink` pipeline for the stream.
+dms must know which transports its Snapcast server serves, and on which ports. In the
+PoC it gets them by hand (`-snapcastStream`, once per transport). Later, `snapsink`
+(or the daemon) should publish them: for example, a read-only property with one URI
+template per transport the server listens on. dms then needs no configuration
+beyond turning sessions on.
 
 ## Renderer side (gmrender + snapsrc)
 
-gmrender plays every URI through `playbin`, and passes it on without filtering by scheme
-(`output_gstreamer.c`, `output_gstreamer_set_uri`). So most of the work is in `snapsrc`:
+### Built (PoC step 2)
 
-- **`snapcast://` URI handler** (GStreamer's `GstURIHandler`): `playbin` then picks
-  `snapsrc` for such a URI by itself. The URI sets host, port, stream and control port.
-- **Joining a stream:** `snapsrc` connects as today, then, via JSON-RPC on the control
-  port, finds its own group (`Server.GetStatus`, by its client id) and sets it to the
-  stream (`Group.SetStream`). Today `snapsrc` plays whatever the server assigned.
-  The engine's `client` feature needs a small JSON-RPC client for this.
+- **`snapsrc`:**
+  - It is the `GstURIHandler` for `snapcast-tcp://` (`src/snapsrc/uri.rs`), so
+    `playbin` picks it by itself.
+  - The URI sets the properties `host`, `port`, `stream` and `control-port`.
+  - With `stream` set, the engine's client joins that stream via JSON-RPC
+    (`Server.GetStatus` to find its group by its client id, then `Group.SetStream`).
+    It does this after every (re)connect and retries for a few seconds
+    (`gst-snapcast-engine`, `src/client/join.rs`).
+  - Test: `control.rs`, `playbin_plays_a_snapcast_tcp_uri_and_joins_its_stream`.
+- **gmrender** (`src/snapcast_session.c`, option `--snapcast-sessions`):
+  - Before an `http://` URI goes to the output (`output_set_uri`,
+    `output_set_next_uri`), gmrender runs the negotiation and hands the
+    `snapcast-tcp://` URI to `playbin` instead.
+  - Its `Accept` header lists the transports whose URI scheme an installed GStreamer
+    source handles. Without `snapsrc`, it doesn't negotiate at all.
+
+### Still to do (PoC step 3)
+
 - **Session state to the renderer:** `snapsrc` follows the stream's properties
-  (`Stream.OnProperties`) and posts them on the bus (playback state, position, duration,
-  tags). Playback commands from the application go the other way as `Stream.Control`.
-  How gmrender asks for them is a gmrender question (below).
-- **While paused** the session sends no audio, and `snapsrc` outputs silence marked GAP,
-  as it already does when the server sends nothing (F5).
-
-gmrender needs:
-
-- **`snapcast` in its protocolInfo, first.** It builds its list from the MIME types of
-  all installed GStreamer elements' sink pads (`scan_mime_list`), always with the
-  `http-get` protocol. Entries like `snapcast:*:audio/flac:*` must be added when
-  `snapsrc` is installed (it can ask the registry for a `snapcast` URI handler), and put
-  **at the front** of the list (decision 8).
-- **Preferring a Snapcast resource from the metadata** (the fallback in "Preferring the
-  Snapcast resource"): in `SetAVTransportURI`, look for a `snapcast` `<res>` in
-  `CurrentURIMetaData` and play it instead of the HTTP URI, behind an option.
-- **Pause, Seek and position for snapcast URIs** go to the session instead of to the
-  local `playbin`: on Pause, send `pause` to the session instead of pausing the pipeline;
-  report the session's position instead of the pipeline's. The cleanest boundary is
-  probably element messages or signals of `snapsrc`, so that gmrender only needs a small
-  branch for "the source is a session".
+  (`Stream.OnProperties`) and posts them on the bus (playback state, position,
+  duration, tags). Playback commands from the application go the other way as
+  `Stream.Control`.
+- **Pause, Seek and position for sessions** go to the session instead of to the local
+  `playbin`: on Pause, gmrender sends `pause` to the session instead of pausing the
+  pipeline, and it reports the session's position instead of the pipeline's. The
+  cleanest boundary is probably element messages or signals of `snapsrc`, so that
+  gmrender only needs a small branch for "the source is a session".
+- **While paused**, the session sends no audio, and `snapsrc` outputs silence marked
+  GAP, as it already does when the server sends nothing (F5).
 - **Volume:** RenderingControl maps to this renderer's Snapcast client volume, not
   `playbin`'s volume, so that Snapweb and the renderer show the same value.
 
@@ -396,9 +333,10 @@ does not link anything of ours (it talks to the daemon over a socket).
 
 ## Video with the audio split off (later)
 
-The media server offers the video (HTTP) and its audio track as a Snapcast session. The
-control point sends the video to the TV and the Snapcast resource to the speakers. The
-TV plays on its own clock, not on the Snapcast timeline. Lip sync therefore needs:
+The media server offers the video (HTTP), and its audio track as a Snapcast session.
+The control point sends the video to the TV and the item to the speakers. The speakers
+negotiate the session. The TV plays on its own clock, not on the Snapcast timeline.
+Lip sync therefore needs:
 
 - the same start: the control point starts both, and the TV's start lag must be measured
   per TV;
@@ -406,44 +344,39 @@ TV plays on its own clock, not on the Snapcast timeline. Lip sync therefore need
 - for pause and seek, both sides must be told. That's the control point's job, so a
   standard control point will not do it. This needs a control point that knows about it.
 
-Worth designing for now (an item may carry a video resource plus a Snapcast audio
-resource); not part of the PoC.
+Worth designing for now; not part of the PoC.
 
 ## What changes where
 
-| Where | Change | Upstream |
-|---|---|---|
-| this repo, engine/daemon | IPC v3: `Provide`, `Open`, `Close`; `position` in `Properties` | ours |
-| this repo, `snapsrc` | `snapcast://` URI handler; join a stream via JSON-RPC; session state on the bus | ours |
-| snapcast-rs (fork) | Streams on demand (a resolver hook before `Group.SetStream` fails) | PR candidate |
-| this repo, `snapsink` | A way for the application to set `position` (and playback state) in the stream's properties | ours |
-| dms (fork) | The `snapcast` resource; PoC: a `go-gst` pipeline with `snapsink`, play, pause and seek; later maybe the ffmpeg feed via the daemon socket | PR candidate, if dms wants it |
-| gmrender-resurrect (fork) | `snapcast` first in protocolInfo; prefer a Snapcast resource from the metadata; session-aware Pause/Seek/position/volume | PR candidate |
+| Where | Change | Status | Upstream |
+|---|---|---|---|
+| this repo, `snapsrc` + engine | `snapcast-tcp://` URI handler; join a stream via JSON-RPC | **done** | ours |
+| this repo, `snapsrc` | Session state on the bus; `Stream.Control` from the application | step 3 | ours |
+| this repo, `snapsink` | Set `position` (and playback state) in the stream's properties; publish the session URI templates per transport | step 4 / later | ours |
+| dms (fork) | Negotiation, transport by `Accept` | **done** | PR candidate, if dms wants it |
+| dms (fork) | Sessions per item: a `go-gst` pipeline with `snapsink`, play, pause, seek; idle close; later maybe the ffmpeg feed | step 4 | PR candidate, if dms wants it |
+| gmrender-resurrect (fork) | Negotiation before playing, `Accept` from the GStreamer registry | **done** | PR candidate |
+| gmrender-resurrect (fork) | Session-aware Pause/Seek/position/volume | step 3 | PR candidate |
+| snapcast-rs (fork) | WebSocket audio (L11), then `snapcast-ws` in both plugins | later | PR candidate |
 
 ## PoC steps
 
-1. **Control point check:** does BubbleUPnP (and one more control point) pass a
-   `snapcast` resource to a renderer that advertises it, and does it **prefer** it over
-   the HTTP resource (order in the listing, order in `SinkProtocolInfo`)? Does it send
-   all of the item's resources in `CurrentURIMetaData` (the renderer-side fallback)?
-   If control points filter the resource out, the design needs a fallback (e.g. an
-   `http-get` resource whose URL redirects or describes the session). This is the
-   biggest risk, so it comes first. How to run it: [dlna-tests.md](dlna-tests.md).
-   Prepared 2026-11-24 (dms `-snapcastStream`, gmrender `--snapcast-formats`, both PoC
-   options in the forks); checked by hand with SOAP requests, waiting for real
-   control points.
-2. **`snapsrc` URI handler and stream join**, tested with
-   `gst-launch-1.0 playbin uri=snapcast://…` against a `snapsink` stream.
-3. **gmrender** plays `snapcast://` URIs, advertises them, maps Pause/Seek/position.
-   A fixed stream fed by `make listen-send` stands in for dms.
-4. **dms** with GStreamer (`go-gst`, `snapsink`):
-   a. the resource and a session that dms opens itself for one item (say, the first
-      item that is browsed or a configured one), with play, pause and seek on the
-      pipeline;
-   b. sessions on demand: daemon IPC v3, the fork hook, and dms's control-only
-      connection.
-   The ffmpeg and daemon-socket feed replaces GStreamer in dms only if the PoC succeeds
-   and dms upstream is interested.
+1. ~~**Control point check**~~ done 2026-11-27 (DLNA tests 0–9): BubbleUPnP passes
+   only resources it knows, so the design moved to content negotiation (see "How we
+   got here").
+2. ~~**`snapsrc` URI handler and stream join; the negotiation in dms and
+   gmrender**~~ done 2026-11-27. Tested:
+   - `playbin` with a `snapcast-tcp://` URI (integration test);
+   - by hand, a controller's SOAP requests → gmrender → dms negotiation → `snapsrc`
+     on the right stream, with the HTTP fallback.
+
+   Next is the test with BubbleUPnP on the host: DLNA test 10.
+3. **gmrender** maps Pause/Seek/position/volume to the session. A fixed stream fed by
+   `make listen-send` stands in for dms.
+4. **dms** with GStreamer (`go-gst`, `snapsink`): a session per item, opened on the
+   renderer's `GET`, with play, pause and seek on the pipeline, and an idle close.
+   The ffmpeg and daemon-socket feed replaces GStreamer in dms only if the PoC
+   succeeds and dms upstream is interested.
 5. **Two renderers, one control point**, then the overnight test as for the daemon.
 
 ### Running the PoC
@@ -454,20 +387,26 @@ Setup, numbered tests and suggestions: [dlna-tests.md](dlna-tests.md).
 
 Both projects as **forks** (`aanno/dms`, `aanno/gmrender-resurrect`) and git submodules
 under `dlna/` in this repo, like `snapcast-rs`: changes committed in the fork, the
-pointer bumped here in its own commit. They are not part of `make check`; they get
-their own make targets. The devcontainer needs Go (dms, with cgo for `go-gst`) and
-libupnp plus autotools (gmrender). After the PoC, the DLNA integration may move into a repo of its own.
+pointer bumped here in its own commit. They are not part of `make check`; they have
+their own make target (`make dlna-build`). The devcontainer needs Go (dms, with cgo for
+`go-gst`) and libupnp plus autotools (gmrender). After the PoC, the DLNA integration may
+move into a repo of its own.
 
 ## Open questions
 
-1. Do control points pass a `snapcast` resource through, and prefer it? Which DLNA
-   parameters do they expect in protocolInfo? No way to decide this on paper: PoC
-   step 1 answers it. Start with `*` (no DLNA parameters) and add only what a control
-   point demands.
+1. Does the negotiation work with BubbleUPnP on the host as it does with SOAP requests
+   by hand? (DLNA test 10.)
+2. How does `snapsink` (or the daemon) publish the session URIs per transport? A
+   read-only property, a bus message, or the daemon's status? Decide in step 4.
 
-Answered (2026-11-24, the user):
+Answered:
 
-- Initial `volume` in the URI: dropped (decision 6).
-- Independent playback of the same item in two rooms: not needed; one session per item.
-- Stop: leaves the session; the others play on.
-- Sample rate: the item's own; dms does not resample.
+- Initial `volume` in the URI: dropped (decision 6, 2026-11-24).
+- Independent playback of the same item in two rooms: not needed; one session per item
+  (2026-11-24).
+- Stop: leaves the session; the others play on (2026-11-24).
+- Sample rate: the item's own; dms does not resample (2026-11-24).
+- Do control points pass a Snapcast resource through? No (BubbleUPnP), hence content
+  negotiation (2026-11-27).
+- Transport variants: through `Accept` and q values; the lists come from GStreamer
+  (2026-11-27).

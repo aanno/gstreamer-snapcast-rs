@@ -7,9 +7,9 @@ the prototype (P1–P4 in detail, every decision with its reasons, the fixed lim
 L2–L13, all measurements) is in [memory-old-2026-11-22.md](memory-old-2026-11-22.md),
 frozen; the evaluation in [../evaluation.md](../evaluation.md).
 
-Last updated: 2026-11-27 (DLNA PoC: tests 8/9 done, naming `snapcast-tcp`).
+Last updated: 2026-11-27, evening (DLNA PoC step 2 done: content negotiation, snapcast-tcp).
 
-## Resume here (2026-11-25)
+## Resume here (2026-11-27)
 
 1. **The feasibility prototype is done: go** (user, 2026-11-22, agreeing to
    `docs/evaluation.md`). F1–F5 met; F1 and F2 with caveats (see Open items).
@@ -52,7 +52,7 @@ Last updated: 2026-11-27 (DLNA PoC: tests 8/9 done, naming `snapcast-tcp`).
      the session is an `http-get:*:audio/x-snapcast:*` resource (dms `/snapcast?path=`
      answers with the `snapcast://` URI, IPv4 preferred); gmrender
      `--snapcast-formats audio/x-snapcast` advertises it first. Built in the forks (dms
-     `5d1cad6`, gmrender `80b078d`). **2026-11-27: the wrapper reaches gmrender** (tests 9a `audio/x-scpls` and 9b `audio/flac`, renderer re-selected): BubbleUPnP sends the `/snapcast?path=` URL, gmrender fetches it, dms answers with the `snapcast://` URI; `playbin` then fails with `Missing decoder: text/uri-list` (expected). Test 8 repeated with the renderer selected: still fails, BubbleUPnP refuses unknown MIME types (`audio/x-snapcast`). **Next:** decide how gmrender recognises a session (proposal in `docs/dlna.md`: content negotiation, `HEAD` with `Accept: audio/x-snapcast-tcp` on the ordinary audio URL); then PoC step 2. **Naming decided (the user, 2026-11-27):** `snapcast-tcp` (URI scheme, MIME `audio/x-snapcast-tcp`), `snapcast-ws` reserved; rename in step 2. Start each session with a short, plain recap. Gotcha: a self-built gmrender needs installing (icons) and
+     `5d1cad6`, gmrender `80b078d`). **2026-11-27: the wrapper reaches gmrender** (tests 9a `audio/x-scpls` and 9b `audio/flac`, renderer re-selected): BubbleUPnP sends the `/snapcast?path=` URL, gmrender fetches it, dms answers with the `snapcast://` URI; `playbin` then fails with `Missing decoder: text/uri-list` (expected). Test 8 repeated: BubbleUPnP refuses unknown MIME types. **Decided and built 2026-11-27 (the user): content negotiation** on the ordinary resource (`docs/dlna-snapcast-protocol.md`, the protocol for implementers; `docs/dlna.md` rewritten): gmrender `--snapcast-sessions` sends HEAD/GET with `Accept: audio/x-snapcast-tcp` (list built from the GStreamer registry's URI handlers; warning at startup without snapsrc), dms `-snapcastStream <uri>` (repeatable, one per transport, chosen by Accept q) answers with the `snapcast-tcp://` URI; snapsrc is the URI handler (properties `stream`, `control-port`) and joins the stream via JSON-RPC (`gst-snapcast-engine` `client/join.rs`). Naming: `snapcast-tcp`, `snapcast-ws` reserved (decision). PoC step 2 done (integration test + SOAP by hand in the devcontainer). **Next:** DLNA test 10 with BubbleUPnP on the host (needs `make install` for snapsrc, `make dlna-build`); then step 3 (gmrender Pause/Seek/position/volume to the session). Open: how snapsink publishes session URIs per transport (step 4). Forks: dms `f698f87`, gmrender newest on `aanno/fixes`; nothing pushed. Start each session with a short, plain recap. Gotcha: a self-built gmrender needs installing (icons) and
      its own `-u` UUID (no firewall on the host);
    - the snapsrc wander experiment (Open items), measured as usual;
    - upstream PRs for the 14 fork commits (none opened yet).

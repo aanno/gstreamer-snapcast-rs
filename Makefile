@@ -150,7 +150,7 @@ dlna-build:
 	cd dlna/dms && go build -o $(DLNA_DIR)/dms .
 	@test ! -f dlna/gmrender-resurrect/config.status || { echo "dlna/gmrender-resurrect was configured in place (a build by hand there);" \
 		"make dlna-build builds out of tree: run 'make distclean' in dlna/gmrender-resurrect first"; exit 1; }
-	cd dlna/gmrender-resurrect && { test -x configure || ./autogen.sh; }
+	cd dlna/gmrender-resurrect && { test configure -nt configure.ac || ./autogen.sh; }
 	install -d $(DLNA_DIR)/gmrender-build
 	# Installed into target/dlna/gmrender (not run from the build tree): gmrender serves
 	# its icons from <prefix>/share, and control points may skip a renderer whose icons fail.

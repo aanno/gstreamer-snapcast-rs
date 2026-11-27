@@ -96,6 +96,9 @@ publishing: [docs/architecture.md](docs/architecture.md).
 |            | `host-id`     | (MAC address) | Unique client id towards the server, like snapclient's `--hostID` |
 |            | `volume`/`mute` | (read-only) | The server's volume (0–100) and mute for this client, applied to the audio |
 |            | `adjust-sink` | `true`      | Set `slave-method=resample` on the downstream audio sink (if at `skew`) |
+|            | `stream`      | (empty)     | Join this stream via the control API (moves this client's group to it); empty: the server's choice |
+|            | `control-port` | `0` (port + 1) | The server's JSON-RPC port, used to join `stream` |
+|            | URI           |             | `snapsrc` handles `snapcast-tcp://host[:port]/stream[?control=port]`, so `playbin uri=snapcast-tcp://…` picks it (DLNA PoC, `docs/dlna-snapcast-protocol.md`) |
 
 `port`, `buffer-ms`, `mdns-name` and the control properties belong to the server, which
 all snapsinks on one port share: the first snapsink to start sets them. With

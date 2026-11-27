@@ -29,26 +29,46 @@ build in place also blocks `make dlna-build` (`make distclean` there first). Wri
 outside the submodule (e.g. `| tee /tmp/gmr.log`), so they don't show up as untracked
 files in it.
 
-Terminal 1, the media server. Every audio item gets a Snapcast session resource first
-(`http-get:*:audio/x-snapcast:*`, URL `/snapcast?path=…`), for one fixed stream on this
-machine. Fetching that URL answers with the stream's `snapcast://` URI, and dms logs
-`snapcast session requested` (since 2026-11-25; before, the resource used the protocol
-`snapcast:`, which BubbleUPnP doesn't pass on: tests 1 and 7):
+**Since 2026-11-27 (content negotiation, [dlna-snapcast-protocol.md](dlna-snapcast-protocol.md)).**
+The commands of tests 1–9 below are the old ones (`--snapcast-formats`, `/snapcast`
+URLs, `snapcast://`). They are kept for the record but don't work with the current forks.
+
+After pulling, gmrender's build needs regenerating (`configure.ac` changed: it now
+needs `gio-2.0`): `make dlna-build` handles that in `target/dlna`. For a build by hand,
+run `./autogen.sh && ./configure … && make && make install` again.
+
+The renderer plays sessions with `snapsrc`, so **install the plugins** on the host
+(`make install`, per user). Without them, gmrender logs a warning at startup and only
+plays media.
+
+Terminal 0, the Snapcast server with a stream to join. For now it stands in for dms
+(dms doesn't feed sessions until PoC step 4). You'll hear this, not the track you
+picked:
+
+```sh
+CONTROL=1 STREAM=default SRC=file:assets/audio/freejazz_medley.flac make listen-send
+```
+
+Terminal 1, the media server. Asked for an audio item with
+`Accept: audio/x-snapcast-tcp`, it answers with the session URI instead of the media,
+and logs `snapcast session requested`. All other requests get the media, as before:
 
 ```sh
 target/dlna/dms -path ~/Music -friendlyName "dms snapcast PoC" \
-    -snapcastStream 'snapcast://{host}:1704/default?control=1705'
+    -snapcastStream 'snapcast-tcp://{host}:1704/default?control=1705'
 ```
 
-Terminal 2, the renderer. `--snapcast-formats audio/x-snapcast` puts
-`http-get:*:audio/x-snapcast:*` first in its `SinkProtocolInfo`; `-I` is the network interface for UPnP, `-p` fixes its
-HTTP port (easier for the firewall):
+Terminal 2, the renderer. `--snapcast-sessions` makes it ask before playing an
+`http://` URI. `-I` is the network interface for UPnP, and `-p` fixes its HTTP port:
 
 ```sh
 target/dlna/gmediarender -f "gmrender snapcast PoC" -I eno1 --logfile stdout \
     -u 6a1c4e2f-5b3d-4c7a-9e10-2f8b6d4a1c01 -p 49500 \
-    --snapcast-formats audio/x-snapcast 2>&1 | grep --line-buffered -E 'AVTransportURI|snapcast|Registered'
+    --snapcast-sessions 2>&1 | grep --line-buffered -E 'AVTransportURI|snapcast|Set uri|Registered'
 ```
+
+At startup, gmrender logs `Asking servers for Snapcast sessions: Accept: audio/x-snapcast-tcp`
+(or the warning, if `snapsrc` isn't found).
 
 **Own UUID and port** (`-u`, `-p`): every gmrender build without a compile-time UUID
 uses `GMediaRender-1_0-000-000-002` and port 49494. A second gmrender on the LAN (e.g.
@@ -68,7 +88,7 @@ sudo firewall-cmd --add-service=ssdp                 # add --permanent to keep i
 sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if not open)
 ```
 
-## Where we stand (2026-11-27)
+## Where we stand (2026-11-27, evening)
 
 In short, with BubbleUPnP as the control point:
 
@@ -83,11 +103,11 @@ In short, with BubbleUPnP as the control point:
   silently sends nothing. Only types it knows (`audio/flac`, `audio/x-scpls`) pass.
 - **No sound yet, as expected:** gmrender hands the wrapper URL straight to `playbin`
   (`Missing decoder: text/uri-list`).
-- **Next:** decide how gmrender recognises a session when the type in the DIDL is an
-  ordinary one ([dlna.md](dlna.md), "Finding: only known MIME types pass"). Then PoC
-  step 2: gmrender resolves the session, and `snapsrc` handles `snapcast-tcp://`.
-- **Naming (the user, 2026-11-27):** not plain "snapcast" but `snapcast-tcp` (a
-  `snapcast-ws` variant may follow). Renamed when step 2 is built.
+- **Built since then (PoC step 2, 2026-11-27):** content negotiation instead of a
+  second resource. gmrender asks dms for the item's ordinary URL with
+  `Accept: audio/x-snapcast-tcp`, and dms answers with a `snapcast-tcp://` URI.
+  `snapsrc` plays it and joins the stream. Tested by hand in the devcontainer.
+- **Next:** test 10 with BubbleUPnP on the host (new setup above).
 
 
 0. **Discovery.** Start gmrender (and dms) as above on the host. BubbleUPnP lists
@@ -259,6 +279,29 @@ In short, with BubbleUPnP as the control point:
 Later steps get their tests here when they are built: `playbin uri=snapcast://…`
 (PoC step 2), gmrender playing it with Pause/Seek going to the session (step 3), dms
 feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
+
+10. **Content negotiation with BubbleUPnP** (PoC step 2, since 2026-11-27). Setup above
+    (terminals 0–2), gmrender re-selected in BubbleUPnP after each restart. Browse
+    dms, play a track on gmrender.
+    - **Expected:** you hear terminal 0's audio, not the track (dms doesn't feed
+      sessions yet).
+      - gmrender logs `Session snapcast-tcp://<host IPv4>:1704/default?control=1705 for http://…/res?path=…`,
+        then `Set uri to 'snapcast-tcp://…'`.
+      - dms logs `snapcast session requested` twice from gmrender's address
+        (`method=HEAD`, then `GET`).
+      - BubbleUPnP's own probe of the URL has no such `Accept`, so it gets the
+        media.
+    - **Check the fallback:** restart gmrender without `--snapcast-sessions`. The track
+      itself plays.
+    - **Check the second fallback:** restart dms without `-snapcastStream`. The track
+      itself plays, with sessions on in gmrender.
+    - **Check the transport choice (optional):** give dms
+      `-snapcastStream 'snapcast-ws://{host}:1780/default'` before the tcp one. gmrender
+      still gets the tcp URI, because snapsrc plays only `snapcast-tcp`.
+    - Done in the devcontainer by hand (SOAP requests in place of BubbleUPnP,
+      2026-11-27): all of the above passed, and snapsrc joined the stream named in
+      the URI.
+    - Result on the host: (open)
 
 ## Suggestions
 
