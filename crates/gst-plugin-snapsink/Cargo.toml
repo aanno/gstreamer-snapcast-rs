@@ -43,3 +43,9 @@ gst-plugin-version-helper = { workspace = true }
 
 [lints]
 workspace = true
+
+# A media file as a Snapcast session that obeys play/pause/seek from controllers
+# (the DLNA PoC's stand-in for dms, docs/dlna.md step 3).
+[[example]]
+name = "session-sender"
+required-features = ["control"]

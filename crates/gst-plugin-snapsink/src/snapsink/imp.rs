@@ -197,6 +197,9 @@ pub struct SnapSink {
     /// Playback position reported to controllers, in whole seconds of stream time
     /// (see `track_position`).
     position_secs: Mutex<Option<u64>>,
+    /// The track length from a duration query upstream, for streams whose tags
+    /// don't carry it (most files: demuxers answer the query, few send the tag).
+    queried_duration_secs: Mutex<Option<f64>>,
     /// Set by `unlock()` to interrupt the pacing wait in `render()`.
     flushing: AtomicBool,
 }
@@ -221,14 +224,18 @@ impl SnapSink {
     /// controls, playback status), if they changed. Lock order: state, then
     /// settings, then tags.
     fn publish_properties(&self, active: &mut Active) {
+        let mut metadata = self
+            .tags
+            .lock()
+            .unwrap()
+            .as_deref()
+            .map(metadata_from_tags)
+            .unwrap_or_default();
+        if metadata.duration_secs.is_none() {
+            metadata.duration_secs = *self.queried_duration_secs.lock().unwrap();
+        }
         let properties = StreamProperties {
-            metadata: self
-                .tags
-                .lock()
-                .unwrap()
-                .as_deref()
-                .map(metadata_from_tags)
-                .unwrap_or_default(),
+            metadata,
             controls: self.settings.lock().unwrap().controls.to_stream_controls(),
             playback: *self.playback.lock().unwrap(),
             position_secs: self.position_secs.lock().unwrap().map(|s| s as f64),
@@ -273,6 +280,13 @@ impl SnapSink {
             if *position != Some(heard) {
                 *position = Some(heard);
                 changed = true;
+                // Once a second: the length (it may change with the next track).
+                let duration = self
+                    .obj()
+                    .static_pad("sink")
+                    .and_then(|pad| pad.peer_query_duration::<gst::ClockTime>())
+                    .map(|d| d.nseconds() as f64 / 1e9);
+                *self.queried_duration_secs.lock().unwrap() = duration;
             }
         }
         changed
