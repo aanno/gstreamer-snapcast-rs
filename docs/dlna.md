@@ -368,8 +368,9 @@ Known limits:
 - Gapless `SetNextAVTransportURI` into a session isn't handled (playbin's
   `about-to-finish` path). The next track starts after `stopped` instead.
 - Pause and seek take effect after up to the Snapcast buffer ("Latency of control").
-- `snapsrc` applies the volume linearly (like snapclient-rs), while gmrender's own
-  volume follows a dB curve, so the same level can sound different.
+- The level sounds a little different in a session than with gmrender's own volume.
+  gmrender maps 0..100 to −60…0 dB; `snapsrc` uses the C++ snapclient's curve
+  (since 2026-11-27, test 11d), e.g. 50 ≈ −12 dB there vs −20 dB in gmrender.
 
 Licenses: gmrender is GPL-2.0-or-later (the source headers). Loading the GPL-3.0-only
 `snapsrc` into it is compatible; the combination is GPL-3.0. dms is BSD-3-Clause and

@@ -194,6 +194,9 @@ Short form; dates and reasons in the archive. CLAUDE.md has the coding rules.
 - 2026-11-22 (user): **`snapsink` is lean by default** (features `shared` on, `control`
   off; the daemon serves the control API), and **`snapcast-control`'s JWT
   authentication is an optional feature `auth`, off by default** (fork `60cb098`).
+- 2026-11-27 (user): **snapsrc applies the server volume with the C++ snapclient's
+  curve** `(10^v − 1) / 9` (default software mixer), not linearly like snapclient-rs:
+  even dB steps, and the same loudness as C++ rooms at the same percent (DLNA test 11d).
 - 2026-11-22 (user): **the audio between `snapsink` and the daemon stays on our socket
   protocol** with absolute `CLOCK_MONOTONIC` timestamps; GStreamer as the transport and
   timestamps made in the daemon were discussed and rejected (`docs/shared-server.md`,

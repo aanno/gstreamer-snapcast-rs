@@ -54,9 +54,10 @@
 //! # Volume
 //!
 //! The server's volume and mute for this client (set by a controller, e.g. on a
-//! C++ snapserver) are applied to the samples as a linear gain, like
-//! snapclient-rs's software mixer, and shown in the read-only `volume`/`mute`
-//! properties. A change is ramped across one buffer instead of jumping (no click).
+//! C++ snapserver) are applied to the samples, with the C++ snapclient's volume
+//! curve (`gain = (10^v - 1) / 9`, `gst_snapcast_engine::client::gain`): about even
+//! steps in dB, and the same loudness as a C++ client at the same percent. They are
+//! shown in the read-only `volume`/`mute` properties. A change is ramped across one buffer instead of jumping (no click).
 //! The properties follow the client's events, not the audio: a C++ snapserver
 //! sends no audio at all to a muted client, so snapsrc then produces no buffers.
 //!

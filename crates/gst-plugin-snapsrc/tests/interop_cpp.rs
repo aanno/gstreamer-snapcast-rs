@@ -389,12 +389,13 @@ fn snapsrc_applies_the_servers_volume_and_mute() {
     drop(server);
 
     assert!((full - 0.566).abs() < 0.02, "full volume RMS {full}");
-    assert!((half - 0.283).abs() < 0.02, "50 % RMS {half} (full {full})");
+    // 50 % is (10^0.5 - 1) / 9 = 0.240 of full amplitude (the C++ client's curve).
+    assert!((half - 0.136).abs() < 0.02, "50 % RMS {half} (full {full})");
     assert_eq!((volume, mute), (50, false));
     assert!(mute_shown, "mute property not set while muted");
     assert!(unmute_shown, "mute property still set after unmuting");
     assert!(
-        (unmuted - 0.283).abs() < 0.02,
+        (unmuted - 0.136).abs() < 0.02,
         "RMS after unmuting {unmuted}"
     );
 }

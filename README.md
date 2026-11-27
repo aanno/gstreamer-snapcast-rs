@@ -94,7 +94,7 @@ publishing: [docs/architecture.md](docs/architecture.md).
 |            | `instance`    | `0` (auto)  | Tells several clients on one host apart (the server sees `<host-id>#<instance>`); `0` picks the lowest number no other snapsrc on this host uses |
 |            | `latency-ms`  | `0`         | Extra local output latency to compensate |
 |            | `host-id`     | (MAC address) | Unique client id towards the server, like snapclient's `--hostID` |
-|            | `volume`/`mute` | (read-only) | The server's volume (0–100) and mute for this client, applied to the audio |
+|            | `volume`/`mute` | (read-only) | The server's volume (0–100) and mute for this client, applied to the audio with the C++ snapclient's curve (`(10^v − 1) / 9`: 50 % ≈ −12 dB) |
 |            | `adjust-sink` | `true`      | Set `slave-method=resample` on the downstream audio sink (if at `skew`) |
 |            | `stream`      | (empty)     | Join this stream via the control API (moves this client's group to it); empty: the server's choice |
 |            | `control-port` | `0` (port + 1) | The server's JSON-RPC port, used to join `stream` |

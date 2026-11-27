@@ -339,8 +339,9 @@ feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
       - Likely reason it was hard to hear: snapsrc applies the percent linearly, so
         40 % is only −8 dB. The C++ snapclient's default software mixer uses
         `(10^v − 1) / 9` (40 % ≈ −15 dB, 10 % ≈ −30 dB). So rooms with snapsrc and
-        with the C++ client also differ at the same percent. To decide: snapsrc
-        follows the C++ curve.
+        with the C++ client also differ at the same percent. **Decided (the user,
+        2026-11-27): snapsrc uses the C++ curve**, done the same day: 50 % ≈ −12 dB,
+        10 % ≈ −31 dB.
       - Repeat d with a Snapcast controller app (e.g. Snapdroid on port 1705)
         showing the room's volume.
 

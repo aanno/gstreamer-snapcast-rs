@@ -150,20 +150,38 @@ pub struct PlayoutFrame {
 }
 
 impl PlayoutFrame {
-    /// The linear gain to apply, see [`gain`].
+    /// The amplitude factor to apply, see [`gain`].
     pub fn gain(&self) -> f32 {
         gain(self.volume, self.muted)
     }
 }
 
-/// Linear gain for a Snapcast volume in percent, like snapclient-rs's software
-/// mixer: `percent / 100`, 0 when muted.
+/// The amplitude factor for a Snapcast volume in percent, 0 when muted.
+///
+/// The curve is the C++ snapclient's default software mixer
+/// (`Player::setVolume_exp` with base 10, `client/player/player.cpp`):
+///
+/// ```text
+/// gain = (10^v - 1) / 9,   v = percent / 100
+/// ```
+///
+/// We hear loudness roughly logarithmically in amplitude, so a volume slider that
+/// feels even needs a gain that grows exponentially with it. This one is close to
+/// even steps in dB over most of the range (100 % = 0 dB, 75 % ≈ -5.8 dB,
+/// 50 % ≈ -12.4 dB, 25 % ≈ -21.3 dB, 10 % ≈ -30.8 dB), and it reaches true silence at
+/// 0 %. Using the same curve as the reference client also means that rooms at the
+/// same percent sound equally loud, whichever client plays them.
+///
+/// Until 2026-11-27 the gain was linear (`percent / 100`, like snapclient-rs):
+/// 40 % was only -8 dB, so most of a controller's slider barely changed anything
+/// (DLNA test 11), and snapsrc rooms played louder than C++ ones at the same
+/// percent.
 pub fn gain(volume: u16, muted: bool) -> f32 {
     if muted {
-        0.0
-    } else {
-        f32::from(volume.min(100)) / 100.0
+        return 0.0;
     }
+    let v = f64::from(volume.min(100)) / 100.0;
+    ((10f64.powf(v) - 1.0) / 9.0) as f32
 }
 
 #[derive(Debug, Default)]
@@ -488,11 +506,21 @@ mod tests {
     }
 
     #[test]
-    fn gain_is_linear_and_zero_when_muted() {
+    fn gain_follows_the_cpp_client_and_is_zero_when_muted() {
         assert_eq!(gain(100, false), 1.0);
-        assert_eq!(gain(50, false), 0.5);
         assert_eq!(gain(0, false), 0.0);
         assert_eq!(gain(80, true), 0.0);
         assert_eq!(gain(150, false), 1.0, "clamped");
+        // (10^0.5 - 1) / 9: the C++ snapclient's default software mixer.
+        assert!(
+            (gain(50, false) - 0.240_25).abs() < 1e-4,
+            "{}",
+            gain(50, false)
+        );
+        let db = |p| 20.0 * gain(p, false).log10();
+        assert!((db(50) - -12.4).abs() < 0.1, "50 %: {} dB", db(50));
+        assert!((db(10) - -30.8).abs() < 0.1, "10 %: {} dB", db(10));
+        // Monotonic: every step is a little louder.
+        assert!((1..=100).all(|p| gain(p, false) > gain(p - 1, false)));
     }
 }
