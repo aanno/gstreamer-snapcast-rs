@@ -37,7 +37,10 @@ work. L1 is done: several `snapsink` streams share a server port within one proc
 done (`docs/shared-server.md`): `gst-snapcast-daemon`, autospawned by `snapsink`
 (`mode=auto`, the default; `shared`, `embedded`), lean default build without the control
 API, crash reconnect, metadata and `Stream.Control`, `make test-aloop-shared`. Open timing item: the occasional
-snapsrc wander (±1.5…3 ms).
+snapsrc wander (±1.5…3 ms). DLNA PoC (2026-11-27, `docs/dlna.md`,
+`docs/dlna-snapcast-protocol.md`): steps 1–4 done. A renderer (gmrender fork) negotiates a
+Snapcast session with the media server (dms fork) on the ordinary resource URL, `snapsrc`
+plays `snapcast-tcp://` URIs as shared sessions, and dms feeds one per item.
 
 ## Commands
 
