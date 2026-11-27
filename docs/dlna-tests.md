@@ -68,20 +68,24 @@ sudo firewall-cmd --add-service=ssdp                 # add --permanent to keep i
 sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if not open)
 ```
 
-## Where we stand (2026-11-25, end of day)
+## Where we stand (2026-11-27)
 
 In short, with BubbleUPnP as the control point:
 
-- **Works:** discovery of the PoC gmrender (installed, own UUID); playing over HTTP,
-  with or without the Snapcast extras.
-- **Does not work:** a session resource with protocol `snapcast:` (test 1) or with an
-  unknown MIME type `audio/x-snapcast` (test 8). BubbleUPnP silently sends nothing.
-- **Promising, not confirmed:** with type `audio/flac`, BubbleUPnP uses the session
-  resource (test 9b), but that run played on the phone, not on gmrender.
-- **Next:** repeat test 9b, then 9a, with gmrender re-selected in BubbleUPnP after
-  each restart (`Subscription request` in its log). If 9b reaches gmrender: build
-  content negotiation (one resource, the audio URL; dms answers a Snapcast-aware
-  renderer with the `snapcast://` URI), then PoC step 2.
+- **Works:**
+  - Discovery of the PoC gmrender (installed, own UUID).
+  - Playing over HTTP, with or without the Snapcast extras.
+  - **The `http-get` wrapper reaches gmrender** (test 9a and 9b, 2026-11-27).
+    BubbleUPnP sends dms's `/snapcast?path=…` URL to gmrender, and dms answers
+    gmrender with the `snapcast://` URI.
+- **Does not work:** a session resource with protocol `snapcast:` (test 1).
+  BubbleUPnP silently sends nothing.
+- **Open:** whether the own type `audio/x-snapcast` passes too (test 8 failed, maybe
+  only because the renderer wasn't selected; repeat it).
+- **No sound yet, as expected:** gmrender hands the wrapper URL straight to `playbin`
+  (`Missing decoder: text/uri-list`).
+- **Next:** repeat test 8, then PoC step 2 (gmrender resolves the wrapper URL, and
+  `snapsrc` handles `snapcast://`).
 
 
 0. **Discovery.** Start gmrender (and dms) as above on the host. BubbleUPnP lists
@@ -211,6 +215,36 @@ In short, with BubbleUPnP as the control point:
    **After restarting gmrender, re-select it in BubbleUPnP** and check for
    `Subscription request` in gmrender's log before playing: otherwise BubbleUPnP may
    play on the phone.
+
+   **Results 2026-11-27 (repeated, renderer re-selected): a and b both passed.** No
+   sound in either, but that is expected before PoC step 2. Scripts and logs:
+   `dlna/dms/dms-{a-scpls,b-flac}.{sh,log}`, `dlna/gmrender-resurrect/gmr-{a-scpls,b-flac}.{sh,log}`.
+   - gmrender got `SetAVTransportURI` with dms's wrapper URL
+     (`http://[<host IPv6>]:1338/snapcast?path=freejazz_medley.flac`). BubbleUPnP's DIDL
+     carried only that `<res>`, with our MIME type and its own 4th field
+     (`DLNA.ORG_FLAGS=…;DLNA.ORG_OP=01`).
+   - dms logged `snapcast session requested` from gmrender's address (the host,
+     `…7285:c2ff:fea4:1b9f`) and answered with the IPv4 URI
+     `snapcast://192.168.10.139:1704/default?control=1705`. Before that, the phone
+     (`…3471:…`) also fetched the URL once or twice: BubbleUPnP probes the resource
+     before sending it to the renderer.
+   - gmrender handed the URL to `playbin`, which typefound the one-line answer as
+     `text/uri-list`: `Missing decoder: text/uri-list`, then `not-linked`. That's the
+     expected error from test 8. gmrender still reported `PLAYING`, so BubbleUPnP
+     showed "playing".
+   - In run a, the phone also fetched `/snapcast?path=go.mod`: dms takes `.mod` for a
+     tracker module (audio), so `go.mod` gets a session resource. That's harmless; serve
+     a folder with only music.
+
+   Conclusions:
+   - BubbleUPnP passes on a session resource of a MIME type that both sides list. The
+     earlier failures of 9a and 9b came from the renderer not being selected.
+   - Test 8 (`audio/x-snapcast`) may have failed for the same reason. Repeat it with
+     the renderer re-selected. If it passes, keep the own type: it's the cleanest.
+   - Next is PoC step 2. gmrender recognises the session resource by the protocolInfo
+     in the metadata (one of its `--snapcast-formats`), fetches the wrapper URL itself,
+     and gives `playbin` the `snapcast://` URI. `snapsrc` needs a `snapcast://` URI
+     handler for that.
 
 Later steps get their tests here when they are built: `playbin uri=snapcast://…`
 (PoC step 2), gmrender playing it with Pause/Seek going to the session (step 3), dms

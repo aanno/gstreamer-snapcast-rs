@@ -7,7 +7,7 @@ the prototype (P1–P4 in detail, every decision with its reasons, the fixed lim
 L2–L13, all measurements) is in [memory-old-2026-11-22.md](memory-old-2026-11-22.md),
 frozen; the evaluation in [../evaluation.md](../evaluation.md).
 
-Last updated: 2026-11-25, end of session (DLNA PoC: BubbleUPnP findings, tests 0–9).
+Last updated: 2026-11-27 (DLNA PoC: wrapper reaches gmrender, tests 9a/9b passed).
 
 ## Resume here (2026-11-25)
 
@@ -52,15 +52,7 @@ Last updated: 2026-11-25, end of session (DLNA PoC: BubbleUPnP findings, tests 0
      the session is an `http-get:*:audio/x-snapcast:*` resource (dms `/snapcast?path=`
      answers with the `snapcast://` URI, IPv4 preferred); gmrender
      `--snapcast-formats audio/x-snapcast` advertises it first. Built in the forks (dms
-     `5d1cad6`, gmrender `80b078d`). **But test 8 failed too:** BubbleUPnP also
-     refuses the unknown MIME type `audio/x-snapcast`. Test 9b (`-snapcastFormat
-     audio/flac`) looked promising, but played on the phone, not gmrender (not
-     re-selected after a restart). **Next session:** start from "Where we stand" in
-     `docs/dlna-tests.md`: repeat 9b/9a with gmrender re-selected; if 9b reaches
-     gmrender, build content negotiation (one audio resource; dms answers a
-     Snapcast-aware renderer, e.g. `Accept: audio/x-snapcast`, with the `snapcast://`
-     URI), then step 2. The user found the day's back-and-forth confusing: start with
-     a short, plain recap. Gotcha: a self-built gmrender needs installing (icons) and
+     `5d1cad6`, gmrender `80b078d`). **2026-11-27: the wrapper reaches gmrender** (tests 9a `audio/x-scpls` and 9b `audio/flac`, renderer re-selected): BubbleUPnP sends the `/snapcast?path=` URL, gmrender fetches it, dms answers with the `snapcast://` URI; `playbin` then fails with `Missing decoder: text/uri-list` (expected). Earlier failures of 9a/9b, maybe also test 8 (`audio/x-snapcast`), were the renderer not being selected. **Next:** repeat test 8; then PoC step 2 (gmrender resolves the wrapper URL by the `<res>` protocolInfo, `snapsrc` gets a `snapcast://` URI handler). Start each session with a short, plain recap. Gotcha: a self-built gmrender needs installing (icons) and
      its own `-u` UUID (no firewall on the host);
    - the snapsrc wander experiment (Open items), measured as usual;
    - upstream PRs for the 14 fork commits (none opened yet).
