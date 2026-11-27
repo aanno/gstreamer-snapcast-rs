@@ -327,6 +327,22 @@ feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
         parameters that aren't JSON. Checked in the devcontainer (C locale only):
         a seek to 0:00:20 arrived as `{"position":20.0}`.
       - **Repeat c** after `make install` and `make dlna-build`. Then a, d, e and f.
+    - **Second run on the host, 2026-11-27:**
+      - c (seek) passed: `setPosition {"position":25.0}` and others arrived, and the
+        sound jumped.
+      - e (end of the track) passed: `stopped`, then BubbleUPnP's next track
+        restarted the session.
+      - b passed again.
+      - d (volume): unclear by ear. The log shows the volume changes reaching
+        gmrender's session branch while the session played, but gmrender didn't log
+        what it sent (it does now: `Session volume N %: sent`).
+      - Likely reason it was hard to hear: snapsrc applies the percent linearly, so
+        40 % is only −8 dB. The C++ snapclient's default software mixer uses
+        `(10^v − 1) / 9` (40 % ≈ −15 dB, 10 % ≈ −30 dB). So rooms with snapsrc and
+        with the C++ client also differ at the same percent. To decide: snapsrc
+        follows the C++ curve.
+      - Repeat d with a Snapcast controller app (e.g. Snapdroid on port 1705)
+        showing the room's volume.
 
 10. **Content negotiation with BubbleUPnP** (PoC step 2, since 2026-11-27). Setup above
     (terminals 0–2), gmrender re-selected in BubbleUPnP after each restart. Browse
