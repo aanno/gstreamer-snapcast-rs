@@ -17,8 +17,8 @@ server = ["dep:snapcast-server", "dep:mdns-sd", "dep:serde_json"]
 control = ["server", "dep:snapcast-control"]
 # IPC with the shared server daemon (gst-snapcast-daemon): protocol and paths. Unix only.
 shared = ["server", "dep:serde"]
-# Embedded Snapcast client (used by snapsrc)
-client = ["dep:snapcast-client", "dep:mdns-sd"]
+# Embedded Snapcast client (used by snapsrc); joins a stream via JSON-RPC on request
+client = ["dep:snapcast-client", "dep:mdns-sd", "dep:serde_json", "dep:mac_address"]
 
 [dependencies]
 snapcast-server = { workspace = true, optional = true }
@@ -31,6 +31,7 @@ mdns-sd = { workspace = true, optional = true }
 snapcast-control = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
+mac_address = { workspace = true, optional = true }
 
 [lints]
 workspace = true

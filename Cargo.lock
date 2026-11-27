@@ -593,6 +593,7 @@ dependencies = [
 name = "gst-snapcast-engine"
 version = "0.1.0"
 dependencies = [
+ "mac_address",
  "mdns-sd",
  "serde",
  "serde_json",

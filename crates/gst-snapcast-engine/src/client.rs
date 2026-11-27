@@ -26,6 +26,7 @@ use tracing::Instrument;
 use crate::{EngineError, runtime};
 
 mod instance;
+mod join;
 
 /// Client options.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +51,13 @@ pub struct ClientOptions {
     /// Unique host id sent to the server; empty means snapcast-client's default,
     /// the MAC address. Like the C++ snapclient's `--hostID`.
     pub host_id: String,
+    /// A stream to play instead of the one the server assigns (empty: the server's
+    /// choice). The client then joins it via the control API, after every
+    /// (re)connect (see the `join` module).
+    pub stream: String,
+    /// The server's JSON-RPC control port (TCP) for joining `stream`; 0: the stream
+    /// port + 1 (Snapcast's default layout, 1704/1705).
+    pub control_port: u16,
     /// Id for log lines of this client (e.g. the element name), as the
     /// [`crate::LOG_ID_FIELD`] of the span its work runs in. Empty: none.
     pub log_id: String,
@@ -65,6 +73,8 @@ impl Default for ClientOptions {
             latency_ms: 0,
             host_id: String::new(),
             mdns_name: String::new(),
+            stream: String::new(),
+            control_port: 0,
             log_id: String::new(),
         }
     }
@@ -136,6 +146,15 @@ impl std::fmt::Debug for ClientHandle {
             .field("status", &self.status)
             .finish_non_exhaustive()
     }
+}
+
+/// Where and as whom to join [`ClientOptions::stream`].
+#[derive(Debug, Clone)]
+struct JoinTarget {
+    host: String,
+    port: u16,
+    client_id: String,
+    stream: String,
 }
 
 /// The snapcast-client configuration for `options`.
@@ -234,6 +253,16 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
     );
     let event_status = Arc::clone(&status);
     let client_latency = options.latency_ms;
+    let join = (!options.stream.is_empty()).then(|| JoinTarget {
+        host: options.host.clone(),
+        port: if options.control_port == 0 {
+            options.port.saturating_add(1)
+        } else {
+            options.control_port
+        },
+        client_id: join::client_id(&options.host_id, instance),
+        stream: options.stream.clone(),
+    });
     let event_task = rt.spawn(
         async move {
             while let Some(event) = events.recv().await {
@@ -248,6 +277,17 @@ pub fn connect(options: &ClientOptions) -> Result<ClientHandle, EngineError> {
                     } => {
                         status.buffer_ms = Some((buffer_ms - latency - client_latency).max(0));
                         volume_tx.send_replace((volume, muted));
+                        // Connected (again): the server knows this client now.
+                        if let Some(t) = &join {
+                            let t = t.clone();
+                            tokio::spawn(
+                                async move {
+                                    join::join_stream(&t.host, t.port, &t.client_id, &t.stream)
+                                        .await;
+                                }
+                                .in_current_span(),
+                            );
+                        }
                     }
                     ClientEvent::VolumeChanged { volume, muted } => {
                         volume_tx.send_replace((volume, muted));
@@ -357,6 +397,8 @@ mod tests {
             latency_ms: 40,
             host_id: "kitchen-pi".into(),
             mdns_name: String::new(),
+            stream: String::new(),
+            control_port: 0,
             log_id: "snapsrc0".into(),
         };
         let c = client_config(&options, options.instance);

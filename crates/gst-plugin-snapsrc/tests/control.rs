@@ -207,3 +207,75 @@ fn snapweb_style_control_of_a_snapsink_server() {
     });
     std::fs::remove_dir_all(&snapweb).ok();
 }
+
+/// `playbin uri=snapcast-tcp://…/b` picks `snapsrc` (URI handler), which joins
+/// stream `b` via the control API, although the server puts new clients on the
+/// first stream (`docs/dlna.md`, PoC step 2).
+#[test]
+fn playbin_plays_a_snapcast_tcp_uri_and_joins_its_stream() {
+    init();
+    let (port, control_port) = (free_port(), free_port());
+    let launch = |stream: &str, extra: &str| {
+        let p = gst::parse::launch(&format!(
+            "audiotestsrc is-live=true ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
+             ! snapsink port={port} mode=embedded stream={stream} mdns-name=\"\" {extra}"
+        ))
+        .unwrap();
+        p.set_state(gst::State::Playing).unwrap();
+        p
+    };
+    let first = launch("a", &format!("control-port={control_port}"));
+    let mut ctl = wait_until("the control port", || {
+        TcpStream::connect(("127.0.0.1", control_port))
+            .ok()
+            .map(|_| Controller::connect(control_port))
+    });
+    let second = launch("b", "");
+
+    let uri = format!("snapcast-tcp://127.0.0.1:{port}/b?control={control_port}");
+    let player = gst::ElementFactory::make("playbin")
+        .property("uri", &uri)
+        .property(
+            "audio-sink",
+            gst::ElementFactory::make("fakesink").build().unwrap(),
+        )
+        .build()
+        .unwrap();
+    player.set_state(gst::State::Playing).unwrap();
+
+    // The client ends up in a group playing `b`.
+    wait_until("the playbin client on stream b", || {
+        let status = ctl.call("Server.GetStatus", json!({}));
+        status["server"]["groups"]
+            .as_array()?
+            .iter()
+            .find(|g| {
+                g["stream_id"] == "b"
+                    && g["clients"]
+                        .as_array()
+                        .is_some_and(|c| c.iter().any(|c| c["connected"] == true))
+            })
+            .map(|_| ())
+    });
+    // And it plays: audio reaches the sink.
+    let sink = player.property::<gst::Element>("audio-sink");
+    wait_until("audio at playbin's sink", || {
+        sink.property::<Option<gst::Sample>>("last-sample")
+            .map(|_| ())
+    });
+    let src = player.property::<gst::Element>("source");
+    assert_eq!(src.factory().unwrap().name(), "snapsrc");
+    assert_eq!(src.property::<String>("stream"), "b");
+    assert_eq!(src.property::<u32>("control-port"), u32::from(control_port));
+    assert_eq!(
+        src.dynamic_cast_ref::<gst::URIHandler>()
+            .unwrap()
+            .uri()
+            .unwrap(),
+        uri
+    );
+
+    for p in [&player, &second, &first] {
+        p.set_state(gst::State::Null).unwrap();
+    }
+}

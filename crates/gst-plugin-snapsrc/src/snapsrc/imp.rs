@@ -100,6 +100,7 @@ use gst_snapcast_engine::client::{self, ClientHandle, ClientOptions};
 use gst_snapcast_engine::{now_usec, runtime};
 
 use super::align::{self, Aligner};
+use super::uri::{self, SnapUri};
 use tokio::sync::watch;
 
 static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
@@ -143,6 +144,8 @@ struct Settings {
     adjust_sink: bool,
     host_id: String,
     mdns_name: String,
+    stream: String,
+    control_port: u32,
 }
 
 impl Default for Settings {
@@ -156,6 +159,8 @@ impl Default for Settings {
             adjust_sink: DEFAULT_ADJUST_SINK,
             host_id: String::new(),
             mdns_name: String::new(),
+            stream: String::new(),
+            control_port: 0,
         }
     }
 }
@@ -320,6 +325,7 @@ impl ObjectSubclass for SnapSrc {
     const NAME: &'static str = "GstSnapSrc";
     type Type = super::SnapSrc;
     type ParentType = gst_base::PushSrc;
+    type Interfaces = (gst::URIHandler,);
 }
 
 impl ObjectImpl for SnapSrc {
@@ -389,6 +395,25 @@ impl ObjectImpl for SnapSrc {
                     .default_value(Some(""))
                     .mutable_ready()
                     .build(),
+                glib::ParamSpecString::builder("stream")
+                    .nick("Stream")
+                    .blurb(
+                        "Stream to play: joins it via the server's control API (moves this \
+                         client's group to it). Empty: the stream the server assigns",
+                    )
+                    .default_value(Some(""))
+                    .mutable_ready()
+                    .build(),
+                glib::ParamSpecUInt::builder("control-port")
+                    .nick("Control port")
+                    .blurb(
+                        "The server's JSON-RPC control port (TCP), used to join 'stream'; \
+                         0 = port + 1",
+                    )
+                    .maximum(u16::MAX.into())
+                    .default_value(0)
+                    .mutable_ready()
+                    .build(),
                 glib::ParamSpecUInt::builder("volume")
                     .nick("Volume")
                     .blurb("The server's volume for this client in percent (applied)")
@@ -433,6 +458,8 @@ impl ObjectImpl for SnapSrc {
             "adjust-sink" => settings.adjust_sink = value.get().expect("type checked upstream"),
             "host-id" => settings.host_id = string_or(""),
             "mdns-name" => settings.mdns_name = string_or(""),
+            "stream" => settings.stream = string_or(""),
+            "control-port" => settings.control_port = value.get().expect("type checked upstream"),
             _ => unimplemented!(),
         }
     }
@@ -448,6 +475,8 @@ impl ObjectImpl for SnapSrc {
             "adjust-sink" => settings.adjust_sink.to_value(),
             "host-id" => settings.host_id.to_value(),
             "mdns-name" => settings.mdns_name.to_value(),
+            "stream" => settings.stream.to_value(),
+            "control-port" => settings.control_port.to_value(),
             "volume" => self.volume.load(Ordering::Relaxed).to_value(),
             "mute" => self.muted.load(Ordering::Relaxed).to_value(),
             _ => unimplemented!(),
@@ -465,6 +494,47 @@ impl ObjectImpl for SnapSrc {
 }
 
 impl GstObjectImpl for SnapSrc {}
+
+/// `snapcast-tcp://host[:port]/stream[?control=port]` (see the `uri` module), so that
+/// `playbin` and `uridecodebin` pick `snapsrc` for such URIs (e.g. a DLNA renderer
+/// playing a Snapcast session, `docs/dlna.md`). Setting the URI sets the properties
+/// `host`, `port`, `stream` and `control-port`.
+impl URIHandlerImpl for SnapSrc {
+    const URI_TYPE: gst::URIType = gst::URIType::Src;
+
+    fn protocols() -> &'static [&'static str] {
+        &[uri::SCHEME]
+    }
+
+    fn uri(&self) -> Option<String> {
+        let s = self.settings.lock().unwrap();
+        let uri = SnapUri {
+            host: s.host.clone(),
+            port: Some(s.port as u16),
+            stream: s.stream.clone(),
+            control_port: (s.control_port != 0).then_some(s.control_port as u16),
+        };
+        Some(uri.to_string())
+    }
+
+    fn set_uri(&self, uri: &str) -> Result<(), glib::Error> {
+        if self.obj().current_state() > gst::State::Ready {
+            return Err(glib::Error::new(
+                gst::URIError::BadState,
+                "Cannot change the URI while running",
+            ));
+        }
+        let parsed =
+            SnapUri::parse(uri).map_err(|e| glib::Error::new(gst::URIError::BadUri, &e))?;
+        gst::info!(CAT, imp = self, "URI {uri}");
+        let mut s = self.settings.lock().unwrap();
+        s.host = parsed.host;
+        s.port = parsed.port.map_or(DEFAULT_PORT, u32::from);
+        s.stream = parsed.stream;
+        s.control_port = parsed.control_port.map_or(0, u32::from);
+        Ok(())
+    }
+}
 
 impl ElementImpl for SnapSrc {
     fn metadata() -> Option<&'static gst::subclass::ElementMetadata> {
@@ -511,6 +581,8 @@ impl BaseSrcImpl for SnapSrc {
             latency_ms: settings.latency_ms,
             host_id: settings.host_id,
             mdns_name: settings.mdns_name,
+            stream: settings.stream,
+            control_port: settings.control_port as u16,
             log_id: self.obj().name().to_string(),
         };
         let client = client::connect(&options)
