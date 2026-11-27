@@ -88,36 +88,31 @@ sudo firewall-cmd --add-service=ssdp                 # add --permanent to keep i
 sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if not open)
 ```
 
-## Where we stand (2026-11-27, evening)
+## Where we stand (2026-11-27, end of day)
 
-In short, with BubbleUPnP as the control point:
+With BubbleUPnP as the control point, on the host:
 
-- **Works:**
-  - Discovery of the PoC gmrender (installed, own UUID).
-  - Playing over HTTP, with or without the Snapcast extras.
-  - **The `http-get` wrapper reaches gmrender** (test 9a and 9b, 2026-11-27).
-    BubbleUPnP sends dms's `/snapcast?path=…` URL to gmrender, and dms answers
-    gmrender with the `snapcast://` URI.
-- **Does not work:** a session resource with protocol `snapcast:` (test 1), or with
-  an own MIME type `audio/x-snapcast` (test 8, confirmed 2026-11-27). BubbleUPnP
-  silently sends nothing. Only types it knows (`audio/flac`, `audio/x-scpls`) pass.
-- **No sound yet, as expected:** gmrender hands the wrapper URL straight to `playbin`
-  (`Missing decoder: text/uri-list`).
-- **Built since then (PoC step 2, 2026-11-27):** content negotiation instead of a
-  second resource. gmrender asks dms for the item's ordinary URL with
-  `Accept: audio/x-snapcast-tcp`, and dms answers with a `snapcast-tcp://` URI.
-  `snapsrc` plays it and joins the stream. Tested by hand in the devcontainer.
-- **Test 10 passed on the host (2026-11-27):** BubbleUPnP → gmrender → dms
-  negotiation → `snapsrc` plays the Snapcast stream. PoC step 2 is done for real.
-- **Built (PoC step 3, 2026-11-27):** gmrender passes Pause, Seek, position,
-  volume and the end of a track to the session (snapsrc's `snapcast-session`
-  message and action signals). `make dlna-session` stands in for dms's feeder.
-- **Test 11 passed on the host** (pause, seek, volume, end of track; 2026-11-27).
-- **Built (PoC step 4, 2026-11-27):** dms feeds a session per item (`SessionFeeder`,
-  one `session-sender` helper per session, idle close).
-- **Next:** test 12 on the host, then step 5 (two renderers with BubbleUPnP, a long
-  run).
+- **The whole chain works.**
+  1. BubbleUPnP sends the item's ordinary dms URL to gmrender.
+  2. gmrender asks dms with `Accept: audio/x-snapcast-tcp`.
+  3. dms opens a session for the item (a `session-sender` helper) and answers with
+     its `snapcast-tcp://` URI.
+  4. `snapsrc` joins it.
+  5. Pause, seek, volume and the end of the track go through the session.
 
+  Tests 10, 11 and 12 passed.
+- **Two renderers in one session** passed in the devcontainer (SOAP). On the host
+  that's test 13.
+- **A long run** is test 14 (`scripts/dlna-soak.sh` records it).
+- **Doesn't work, by design:** offering the session as a second resource
+  (`snapcast:` protocol or an unknown MIME type). BubbleUPnP never passes it on
+  (tests 1 to 9). That's why the session is negotiated on the ordinary URL
+  (`docs/dlna-snapcast-protocol.md`).
+- **Still open:** test 12 c and d (several items at once, the idle close), and tests
+  13 and 14.
+
+The numbered tests below keep their history. Their setup changed over time; the
+current setup is above, and in tests 11 to 14.
 
 0. **Discovery.** Start gmrender (and dms) as above on the host. BubbleUPnP lists
    "gmrender snapcast PoC" as a renderer and "dms snapcast PoC" as a library (rescan
@@ -288,6 +283,68 @@ In short, with BubbleUPnP as the control point:
 Later steps get their tests here when they are built: `playbin uri=snapcast://…`
 (PoC step 2), gmrender playing it with Pause/Seek going to the session (step 3), dms
 feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
+
+13. **Two renderers, one session** (PoC step 5, since 2026-11-27).
+    - **Setup:** dms as in test 12 (`--mode shared`), plus two gmrenders, each with
+      its own name, UUID and port:
+
+      ```sh
+      target/dlna/gmediarender -f "room 1" -u 6a1c4e2f-5b3d-4c7a-9e10-2f8b6d4a1c01 -p 49500 \
+          --snapcast-sessions --logfile stdout 2>&1 | tee gmr-room1.log
+      target/dlna/gmediarender -f "room 2" -u 6a1c4e2f-5b3d-4c7a-9e10-2f8b6d4a1c02 -p 49501 \
+          --snapcast-sessions --logfile stdout 2>&1 | tee gmr-room2.log
+      ```
+
+      Both can run on the host. Their two `snapsrc` clients get instance numbers 1 and
+      2 by themselves. Both then play on the same sound device: **in sync you hear one
+      clean sound, out of sync an echo or a "phasing" sound.** A second machine
+      (another gmrender, with `snapsrc` installed) is the more realistic test, if
+      there is one.
+    - **In BubbleUPnP** (it controls one renderer at a time; switch between them):
+      a. Play a track on room 1, then the same track on room 2: dms logs **one**
+         `snapcast session opening`, and room 2 joins in at the same position.
+      b. Pause on room 1: both rooms go quiet. In BubbleUPnP, room 2 shows "paused"
+         too.
+      c. Play and seek on room 2: both rooms resume and jump.
+      d. Volume on room 1: only room 1 changes.
+      e. Stop on room 1: room 2 plays on.
+      f. The end of the track: both rooms stop. BubbleUPnP's queue moves on only on
+         the renderer it is controlling; the other room stays stopped (its control
+         point has no queue).
+      g. Another track on room 1 while room 2 still plays the first: two sessions,
+         two different sounds at once.
+    - **Done in the devcontainer** by hand (two gmrenders, SOAP, 2026-11-27): a to f
+      passed. Both rooms were in one session with the same position. A pause in
+      room 1 showed `PAUSED_PLAYBACK` in room 2, and a play and seek from room 2 moved
+      both to 0:26. A volume in room 1 changed only room 1. After a Stop in room 1,
+      room 2 played on. The end of the track stopped both. dms started one helper.
+      Seen in passing: a stopped room still reports its last position (harmless).
+    - Result on the host: (open)
+
+14. **The long run** (PoC step 5, since 2026-11-27): a night of playing, as for the
+    daemon (`docs/testing-host.md`).
+    - **Setup:** as test 13 (or only room 1), dms with `--idle-exit 120`. Start the
+      monitor in another terminal:
+
+      ```sh
+      scripts/dlna-soak.sh          # target/dlna-soak-<date>.csv, a row a minute
+      ```
+
+    - **In BubbleUPnP:** play a long queue (an album folder, "repeat all") on room 1.
+      Now and then join room 2 into the current track, pause, seek and stop.
+    - **In the morning, check:**
+      - **Sessions:** `dms_streams` and `session-sender_count` stay small: one per
+        track played in the last 2 minutes, plus the current one. Not growing with
+        every track.
+      - **Memory:** `*_rss_kb` stay flat for dms, the daemon and gmrender, and per
+        helper (`session-sender_rss_kb / session-sender_count`).
+      - **Threads and files:** `*_threads` and `*_fds` stay flat.
+      - **Logs:** no errors in dms's log (`grep -iE 'error|warning' dms-test.log`)
+        or gmrender's. Every `snapcast session opening` has its `closed`, except
+        the last.
+      - **Responsiveness:** pause, seek and volume still work at once in the
+        morning.
+    - Result on the host: (open)
 
 12. **dms feeds a session per item** (PoC step 4, since 2026-11-27).
     - **Setup:**
