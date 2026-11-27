@@ -167,6 +167,9 @@ fn connect_and_acquire(
 /// and wait (bounded) until it does.
 fn connect_or_spawn(dir: &Path) -> Result<UnixStream, Failure> {
     let socket = ipc::socket_path(dir);
+    // A configuration error, not "no daemon": falling back to an embedded server
+    // would hide it, and the next process would then fail to bind the port.
+    ipc::check_socket_path(&socket).map_err(Failure::Engine)?;
     let nobody_listens = |e: &io::Error| {
         matches!(
             e.kind(),

@@ -313,6 +313,8 @@ static REGISTRY: LazyLock<Mutex<HashMap<u16, Weak<ServerEntry>>>> =
 pub struct StreamHandle {
     name: String,
     backend: Backend,
+    /// Why mode auto runs the server embedded (no shared server daemon).
+    fallback_reason: Option<String>,
 }
 
 enum Backend {
@@ -360,6 +362,13 @@ impl StreamHandle {
     /// Stream name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Why [`Mode::Auto`] fell back to an embedded server, if it did: the shared
+    /// server daemon was unavailable. Then other processes can't add streams to
+    /// this port (they fail to bind it), so callers should tell the user.
+    pub fn fallback_reason(&self) -> Option<&str> {
+        self.fallback_reason.as_deref()
     }
 
     /// Whether the stream is fed through the shared server daemon.
@@ -486,6 +495,9 @@ pub fn acquire_stream(
     } else {
         server.mode
     };
+    // Only mode auto with the `shared` feature falls back.
+    #[cfg_attr(not(all(feature = "shared", unix)), allow(unused_mut))]
+    let mut fallback_reason = None;
     let backend = match mode {
         Mode::Embedded => Backend::Embedded(acquire_embedded(server, stream)?),
         #[cfg(all(feature = "shared", unix))]
@@ -502,7 +514,9 @@ pub fn acquire_stream(
                 }
                 Err(Failure::Unavailable(reason)) => {
                     tracing::warn!(reason, "No shared server, running embedded");
-                    Backend::Embedded(acquire_embedded(server, stream)?)
+                    let embedded = acquire_embedded(server, stream)?;
+                    fallback_reason = Some(reason);
+                    Backend::Embedded(embedded)
                 }
             }
         }
@@ -518,6 +532,7 @@ pub fn acquire_stream(
     Ok(StreamHandle {
         name: stream.name.clone(),
         backend,
+        fallback_reason,
     })
 }
 

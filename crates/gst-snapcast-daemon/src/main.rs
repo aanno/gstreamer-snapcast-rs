@@ -125,6 +125,7 @@ fn run() -> Result<(), String> {
         return Ok(());
     };
     let socket = socket_path(args.socket)?;
+    ipc::check_socket_path(&socket).map_err(|e| e.to_string())?;
     let lock_path = socket.with_extension("lock");
     let Some(_lock) = lock(&lock_path)? else {
         // Not an error: several senders may spawn a daemon at the same time.

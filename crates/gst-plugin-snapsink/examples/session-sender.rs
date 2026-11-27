@@ -152,9 +152,15 @@ fn main() {
     let (result, _, _) = pipeline.state(gst::ClockTime::from_seconds(10));
     if result.is_err() {
         let bus = pipeline.bus().expect("bus");
-        while let Some(message) = bus.pop_filtered(&[gst::MessageType::Error]) {
-            if let gst::MessageView::Error(e) = message.view() {
-                eprintln!("error: {} ({:?})", e.error(), e.debug());
+        while let Some(message) =
+            bus.pop_filtered(&[gst::MessageType::Error, gst::MessageType::Warning])
+        {
+            match message.view() {
+                gst::MessageView::Error(e) => eprintln!("error: {} ({:?})", e.error(), e.debug()),
+                gst::MessageView::Warning(w) => {
+                    eprintln!("warning: {} ({:?})", w.error(), w.debug())
+                }
+                _ => {}
             }
         }
         eprintln!("the pipeline didn't start");
@@ -197,6 +203,9 @@ fn main() {
             gst::MessageView::Error(e) => {
                 eprintln!("error: {} ({:?})", e.error(), e.debug());
                 break;
+            }
+            gst::MessageView::Warning(w) => {
+                eprintln!("warning: {} ({:?})", w.error(), w.debug());
             }
             gst::MessageView::Element(e) => {
                 let Some(s) = e

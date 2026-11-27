@@ -20,6 +20,7 @@
 //! PCM timestamps are [`crate::now_usec`] values, `CLOCK_MONOTONIC`, which is the
 //! same clock in every process of the host. The daemon passes them on unchanged.
 
+use crate::EngineError;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -45,6 +46,29 @@ pub fn runtime_dir() -> Option<PathBuf> {
 /// The daemon's socket in `dir` (see [`runtime_dir`]).
 pub fn socket_path(dir: &Path) -> PathBuf {
     dir.join("daemon.sock")
+}
+
+/// The longest Unix socket path, in bytes: `sun_path` holds 108 bytes on Linux
+/// (104 on the BSDs and macOS), including the terminating NUL.
+#[cfg(target_os = "linux")]
+pub const MAX_SOCKET_PATH: usize = 107;
+/// The longest Unix socket path, in bytes (see the Linux variant).
+#[cfg(not(target_os = "linux"))]
+pub const MAX_SOCKET_PATH: usize = 103;
+
+/// Fails with [`EngineError::InvalidConfig`] if `socket` is too long for a Unix
+/// socket. That happens when `XDG_RUNTIME_DIR` is a long path (it is
+/// `/run/user/<uid>` normally); the daemon could never be reached there.
+pub fn check_socket_path(socket: &Path) -> Result<(), EngineError> {
+    let len = socket.as_os_str().len();
+    if len > MAX_SOCKET_PATH {
+        return Err(EngineError::InvalidConfig(format!(
+            "the shared server's socket path {} is {len} bytes, but Unix sockets allow \
+             at most {MAX_SOCKET_PATH}: set a shorter XDG_RUNTIME_DIR",
+            socket.display()
+        )));
+    }
+    Ok(())
 }
 
 /// The daemon's lock file in `dir`: whoever holds it is the one daemon.
@@ -473,6 +497,21 @@ mod convert {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn socket_paths_beyond_the_unix_limit_are_a_configuration_error() {
+        let ok = socket_path(Path::new("/run/user/1000/gst-snapcast"));
+        assert!(check_socket_path(&ok).is_ok());
+        let long = Path::new("/").join("x".repeat(MAX_SOCKET_PATH));
+        let err = check_socket_path(&long).unwrap_err();
+        assert!(matches!(err, EngineError::InvalidConfig(_)), "{err}");
+        assert!(err.to_string().contains("XDG_RUNTIME_DIR"), "{err}");
+        let exact = Path::new("/").join("x".repeat(MAX_SOCKET_PATH - 1));
+        assert!(
+            check_socket_path(&exact).is_ok(),
+            "{MAX_SOCKET_PATH} bytes fit"
+        );
+    }
 
     fn round_trip(message: Message) {
         let mut buf = Vec::new();

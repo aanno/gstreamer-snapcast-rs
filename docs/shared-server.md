@@ -420,6 +420,12 @@ gain (the backend switch and the fallback, about 100 lines) and real costs: most
 
 1. **Names:** crate and binary `gst-snapcast-daemon`, socket directory `gst-snapcast/`.
 2. **`mode=auto`** is the default: shared, falling back to embedded with a warning.
+   Since 2026-11-27 (DLNA PoC, the user) that warning is a GStreamer WARNING message
+   on the bus (`gst-launch-1.0` prints it), not only a debug-log line: another
+   process can't add a stream to that port afterwards. A socket path that is too
+   long for a Unix socket (a long `XDG_RUNTIME_DIR`, limit 107 bytes on Linux) is a
+   configuration error in every mode, with no fallback (`ipc::check_socket_path`;
+   the daemon checks it too).
 3. **Grace period** 5 s.
 4. **Released streams** stay until the daemon exits.
 5. **Daemon crash:** reconnect once (respawning the daemon), then an element error.

@@ -755,6 +755,22 @@ impl BaseSinkImpl for SnapSink {
                     .build(),
             );
         });
+        if let Some(reason) = stream.fallback_reason() {
+            // mode=auto without the daemon: say so where users look (gst-launch
+            // prints it; applications see a WARNING message), not only in the
+            // debug log. Another process can't add a stream to this port now.
+            gst::element_imp_warning!(
+                self,
+                gst::ResourceError::Settings,
+                (
+                    "No shared Snapcast server: running an embedded server on port {} \
+                     (mode=auto). Other processes can't add streams to this port; use \
+                     mode=shared to fail instead, or install gst-snapcast-daemon",
+                    stream.port()
+                ),
+                ["{reason}"]
+            );
+        }
         let active = state.insert(Active {
             info,
             stream,
