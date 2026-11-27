@@ -112,8 +112,11 @@ In short, with BubbleUPnP as the control point:
 - **Built (PoC step 3, 2026-11-27):** gmrender passes Pause, Seek, position,
   volume and the end of a track to the session (snapsrc's `snapcast-session`
   message and action signals). `make dlna-session` stands in for dms's feeder.
-- **Next:** test 11 on the host. Then step 4: dms feeds a session per item, behind a
-  `SessionFeeder` interface ([dlna.md](dlna.md)).
+- **Test 11 passed on the host** (pause, seek, volume, end of track; 2026-11-27).
+- **Built (PoC step 4, 2026-11-27):** dms feeds a session per item (`SessionFeeder`,
+  one `session-sender` helper per session, idle close).
+- **Next:** test 12 on the host, then step 5 (two renderers with BubbleUPnP, a long
+  run).
 
 
 0. **Discovery.** Start gmrender (and dms) as above on the host. BubbleUPnP lists
@@ -285,6 +288,38 @@ In short, with BubbleUPnP as the control point:
 Later steps get their tests here when they are built: `playbin uri=snapcast://…`
 (PoC step 2), gmrender playing it with Pause/Seek going to the session (step 3), dms
 feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
+
+12. **dms feeds a session per item** (PoC step 4, since 2026-11-27).
+    - **Setup:**
+      - `make install`: the plugins and the daemon (`~/.local/bin` must be on
+        `PATH`).
+      - `make dlna-build`: dms, gmrender and `target/dlna/session-sender`.
+      - Terminal 0 (`make dlna-session`) isn't needed any more: dms starts the
+        sessions.
+      - Terminal 1, dms:
+
+        ```sh
+        target/dlna/dms -path ~/Music -friendlyName "dms snapcast PoC" \
+            -snapcastStream 'snapcast-tcp://{host}:1704/{stream}?control=1705' \
+            -snapcastFeeder "$PWD/target/dlna/session-sender --mode shared --idle-exit 120"
+        ```
+
+      - Terminal 2: gmrender as in the setup above (`--snapcast-sessions`).
+    - **Expected:**
+      a. **The picked track plays now**, not a stand-in. dms logs
+         `snapcast session opening stream=dms-…`, the helper's `Session ready`, then
+         `snapcast session requested … method=GET`.
+      b. **Pause, seek, volume, the end of the track and Stop** behave as in test 11.
+         At the end of a track, BubbleUPnP's next track opens the next session.
+      c. **Another track** gets another `dms-…` stream. Play the same track again
+         within the idle time: no new `opening`, the session is reused.
+      d. **Idle close:** 120 s after a session stops playing, dms logs
+         `idle: … closing it` and `snapcast session closed`.
+      e. **Snapweb** (`http://<host>:1780`, if the daemon serves it) shows one stream
+         per open session, named `dms-…`, with the track's title, position and length.
+    - **Done in the devcontainer** by hand (SOAP, 2026-11-27): a to d passed. Also, a
+      second room joined the same session, and pause in one room paused both.
+    - Result on the host: (open)
 
 11. **The session follows the control point** (PoC step 3, since 2026-11-27).
     - **Setup:**

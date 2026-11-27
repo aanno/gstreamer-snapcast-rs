@@ -3,14 +3,14 @@
 Status: **agreed** (2026-11-24); the way the session is offered changed twice after
 tests with BubbleUPnP. Since **2026-11-27** it is **HTTP content negotiation on the
 item's ordinary resource**, with `snapcast-tcp` as the name of the transport.
-**PoC steps 2 and 3 are done** (2026-11-27):
+**PoC steps 2 to 4 are done** (2026-11-27):
 
 - `snapsrc` plays `snapcast-tcp://` URIs and joins the session's stream.
-- dms answers the negotiation.
+- dms answers the negotiation, and feeds a session per item.
 - gmrender asks before playing, and plays the session.
 - Pause, Seek, position, volume and the end of a track go through the session.
 
-Next is step 4: dms feeds a session per item.
+Next is step 5: two renderers with BubbleUPnP, and a long run.
 
 The wire protocol, for anyone implementing it in another server or renderer, is in
 [dlna-snapcast-protocol.md](dlna-snapcast-protocol.md). Tests are in
@@ -57,8 +57,10 @@ From 2026-11-24 (the user), with later changes marked:
 6. **The URI** names host, port and stream (and the control port). An initial volume
    was considered and dropped: it would be the same for every room, and the Snapcast
    server already remembers each room's volume.
-7. **dms uses GStreamer for the PoC** (`snapsink` in a `go-gst` pipeline) for
-   Snapcast sessions; ffmpeg stays for everything else. Not a clean design, but quick.
+7. **dms uses GStreamer for the PoC** for Snapcast sessions; ffmpeg stays for
+   everything else. *Changed 2026-11-27:* not in-process through `go-gst`, but as a
+   helper process per session (`session-sender`, GStreamer with `snapsink`) behind a
+   `SessionFeeder` interface, so dms stays pure Go. See "Feeding the session".
 8. **The renderer must know the new type and prefer it.** *Since 2026-11-27:* a
    renderer with sessions enabled (gmrender `--snapcast-sessions`) asks for a
    session first and plays it whenever the server offers one.
@@ -219,49 +221,87 @@ session URI.
 `dlna/dms/snapcast.go` in the fork:
 
 - `-snapcastStream <uri>` gives the session URI for a transport. It can be repeated,
-  once per transport, and `{host}` stands for this machine.
+  once per transport. `{host}` stands for this machine, and `{stream}` for the item's
+  stream (`dms-<hash of its path>`).
 - A request for an audio item's `/res` whose `Accept` header names one of those
   transports gets the best match instead of the media.
-- In the PoC, the URI is fixed (one stream for every item), and something else feeds
-  that stream (e.g. `make listen-send`). Stream names per item and feeding come with
-  step 4.
+- Without `{stream}`, every item points at one fixed stream that something else
+  feeds (e.g. `make dlna-session`, as in tests 10 and 11).
 
-### Feeding the session, PoC: GStreamer in dms
+### Feeding the session (built, PoC step 4)
 
-For the PoC, dms uses GStreamer for Snapcast sessions only (the user, 2026-11-24: not a
-clean design, but quick). ffmpeg stays for everything else. dms builds one pipeline per
-session in-process, through the Go bindings (`go-gst`):
+`dlna/dms/snapcast_feeder.go` in the fork. Feeding sits behind an interface:
 
-```text
-filesrc location=<item> ! decodebin ! audioconvert ! audioresample ! snapsink stream=dms-3f9a1c mode=auto
+```go
+type SessionFeeder interface {
+    // Returns once the stream exists on the Snapcast server; reuses a running session.
+    Open(ctx context.Context, stream, path string) error
+}
 ```
 
-This reuses everything `snapsink` already does: the daemon, pacing, timestamps, and tags
-as stream metadata. It also maps the session's control onto GStreamer itself:
+It is scoped to the session feed only, not to all of dms's media handling (the user
+asked whether the whole backend could be configurable, 2026-11-27). Probing,
+transcoding and thumbnails are ffmpeg/ffprobe throughout dms, and abstracting all of
+that would be a large refactor with little gain.
 
-| Session | In dms's pipeline |
-|---|---|
-| `Stream.Control` from a renderer | `snapsink` posts `snapcast-stream-control` on the bus; dms handles it |
-| play, pause | pipeline PLAYING or PAUSED (paused, `snapsink` sends nothing) |
-| seek (`setPosition`) | a flushing seek on the pipeline |
-| position, duration | position and duration queries; dms hands them to `snapsink` (new: a way to set `position` in the stream's properties, see below) |
-| end of track | EOS on the bus: playback `stopped` |
+**`ProcessFeeder`** (`-snapcastFeeder '<command> <args>'`) is the implementation built
+for the PoC:
 
-It must be in-process (`go-gst`), not a `gst-launch-1.0` child process. Otherwise the
-bus messages with the commands never reach dms. A `snapsink` that was fed while paused
-and then resumed, or one that seeks, must keep a continuous timeline on the server. That
-needs testing (running time after a flushing seek).
+- **One helper process per session.** dms appends `--paused <file> <stream>` to the
+  command, waits for the helper's `Session ready` line, and answers the renderer.
+- **Reuse:** a second `GET` for the same item finds the session running and gets the
+  same URI. That's how a second room joins.
+- **Logging:** the helper's output goes into dms's log.
+- **Fallback:** if the helper can't start, or isn't ready within 10 s, the renderer
+  gets the media.
+- **The helper** is `snapsink`'s example `session-sender` (`target/dlna/session-sender`
+  after `make dlna-build`). It plays the file through GStreamer into
+  `snapsink stream=<stream> mode=shared`, so all sessions share the daemon's server
+  on one port.
+- **The helper handles the session's control itself:**
+
+  | Session | In the helper |
+  |---|---|
+  | `Stream.Control` from a renderer | `snapsink` posts `snapcast-stream-control` on the bus; the helper acts on it |
+  | play, pause, playPause | pipeline PLAYING or PAUSED (paused, `snapsink` sends nothing) |
+  | seek (`setPosition`, `seek`), stop | a flushing seek (stop: pause, back to 0) |
+  | position, duration, playback state | `snapsink` publishes them (step 3) |
+  | end of track | EOS: `stopped`; `play` starts again from 0 |
+  | idle | `--idle-exit SECS`: the helper exits when the session hasn't played that long |
+
+Why a process, not `go-gst` in dms (the plan until 2026-11-27):
+
+- The only published go-gst versions were `v0.0.1`–`v0.0.4`, the newest two days
+  old: a fresh restart of the bindings.
+- It would also have brought cgo and GStreamer headers into dms.
+- The original reason for in-process (dms must see `snapsink`'s bus messages) is
+  gone, because the helper acts on them itself.
+
+Tested in the devcontainer (SOAP, 2026-11-27):
+
+- two items became two sessions;
+- a second room (`playbin` with the session URI) joined the first item's session;
+- pause in one room paused both;
+- after Stop, one room moved on to the second item while the other stayed on the
+  first;
+- tracks ended (`stopped`, gmrender STOPPED), and the sessions closed after the idle
+  time.
+
+Gotcha: in `mode=auto`, `snapsink` falls back to an embedded server when the daemon
+can't be reached. The first session then holds the port, and the next can't bind it.
+Hence `--mode shared`, which fails loudly instead. (It happened in the test with an
+`XDG_RUNTIME_DIR` too long for a Unix socket path.)
 
 ### Feeding the session, later: ffmpeg and the daemon socket
 
-The clean design without GStreamer in dms: dms already transcodes with ffmpeg. For a
-Snapcast session it runs ffmpeg to raw PCM at the item's rate and feeds it into the
+A second `SessionFeeder` without GStreamer. dms already transcodes with ffmpeg. For a
+Snapcast session it would run ffmpeg to raw PCM at the item's rate and feed it into the
 daemon over its Unix socket (`docs/shared-server.md`, the IPC protocol): `Hello`,
 `Acquire`, then `Pcm` frames, `Properties` for title, artist, album, duration, position
-and playback state, and `Command`s back for play, pause and seek. No GStreamer is
-needed in dms. The protocol is small (a frame is type, length and payload; control
-messages are JSON). A Go client is a few hundred lines, and is the first producer of
-the daemon that is not `snapsink`.
+and playback state, and `Command`s back for play, pause and seek. The protocol is
+small (a frame is type, length and payload; control messages are JSON). A Go client is
+a few hundred lines, and would be the first producer of the daemon that is not
+`snapsink`.
 
 - **Timestamps:** each `Pcm` frame carries its capture time on `CLOCK_MONOTONIC`
   (`golang.org/x/sys/unix.ClockGettime`). dms paces the feed in real time, as
@@ -273,43 +313,18 @@ the daemon that is not `snapsink`.
   (`GST_SNAPCAST_DAEMON` or `PATH`). As a system service, both run under dms's service
   user.
 
+Only if the PoC succeeds and dms upstream is interested.
+
 ### Sessions on demand
 
 A session must exist before a renderer can join it, but dms cannot create one for every
 item it lists (a folder can hold hundreds). With content negotiation, **the renderer's
-`GET` tells dms which item to open**: dms starts the session (a `snapsink` pipeline,
-paused, with the item's tags) and answers once the stream exists. `snapsrc` retries the
-join for a few seconds anyway. When a session has had no clients for a while, dms
-closes it.
+`GET` tells dms which item to open** (built, above). The session closes itself when it
+hasn't played for a while (the helper's idle exit).
 
-This replaces the earlier plan (2026-11-24), in which the daemon asked dms to open
+This replaced the earlier plan (2026-11-24), in which the daemon asked dms to open
 unknown streams: a daemon IPC v3 (`Provide`/`Open`/`Close`) and a "streams on demand"
-hook in snapcast-rs. Neither is needed now.
-
-What is still needed: `Properties` gets a `position` (seconds), which it lacks
-today. Snapcast's stream properties already define one.
-
-### The feeder behind an interface (proposal, 2026-11-27)
-
-The user asked whether dms's media backend could be made configurable (GStreamer or
-ffmpeg, by a contract). My proposal: yes, but only for the **session feed**, not
-for all of dms's media handling.
-
-- Probing, transcoding and thumbnails are ffmpeg/ffprobe throughout dms. Its
-  transcode specs are ffmpeg arguments, and ffprobe's output feeds the listing.
-  Abstracting all of that is a large refactor, with little gain and little chance
-  upstream takes it.
-- A small Go interface is enough, e.g.
-  `SessionFeeder { Open(item, stream) (Session, error) }` with
-  `Session { Play(); Pause(); Seek(pos); Position(); Close() }`, and two
-  implementations:
-  - `gst`: go-gst plus `snapsink`, like `session-sender`;
-  - `ffmpeg`: PCM into the daemon socket.
-- dms picks one with a flag (`-snapcastFeeder gst|ffmpeg`). The gst feeder sits
-  behind a Go build tag, so dms still builds without cgo and GStreamer. It looks up
-  `snapsink` at startup and warns if it's missing, like gmrender does for `snapsrc`.
-
-To be decided at the start of step 4.
+hook in snapcast-rs. Neither is needed.
 
 ### Which transports (later)
 
@@ -397,10 +412,11 @@ Worth designing for now; not part of the PoC.
 |---|---|---|---|
 | this repo, `snapsrc` + engine | `snapcast-tcp://` URI handler; join a stream via JSON-RPC | **done** | ours |
 | this repo, `snapsrc` + engine | Session state on the bus; `Stream.Control` and `Client.SetVolume` by action signals | **done** | ours |
-| this repo, `snapsink` | `position`, duration from a query, `stopped` after EOS; the `session-sender` example | **done** | ours |
+| this repo, `snapsink` | `position`, duration from a query, `stopped` after EOS; the `session-sender` example (dms's helper) | **done** | ours |
 | this repo, `snapsink` | Publish the session URI templates per transport | later | ours |
 | dms (fork) | Negotiation, transport by `Accept` | **done** | PR candidate, if dms wants it |
-| dms (fork) | Sessions per item: a `go-gst` pipeline with `snapsink`, play, pause, seek; idle close; later maybe the ffmpeg feed | step 4 | PR candidate, if dms wants it |
+| dms (fork) | A session per item: `SessionFeeder`, `ProcessFeeder` with `session-sender` | **done** | PR candidate, if dms wants it |
+| dms (fork) | An ffmpeg `SessionFeeder` (PCM into the daemon socket) | later, maybe | PR candidate, if dms wants it |
 | gmrender-resurrect (fork) | Negotiation before playing, `Accept` from the GStreamer registry | **done** | PR candidate |
 | gmrender-resurrect (fork) | Session-aware Pause/Seek/position/volume, end of track | **done** | PR candidate |
 | snapcast-rs (fork) | WebSocket audio (L11), then `snapcast-ws` in both plugins | later | PR candidate |
@@ -420,11 +436,9 @@ Worth designing for now; not part of the PoC.
 3. ~~**gmrender** maps Pause/Seek/position/volume to the session~~ done 2026-11-27.
    `make dlna-session` stands in for dms. Tested by hand in the devcontainer (SOAP);
    test 11 is for BubbleUPnP on the host.
-4. **dms** feeds a session per item, opened on the renderer's `GET`, with play,
-   pause and seek, and an idle close. It does this behind a `SessionFeeder`
-   interface (proposal above), with GStreamer (`go-gst`, `snapsink`) first.
-   The ffmpeg and daemon-socket feed replaces GStreamer in dms only if the PoC
-   succeeds and dms upstream is interested.
+4. ~~**dms** feeds a session per item~~ done 2026-11-27: `SessionFeeder` with a
+   helper process per session (`session-sender`), opened on the renderer's `GET`,
+   with an idle close. Tested by hand in the devcontainer; test 12 is for the host.
 5. **Two renderers, one control point**, then the overnight test as for the daemon.
 
 ### Running the PoC
@@ -436,16 +450,15 @@ Setup, numbered tests and suggestions: [dlna-tests.md](dlna-tests.md).
 Both projects as **forks** (`aanno/dms`, `aanno/gmrender-resurrect`) and git submodules
 under `dlna/` in this repo, like `snapcast-rs`: changes committed in the fork, the
 pointer bumped here in its own commit. They are not part of `make check`; they have
-their own make target (`make dlna-build`). The devcontainer needs Go (dms, with cgo for
-`go-gst`) and libupnp plus autotools (gmrender). After the PoC, the DLNA integration may
+their own make target (`make dlna-build`). The devcontainer needs Go (dms, pure Go)
+and libupnp plus autotools (gmrender). After the PoC, the DLNA integration may
 move into a repo of its own.
 
 ## Open questions
 
-1. How does `snapsink` (or the daemon) publish the session URIs per transport? A
-   read-only property, a bus message, or the daemon's status? Decide in step 4.
-2. dms's feeder: a `SessionFeeder` interface with `gst` and `ffmpeg` (proposal in
-   "The feeder behind an interface")?
+1. How does `snapsink` (or the daemon) publish the session URIs per transport, so
+   that dms needs no `-snapcastStream`? A read-only property, a line from the helper,
+   or the daemon's status?
 
 Answered:
 
@@ -457,5 +470,7 @@ Answered:
 - Do control points pass a Snapcast resource through? No (BubbleUPnP), hence content
   negotiation (2026-11-27).
 - Does the negotiation work with BubbleUPnP? Yes (DLNA test 10, 2026-11-27).
+- dms's feeder: a `SessionFeeder` scoped to sessions, not a configurable media
+  backend; built as a helper process per session, not `go-gst` (2026-11-27).
 - Transport variants: through `Accept` and q values; the lists come from GStreamer
   (2026-11-27).

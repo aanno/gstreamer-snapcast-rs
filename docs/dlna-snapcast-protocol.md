@@ -209,11 +209,13 @@ Pause and seek take effect after up to the Snapcast buffer (`buffer-ms`, default
 1. The negotiation of section 2, on the existing resource handler, with one session
    URI per transport its Snapcast server serves.
 2. A Snapcast server reachable by the renderers, and a way to feed the item into a
-   named stream from the start position. In the PoC, the Snapcast server is
-   `gst-snapcast-daemon`, which `snapsink` starts by itself. For now, dms answers with
-   a fixed stream URI (`-snapcastStream 'snapcast-tcp://{host}:1704/default?control=1705'`)
-   that something else feeds (e.g. `make listen-send`). Feeding it from dms comes
-   in PoC step 4.
+   **stream of its own** (one name per item, so that renderers of the same item meet),
+   opened on the renderer's `GET` and closed when idle. In the PoC:
+   - The Snapcast server is `gst-snapcast-daemon`, shared by all sessions; `snapsink`
+     starts it by itself.
+   - dms runs one helper process per session (`session-sender`, GStreamer with
+     `snapsink`): `-snapcastStream 'snapcast-tcp://{host}:1704/{stream}?control=1705'
+     -snapcastFeeder 'session-sender --mode shared --idle-exit 600'`.
 3. Handle `Stream.Control` (`play`, `pause`, `playPause`, `stop`, `setPosition`
    `{"position": s}`, `seek` `{"offset": s}`), and publish the stream's
    `playbackStatus` (`stopped` at the end of the track), `position` (seconds, about
@@ -241,8 +243,8 @@ server. The PoC is meant for a home network, like DLNA itself.
 
 | Part | Where | What |
 |---|---|---|
-| Media server | `dlna/dms` (fork, `dlna/dms/snapcast.go`) | Negotiation on `/res`, transport by `Accept` q; flag `-snapcastStream` (repeatable, one per transport) |
+| Media server | `dlna/dms` (fork, `dlna/dms/snapcast.go`, `snapcast_feeder.go`) | Negotiation on `/res`, transport by `Accept` q; a stream per item (`{stream}`) fed by a `SessionFeeder`; flags `-snapcastStream` (repeatable, one per transport), `-snapcastFeeder` |
 | Renderer | `dlna/gmrender-resurrect` (fork, `src/snapcast_session.c`) | Negotiation before `set_uri`/`set_next_uri`, `Accept` from the GStreamer registry; flag `--snapcast-sessions` |
 | Snapcast client | `snapsrc` (`crates/gst-plugin-snapsrc/src/snapsrc/uri.rs`, `imp.rs` "Sessions") | `snapcast-tcp://` URI handler; properties `stream`, `control-port`; message `snapcast-session`; signals `stream-control`, `set-server-volume` |
 | Session control | `gst-snapcast-engine` (`src/client/session.rs`) | Join (`Server.GetStatus`, `Group.SetStream`) after each (re)connect; properties in, `Stream.Control`/`Client.SetVolume` out |
-| Sender | `snapsink`, example `session-sender` (`make dlna-session`) | Position, duration, `stopped`; obeys `Stream.Control` |
+| Sender | `snapsink`, example `session-sender` (dms's helper; `make dlna-session` by hand) | Position, duration, `stopped`; obeys `Stream.Control`; `--paused`, `--idle-exit`, `Session ready` line |
