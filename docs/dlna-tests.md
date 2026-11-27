@@ -319,7 +319,19 @@ feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
          per open session, named `dms-…`, with the track's title, position and length.
     - **Done in the devcontainer** by hand (SOAP, 2026-11-27): a to d passed. Also, a
       second room joined the same session, and pause in one room paused both.
-    - Result on the host: (open)
+    - **Result on the host, 2026-11-27: passed** (a, b; one item). dms from
+      `dlna/dms` with `-snapcastFeeder ../../target/debug/examples/session-sender`
+      (no `--mode`, so the helper ran an embedded server; fine for one session).
+      gmrender: session `dms-2b5de2b3edd9` started paused, and its play started it.
+      Four seeks, one volume send per change, pause and resume, and the end of the
+      track (STOPPED) all worked. Not yet tried: several items or rooms at once (needs
+      `--mode shared`), and the idle close.
+    - Found on the way:
+      - `-snapcastFeeder ../session-sender --mode shared …` without quotes made dms
+        reject `-mode`: the helper's options must be quoted with it (dms's help now
+        says so; `dlna/dms/README-snapcast.md`).
+      - The `auto` fallback is now a visible warning, and a too-long
+        `XDG_RUNTIME_DIR` is an error (`docs/testing-host.md`, gotchas).
 
 11. **The session follows the control point** (PoC step 3, since 2026-11-27).
     - **Setup:**
