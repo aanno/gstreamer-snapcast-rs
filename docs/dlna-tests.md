@@ -107,7 +107,10 @@ In short, with BubbleUPnP as the control point:
   second resource. gmrender asks dms for the item's ordinary URL with
   `Accept: audio/x-snapcast-tcp`, and dms answers with a `snapcast-tcp://` URI.
   `snapsrc` plays it and joins the stream. Tested by hand in the devcontainer.
-- **Next:** test 10 with BubbleUPnP on the host (new setup above).
+- **Test 10 passed on the host (2026-11-27):** BubbleUPnP → gmrender → dms
+  negotiation → `snapsrc` plays the Snapcast stream. PoC step 2 is done for real.
+- **Next:** PoC step 3, gmrender maps Pause/Seek/position/volume to the session,
+  and the end of a track. Then step 4: dms feeds a session per item.
 
 
 0. **Discovery.** Start gmrender (and dms) as above on the host. BubbleUPnP lists
@@ -301,7 +304,23 @@ feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
     - Done in the devcontainer by hand (SOAP requests in place of BubbleUPnP,
       2026-11-27): all of the above passed, and snapsrc joined the stream named in
       the URI.
-    - Result on the host: (open)
+    - **Result on the host, 2026-11-27: passed.** Ticks from `make listen-send` (its
+      default source) came out of gmrender, picked in BubbleUPnP as
+      `freejazz_medley.flac`. Scripts and logs: `dlna/dms/dms-test.log`,
+      `dlna/gmrender-resurrect/gmr-test.log`.
+      - BubbleUPnP sent the ordinary `/res` URL (`http-get:*:audio/flac:…`,
+        over IPv4 this time).
+      - gmrender: `Asking servers … Accept: audio/x-snapcast-tcp` at startup. On
+        play: `Session snapcast-tcp://192.168.10.139:1704/default?control=1705`,
+        then `Set uri to 'snapcast-tcp://…'` and `PLAYING`.
+      - dms: `HEAD`, then `GET`, from gmrender's address, 22 ms in all.
+      - Seen on the way, all for step 3:
+        - The position gmrender reports (`RelativeTimePosition`) is its local
+          pipeline's: it counts up from 0.
+        - The source is live, so the track never ends. BubbleUPnP's 38 s item
+          plays on, and the next item doesn't follow by itself.
+      - Fallback checks and the transport choice weren't run on the host; they
+        passed in the devcontainer.
 
 ## Suggestions
 

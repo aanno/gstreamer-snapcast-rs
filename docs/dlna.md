@@ -370,7 +370,7 @@ Worth designing for now; not part of the PoC.
    - by hand, a controller's SOAP requests → gmrender → dms negotiation → `snapsrc`
      on the right stream, with the HTTP fallback.
 
-   Next is the test with BubbleUPnP on the host: DLNA test 10.
+   - with BubbleUPnP on the host: DLNA test 10, passed the same day.
 3. **gmrender** maps Pause/Seek/position/volume to the session. A fixed stream fed by
    `make listen-send` stands in for dms.
 4. **dms** with GStreamer (`go-gst`, `snapsink`): a session per item, opened on the
@@ -394,9 +394,7 @@ move into a repo of its own.
 
 ## Open questions
 
-1. Does the negotiation work with BubbleUPnP on the host as it does with SOAP requests
-   by hand? (DLNA test 10.)
-2. How does `snapsink` (or the daemon) publish the session URIs per transport? A
+1. How does `snapsink` (or the daemon) publish the session URIs per transport? A
    read-only property, a bus message, or the daemon's status? Decide in step 4.
 
 Answered:
@@ -408,5 +406,6 @@ Answered:
 - Sample rate: the item's own; dms does not resample (2026-11-24).
 - Do control points pass a Snapcast resource through? No (BubbleUPnP), hence content
   negotiation (2026-11-27).
+- Does the negotiation work with BubbleUPnP? Yes (DLNA test 10, 2026-11-27).
 - Transport variants: through `Accept` and q values; the lists come from GStreamer
   (2026-11-27).
