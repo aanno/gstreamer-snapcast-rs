@@ -93,7 +93,12 @@ fn main() {
                 let params: serde_json::Value =
                     serde_json::from_str(s.get::<&str>("params").unwrap_or("null"))
                         .unwrap_or_default();
-                println!("command {command} {params}");
+                // `params` is null for commands without parameters (play, pause).
+                if params.is_null() {
+                    println!("command {command}");
+                } else {
+                    println!("command {command} {params}");
+                }
                 let (_, state, _) = pipeline.state(gst::ClockTime::from_mseconds(100));
                 match command {
                     "play" => {
