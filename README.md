@@ -99,6 +99,7 @@ publishing: [docs/architecture.md](docs/architecture.md).
 |            | `stream`      | (empty)     | Join this stream via the control API (moves this client's group to it); empty: the server's choice |
 |            | `control-port` | `0` (port + 1) | The server's JSON-RPC port, used to join `stream` |
 |            | URI           |             | `snapsrc` handles `snapcast-tcp://host[:port]/stream[?control=port]`, so `playbin uri=snapcast-tcp://…` picks it (DLNA PoC, `docs/dlna-snapcast-protocol.md`) |
+|            | session       |             | With `stream`: element message `snapcast-session` (the stream's playback status, position, duration, …) and action signals `stream-control(command, params)` and `set-server-volume(percent, mute)` (module docs, "Sessions") |
 
 `port`, `buffer-ms`, `mdns-name` and the control properties belong to the server, which
 all snapsinks on one port share: the first snapsink to start sets them. With

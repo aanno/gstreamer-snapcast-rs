@@ -1,8 +1,9 @@
 # Snapcast sessions in DLNA/UPnP AV (protocol)
 
 Status: **PoC** (2026-11-27). Implemented in the forks of dms (media server) and
-gmrender-resurrect (renderer), with `snapsrc` from this repo. Tested end to end in the
-devcontainer with a controller's SOAP requests, not yet with BubbleUPnP. Design,
+gmrender-resurrect (renderer), with `snapsrc` and `snapsink` from this repo. The
+negotiation was tested with BubbleUPnP (DLNA test 10). Playback control was tested in
+the devcontainer with a controller's SOAP requests. Design,
 decisions and history: [dlna.md](dlna.md). Tests: [dlna-tests.md](dlna-tests.md).
 
 This document is for anyone who wants to add the feature to another media server or
@@ -184,19 +185,21 @@ specified when snapcast-rs implements it.)
 - **Opening and closing:** the media server opens the session on the renderer's `GET`,
   and closes it when no client has listened to it for a while.
 
-### Playback control (planned, PoC steps 3 and 4)
+### Playback control
 
-These parts are designed ([dlna.md](dlna.md), "Sessions") but not built yet:
+Built on the renderer's side (PoC step 3): gmrender with `snapsrc`, and the stand-in
+sender `make dlna-session`. A media server's own feeder comes in step 4.
 
 | UPnP action on a renderer | Effect |
 |---|---|
-| `SetAVTransportURI` | Negotiation; the renderer joins the session |
+| `SetAVTransportURI` | Negotiation; the renderer joins the session (after every reconnect too) |
 | `Play` | `Stream.Control play` on the session (nothing happens if it's already playing) |
 | `Pause` | `Stream.Control pause`: **pauses every room** |
 | `Seek` | `Stream.Control setPosition`: **seeks every room** |
 | `Stop` | Only this renderer leaves the session; the others play on |
-| `GetPositionInfo`, `GetTransportInfo` | From the session's stream properties (`Stream.OnProperties`) |
-| RenderingControl volume, mute | This room's Snapcast client volume (`Client.SetVolume`) |
+| `GetPositionInfo`, `GetTransportInfo` | From the session's stream properties (`Stream.OnProperties`); a pause or resume elsewhere changes the renderer's transport state |
+| End of the track | The sender reports `playbackStatus: stopped`; renderers treat it as the end of the stream, so control points move on |
+| RenderingControl volume, mute | This room's Snapcast client volume (`Client.SetVolume`), as the control point's 0..100 level |
 
 Pause and seek take effect after up to the Snapcast buffer (`buffer-ms`, default
 1 s): clients play out what they already hold.
@@ -211,8 +214,12 @@ Pause and seek take effect after up to the Snapcast buffer (`buffer-ms`, default
    a fixed stream URI (`-snapcastStream 'snapcast-tcp://{host}:1704/default?control=1705'`)
    that something else feeds (e.g. `make listen-send`). Feeding it from dms comes
    in PoC step 4.
-3. Later: handle `Stream.Control` (play, pause, seek) and publish the position,
-   duration and playback state as stream properties.
+3. Handle `Stream.Control` (`play`, `pause`, `playPause`, `stop`, `setPosition`
+   `{"position": s}`, `seek` `{"offset": s}`), and publish the stream's
+   `playbackStatus` (`stopped` at the end of the track), `position` (seconds, about
+   once a second) and `metadata.duration`. With `snapsink` that's
+   handling its `snapcast-stream-control` bus message and driving the pipeline. It
+   publishes the properties itself. See `snapsink`'s example `session-sender`.
 
 ## 6. What a renderer needs
 
@@ -220,8 +227,10 @@ Pause and seek take effect after up to the Snapcast buffer (`buffer-ms`, default
    for the transports its player can play.
 2. A Snapcast client that plays a `snapcast-tcp://` URI and joins its stream
    (section 4). With GStreamer, that's `snapsrc` (the URI handler picks it by itself).
-3. Later: Pause, Seek and position go to the session instead of the local player, and
-   the volume goes to its Snapcast client.
+3. Pause, Seek and position go to the session instead of the local player (the
+   player keeps running), and the volume goes to its Snapcast client. With
+   `snapsrc`, that's its `snapcast-session` bus message and its action signals
+   `stream-control` and `set-server-volume`.
 
 ## 7. Security
 
@@ -234,5 +243,6 @@ server. The PoC is meant for a home network, like DLNA itself.
 |---|---|---|
 | Media server | `dlna/dms` (fork, `dlna/dms/snapcast.go`) | Negotiation on `/res`, transport by `Accept` q; flag `-snapcastStream` (repeatable, one per transport) |
 | Renderer | `dlna/gmrender-resurrect` (fork, `src/snapcast_session.c`) | Negotiation before `set_uri`/`set_next_uri`, `Accept` from the GStreamer registry; flag `--snapcast-sessions` |
-| Snapcast client | `snapsrc` (`crates/gst-plugin-snapsrc/src/snapsrc/uri.rs`) | `snapcast-tcp://` URI handler; properties `stream`, `control-port` |
-| Joining | `gst-snapcast-engine` (`src/client/join.rs`) | `Server.GetStatus`, `Group.SetStream` after each (re)connect |
+| Snapcast client | `snapsrc` (`crates/gst-plugin-snapsrc/src/snapsrc/uri.rs`, `imp.rs` "Sessions") | `snapcast-tcp://` URI handler; properties `stream`, `control-port`; message `snapcast-session`; signals `stream-control`, `set-server-volume` |
+| Session control | `gst-snapcast-engine` (`src/client/session.rs`) | Join (`Server.GetStatus`, `Group.SetStream`) after each (re)connect; properties in, `Stream.Control`/`Client.SetVolume` out |
+| Sender | `snapsink`, example `session-sender` (`make dlna-session`) | Position, duration, `stopped`; obeys `Stream.Control` |

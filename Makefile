@@ -1,5 +1,5 @@
 .PHONY: setup check fmt fmt-fix clippy test doc build release inspect submodule \
-	dist dlna-build install uninstall install-system uninstall-system test-interop test-aloop test-aloop-shared test-endurance test-mdns doctor \
+	dist dlna-build dlna-session install uninstall install-system uninstall-system test-interop test-aloop test-aloop-shared test-endurance test-mdns doctor \
 	listen-send listen-recv listen-cpp-client listen-cpp-server listen-pair listen-all listen-show
 
 PLUGIN_PATH := $(CURDIR)/target/debug
@@ -160,6 +160,13 @@ dlna-build:
 		$(MAKE) && $(MAKE) install
 	ln -sf gmrender/bin/gmediarender $(DLNA_DIR)/gmediarender
 	@echo "Built $(DLNA_DIR)/dms and $(DLNA_DIR)/gmediarender"
+
+## DLNA PoC: a file as a Snapcast session that obeys play/pause/seek (stands in for dms
+## until it feeds sessions): SESSION_FILE, STREAM (default), PORT (1704; control: PORT+1).
+SESSION_FILE ?= assets/audio/freejazz_medley.flac
+dlna-session:
+	cargo run --release -p gst-plugin-snapsink --features control --example session-sender -- \
+		"$(SESSION_FILE)" $(or $(STREAM),default) $(or $(PORT),1704)
 
 ## Report tools, elements and sound devices needed for building and testing
 doctor:

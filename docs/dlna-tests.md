@@ -109,8 +109,11 @@ In short, with BubbleUPnP as the control point:
   `snapsrc` plays it and joins the stream. Tested by hand in the devcontainer.
 - **Test 10 passed on the host (2026-11-27):** BubbleUPnP → gmrender → dms
   negotiation → `snapsrc` plays the Snapcast stream. PoC step 2 is done for real.
-- **Next:** PoC step 3, gmrender maps Pause/Seek/position/volume to the session,
-  and the end of a track. Then step 4: dms feeds a session per item.
+- **Built (PoC step 3, 2026-11-27):** gmrender passes Pause, Seek, position,
+  volume and the end of a track to the session (snapsrc's `snapcast-session`
+  message and action signals). `make dlna-session` stands in for dms's feeder.
+- **Next:** test 11 on the host. Then step 4: dms feeds a session per item, behind a
+  `SessionFeeder` interface ([dlna.md](dlna.md)).
 
 
 0. **Discovery.** Start gmrender (and dms) as above on the host. BubbleUPnP lists
@@ -282,6 +285,38 @@ In short, with BubbleUPnP as the control point:
 Later steps get their tests here when they are built: `playbin uri=snapcast://…`
 (PoC step 2), gmrender playing it with Pause/Seek going to the session (step 3), dms
 feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
+
+11. **The session follows the control point** (PoC step 3, since 2026-11-27).
+    - **Setup:**
+      - **Reinstall the plugins** (`make install`): `snapsrc` changed.
+      - **Rebuild gmrender** (`make dlna-build`, or by hand as before).
+      - **Terminal 0** is now the stand-in sender, which obeys play, pause and seek
+        and ends with the file: `make dlna-session SESSION_FILE=<a music file>`
+        (default `assets/audio/freejazz_medley.flac`, 38 s; ports 1704/1705,
+        stream `default`).
+      - **Terminals 1 and 2:** dms and gmrender as in the setup above.
+      - **Optional:** `dlna-session` serves no Snapweb (no HTTP port). A controller
+        app on the JSON-RPC port 1705 (e.g. Snapdroid) shows the room's volume and
+        can pause the session too.
+    - **In BubbleUPnP**, play any track from dms on gmrender, then:
+      a. **Position:** BubbleUPnP's progress bar shows the session's position and its
+         length (38 s for the default file), not the picked track's.
+      b. **Pause and resume** in BubbleUPnP: the sound stops after up to a second
+         (the Snapcast buffer) and comes back. Terminal 0 logs `command pause` /
+         `command play`; gmrender logs `Session playing -> paused`.
+      c. **Seek** in BubbleUPnP (drag the bar): terminal 0 logs `command setPosition`
+         and `seek to …`. The sound jumps after up to a second.
+      d. **Volume** in BubbleUPnP: gmrender's Snapcast client changes volume
+         (`set-server-volume`). A Snapcast controller shows the same number.
+      e. **End of the track:** at the end of the file, gmrender logs
+         `Session playing -> stopped` and `Session ended`, and BubbleUPnP goes on to
+         its next track. That track plays the same session from the start again (the
+         stand-in has only one file).
+      f. **Stop** in BubbleUPnP: gmrender leaves the session; terminal 0 goes on.
+    - **Done in the devcontainer** by hand (SOAP requests, 2026-11-27): a to f passed,
+      including a pause from a Snapcast controller (`Stream.Control pause` over
+      JSON-RPC). gmrender's transport went to `PAUSED_PLAYBACK` and back.
+    - Result on the host: (open)
 
 10. **Content negotiation with BubbleUPnP** (PoC step 2, since 2026-11-27). Setup above
     (terminals 0–2), gmrender re-selected in BubbleUPnP after each restart. Browse
