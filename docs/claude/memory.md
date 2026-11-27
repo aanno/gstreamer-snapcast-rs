@@ -7,7 +7,7 @@ the prototype (P1–P4 in detail, every decision with its reasons, the fixed lim
 L2–L13, all measurements) is in [memory-old-2026-11-22.md](memory-old-2026-11-22.md),
 frozen; the evaluation in [../evaluation.md](../evaluation.md).
 
-Last updated: 2026-11-27 (DLNA PoC: wrapper reaches gmrender, tests 9a/9b passed).
+Last updated: 2026-11-27 (DLNA PoC: tests 8/9 done, naming `snapcast-tcp`).
 
 ## Resume here (2026-11-25)
 
@@ -52,7 +52,7 @@ Last updated: 2026-11-27 (DLNA PoC: wrapper reaches gmrender, tests 9a/9b passed
      the session is an `http-get:*:audio/x-snapcast:*` resource (dms `/snapcast?path=`
      answers with the `snapcast://` URI, IPv4 preferred); gmrender
      `--snapcast-formats audio/x-snapcast` advertises it first. Built in the forks (dms
-     `5d1cad6`, gmrender `80b078d`). **2026-11-27: the wrapper reaches gmrender** (tests 9a `audio/x-scpls` and 9b `audio/flac`, renderer re-selected): BubbleUPnP sends the `/snapcast?path=` URL, gmrender fetches it, dms answers with the `snapcast://` URI; `playbin` then fails with `Missing decoder: text/uri-list` (expected). Earlier failures of 9a/9b, maybe also test 8 (`audio/x-snapcast`), were the renderer not being selected. **Next:** repeat test 8; then PoC step 2 (gmrender resolves the wrapper URL by the `<res>` protocolInfo, `snapsrc` gets a `snapcast://` URI handler). Start each session with a short, plain recap. Gotcha: a self-built gmrender needs installing (icons) and
+     `5d1cad6`, gmrender `80b078d`). **2026-11-27: the wrapper reaches gmrender** (tests 9a `audio/x-scpls` and 9b `audio/flac`, renderer re-selected): BubbleUPnP sends the `/snapcast?path=` URL, gmrender fetches it, dms answers with the `snapcast://` URI; `playbin` then fails with `Missing decoder: text/uri-list` (expected). Test 8 repeated with the renderer selected: still fails, BubbleUPnP refuses unknown MIME types (`audio/x-snapcast`). **Next:** decide how gmrender recognises a session (proposal in `docs/dlna.md`: content negotiation, `HEAD` with `Accept: audio/x-snapcast-tcp` on the ordinary audio URL); then PoC step 2. **Naming decided (the user, 2026-11-27):** `snapcast-tcp` (URI scheme, MIME `audio/x-snapcast-tcp`), `snapcast-ws` reserved; rename in step 2. Start each session with a short, plain recap. Gotcha: a self-built gmrender needs installing (icons) and
      its own `-u` UUID (no firewall on the host);
    - the snapsrc wander experiment (Open items), measured as usual;
    - upstream PRs for the 14 fork commits (none opened yet).

@@ -78,14 +78,16 @@ In short, with BubbleUPnP as the control point:
   - **The `http-get` wrapper reaches gmrender** (test 9a and 9b, 2026-11-27).
     BubbleUPnP sends dms's `/snapcast?path=…` URL to gmrender, and dms answers
     gmrender with the `snapcast://` URI.
-- **Does not work:** a session resource with protocol `snapcast:` (test 1).
-  BubbleUPnP silently sends nothing.
-- **Open:** whether the own type `audio/x-snapcast` passes too (test 8 failed, maybe
-  only because the renderer wasn't selected; repeat it).
+- **Does not work:** a session resource with protocol `snapcast:` (test 1), or with
+  an own MIME type `audio/x-snapcast` (test 8, confirmed 2026-11-27). BubbleUPnP
+  silently sends nothing. Only types it knows (`audio/flac`, `audio/x-scpls`) pass.
 - **No sound yet, as expected:** gmrender hands the wrapper URL straight to `playbin`
   (`Missing decoder: text/uri-list`).
-- **Next:** repeat test 8, then PoC step 2 (gmrender resolves the wrapper URL, and
-  `snapsrc` handles `snapcast://`).
+- **Next:** decide how gmrender recognises a session when the type in the DIDL is an
+  ordinary one ([dlna.md](dlna.md), "Finding: only known MIME types pass"). Then PoC
+  step 2: gmrender resolves the session, and `snapsrc` handles `snapcast-tcp://`.
+- **Naming (the user, 2026-11-27):** not plain "snapcast" but `snapcast-tcp` (a
+  `snapcast-ws` variant may follow). Renamed when step 2 is built.
 
 
 0. **Discovery.** Start gmrender (and dms) as above on the host. BubbleUPnP lists
@@ -184,6 +186,13 @@ In short, with BubbleUPnP as the control point:
    Result 2026-11-25: **no `SetAVTransportURI`** again, and dms never logged
    `snapcast session requested`: BubbleUPnP also refuses an `http-get` resource of a
    MIME type it doesn't know (`audio/x-snapcast`), silently. Next: test 9.
+   **Repeated 2026-11-27, renderer selected: failed again, so it's confirmed.** Scripts
+   and logs: `dms-c-xsnapcast.*`, `gmr-c-xsnapcast.*`. gmrender got four `Pause`
+   actions from BubbleUPnP (refused with 701, nothing was playing). So BubbleUPnP was
+   controlling gmrender, but it never sent `SetAVTransportURI`, and dms saw no request,
+   not even BubbleUPnP's probe. BubbleUPnP refuses MIME types it doesn't know. (No
+   `Subscription request` was logged this time, though actions arrived. The subscription
+   check is a hint, not proof.)
 
 9. **Which MIME type does BubbleUPnP accept for the session resource?** No code
    needed: dms takes the type as `-snapcastFormat`, gmrender advertises what
@@ -241,6 +250,7 @@ In short, with BubbleUPnP as the control point:
      earlier failures of 9a and 9b came from the renderer not being selected.
    - Test 8 (`audio/x-snapcast`) may have failed for the same reason. Repeat it with
      the renderer re-selected. If it passes, keep the own type: it's the cleanest.
+     (Repeated 2026-11-27: it fails. BubbleUPnP refuses the unknown type; see test 8.)
    - Next is PoC step 2. gmrender recognises the session resource by the protocolInfo
      in the metadata (one of its `--snapcast-formats`), fetches the wrapper URL itself,
      and gives `playbin` the `snapcast://` URI. `snapsrc` needs a `snapcast://` URI

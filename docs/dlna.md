@@ -3,7 +3,9 @@
 Status: **agreed** (2026-11-24); **changed 2026-11-25**: the session is offered as an
 `http-get` resource of MIME type `audio/x-snapcast`, not with a `snapcast:` protocol,
 because BubbleUPnP doesn't pass that on (see "Finding: BubbleUPnP and the `snapcast`
-protocol"). PoC step 1 done, the wrapper is in both forks (DLNA test 8 pending).
+protocol"). PoC step 1 done, the wrapper is in both forks. **2026-11-27:** the
+wrapper reaches gmrender only with MIME types BubbleUPnP knows, and the names become
+`snapcast-tcp` (see "Finding: only known MIME types pass" and "Naming").
 Targets for the proof of
 concept: the media server [dms](https://github.com/anacrolix/dms) (Go) and the renderer
 [gmrender-resurrect](https://github.com/hzeller/gmrender-resurrect) (C, GStreamer). Both
@@ -163,6 +165,42 @@ This replaces the `snapcast:` protocol in "In the listing", "protocolInfo" and
 much smaller; those sections still describe the first design and get rewritten when
 the PoC confirms the wrapper (DLNA test 8). DLNA test 4 (another control point) found
 none that works here (2026-11-25), so the design must work with BubbleUPnP.
+
+### Finding: only known MIME types pass (2026-11-27)
+
+- **What the tests show:**
+  - With a type BubbleUPnP knows, the wrapper works end to end up to `playbin`. This
+    held for `audio/flac` (DLNA test 9b) and `audio/x-scpls` (9a). BubbleUPnP
+    probes the URL once, sends it to gmrender, and gmrender fetches it. dms then
+    answers with the URI.
+  - BubbleUPnP refuses the own type `audio/x-snapcast` (test 8, confirmed).
+  - BubbleUPnP rewrites the 4th field of protocolInfo
+    (`DLNA.ORG_FLAGS=…;DLNA.ORG_OP=01`), so no marker can go there either.
+- **Consequence:** the DIDL can't mark a session in a way that reaches the renderer.
+  The renderer has to ask the server.
+- **Proposal (to be decided): content negotiation on the ordinary audio resource.**
+  - dms keeps one normal `<res>` per track. No extra session resource, and nothing
+    unknown for the control point.
+  - gmrender with Snapcast support first sends the server a `HEAD` request for the URL,
+    with `Accept: audio/x-snapcast-tcp`.
+  - A Snapcast-aware dms answers with that Content-Type, and a `GET` with the same
+    header returns the URI.
+  - Any other server answers with the audio type, and gmrender plays the URL as
+    usual. The price is one extra `HEAD` per track.
+  - This also covers the problem seen in test 9b: a renderer that doesn't know
+    Snapcast gets the music, not the one-line answer.
+
+### Naming: `snapcast-tcp` (the user, 2026-11-27)
+
+"snapcast" alone is misleading: Snapcast clients connect over TCP (the binary
+protocol on port 1704) or over WebSocket. The names say which one:
+- the URI scheme is `snapcast-tcp://host[:port]/<stream>[?control=<port>]`;
+- the MIME type is `audio/x-snapcast-tcp`;
+- `snapcast-ws` is reserved for a WebSocket variant, which snapcast-rs doesn't
+  implement yet.
+
+The current fork code and the older sections here still say `snapcast`/`x-snapcast`.
+They get renamed in PoC step 2.
 
 ## Sessions
 
