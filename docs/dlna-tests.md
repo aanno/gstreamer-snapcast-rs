@@ -316,7 +316,17 @@ feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
     - **Done in the devcontainer** by hand (SOAP requests, 2026-11-27): a to f passed,
       including a pause from a Snapcast controller (`Stream.Control pause` over
       JSON-RPC). gmrender's transport went to `PAUSED_PLAYBACK` and back.
-    - Result on the host: (open)
+    - **Result on the host, 2026-11-27, first run:**
+      - b (pause and resume) passed.
+      - c (seek) failed: every seek started the track from the beginning.
+        gmrender logged `setPosition {"position":20,000}`, and the sender received
+        `setPosition null`. The cause was gmrender formatting the number with the
+        host's German locale (decimal comma), which isn't JSON. snapsrc then sent
+        `null`.
+      - Fixed the same day: gmrender `g_ascii_formatd`, and snapsrc now refuses
+        parameters that aren't JSON. Checked in the devcontainer (C locale only):
+        a seek to 0:00:20 arrived as `{"position":20.0}`.
+      - **Repeat c** after `make install` and `make dlna-build`. Then a, d, e and f.
 
 10. **Content negotiation with BubbleUPnP** (PoC step 2, since 2026-11-27). Setup above
     (terminals 0–2), gmrender re-selected in BubbleUPnP after each restart. Browse
