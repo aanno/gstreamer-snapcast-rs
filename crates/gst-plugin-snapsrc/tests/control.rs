@@ -362,8 +362,14 @@ fn snapsrc_follows_and_controls_a_session() {
         s.get::<&str>("playback-status") == Ok("paused")
     });
 
+    // Parameters that aren't JSON are refused, not sent as null (gmrender under a
+    // German locale wrote a decimal comma, and every seek went to the start).
+    assert!(!src.emit_by_name::<bool>(
+        "stream-control",
+        &[&"setPosition", &r#"{"position":20,000}"#]
+    ));
     // setPosition carries its parameters.
-    assert!(src.emit_by_name::<bool>("stream-control", &[&"setPosition", &r#"{"position":42}"#]));
+    assert!(src.emit_by_name::<bool>("stream-control", &[&"setPosition", &r#"{"position":42.5}"#]));
     let message = sender
         .bus()
         .unwrap()
@@ -375,7 +381,7 @@ fn snapsrc_follows_and_controls_a_session() {
     let command = message.structure().unwrap();
     assert_eq!(command.get::<&str>("command").unwrap(), "setPosition");
     let params: Value = serde_json::from_str(command.get::<&str>("params").unwrap()).unwrap();
-    assert_eq!(params["position"], 42);
+    assert_eq!(params["position"], 42.5);
 
     // The volume goes to this client on the server and comes back.
     assert!(src.emit_by_name::<bool>("set-server-volume", &[&40u32, &false]));

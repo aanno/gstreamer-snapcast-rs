@@ -100,11 +100,8 @@ impl SessionProperties {
 /// A request from the application to the server.
 #[derive(Debug)]
 pub(crate) enum Request {
-    /// `Stream.Control` for the session's stream; params as JSON text.
-    StreamControl {
-        command: String,
-        params_json: String,
-    },
+    /// `Stream.Control` for the session's stream, with its parameters.
+    StreamControl { command: String, params: Value },
     /// `Client.SetVolume` for this client.
     SetVolume { percent: u16, muted: bool },
 }
@@ -307,11 +304,7 @@ async fn join(rpc: &mut Rpc, target: &Target) -> Result<Value, String> {
 /// Sends `request` on `rpc` (its response is ignored).
 async fn forward(rpc: &mut Rpc, target: &Target, request: Request) -> Result<(), String> {
     match request {
-        Request::StreamControl {
-            command,
-            params_json,
-        } => {
-            let params = serde_json::from_str::<Value>(&params_json).unwrap_or(Value::Null);
+        Request::StreamControl { command, params } => {
             tracing::info!(stream = %target.stream, %command, %params, "Stream.Control");
             rpc.send(
                 "Stream.Control",

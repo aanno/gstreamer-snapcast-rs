@@ -42,10 +42,20 @@ impl SessionControl {
     /// A player command for the session's stream (`Stream.Control`): `command`
     /// such as `play`, `pause`, `setPosition`, with its parameters as JSON text
     /// (e.g. `{"position":90}`; empty: none).
+    /// Fails if `params_json` isn't JSON (e.g. a number with a decimal comma).
     pub fn stream_control(&self, command: &str, params_json: &str) -> Result<(), EngineError> {
+        let params = if params_json.trim().is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_str(params_json).map_err(|e| {
+                EngineError::InvalidConfig(format!(
+                    "{command}: parameters are not JSON ({e}): {params_json}"
+                ))
+            })?
+        };
         self.send(session::Request::StreamControl {
             command: command.to_owned(),
-            params_json: params_json.to_owned(),
+            params,
         })
     }
 
