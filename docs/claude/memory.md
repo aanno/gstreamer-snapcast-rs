@@ -9,7 +9,7 @@ frozen; the evaluation in [../evaluation.md](../evaluation.md).
 
 Last updated: 2026-11-27, end of session (DLNA PoC steps 1–4 done, step 5 prepared).
 
-## Resume here (2026-11-27)
+## Resume here (2026-11-28)
 
 1. **The feasibility prototype is done: go** (user, 2026-11-22, agreeing to
    `docs/evaluation.md`). F1–F5 met; F1 and F2 with caveats (see Open items).
@@ -39,11 +39,23 @@ Last updated: 2026-11-27, end of session (DLNA PoC steps 1–4 done, step 5 prep
      plan" in `docs/testing-host.md` (1–10: crash recovery, grace exit, log, option
      mismatch, port conflict, second machine, mixed clients, Bluetooth, tarball,
      overnight); the user runs them over the next days and reports by number;
-   - **DLNA/UPnP PoC: continue with DLNA tests 13 and 14 on the host** (step 5:
-     two renderers with BubbleUPnP; a night of playing with `scripts/dlna-soak.sh`),
-     plus test 12 c/d (several items at once, idle close). State at the end of
-     2026-11-27 (details: `docs/dlna.md` status and PoC steps, `docs/dlna-tests.md`
-     "Where we stand"):
+   - **DLNA/UPnP PoC: continue with DLNA tests 13 and 14 on the host** (step 5).
+     **2026-11-28:**
+     - Test 12 c/d passed on the host (40 min of an album).
+     - The run's CSV showed dead streams piling up on the daemon. Fixed: stream
+       linger, default 60 s, daemon `--stream-linger-secs`.
+     - gmrender: Stop no longer extrapolates the session position.
+     - Test 13 needs **two control points**: BubbleUPnP follows one renderer and
+       stops the other. Next: BubbleUPnP for room 1, the user's "tutonaut" (a
+       Python UPnP control point, outside git in `dlna/tutonaut-upnp-control`) for
+       room 2, both from dms, the same item.
+     - Open: tutonaut showed only one dms item; the cause is unknown.
+     - Test 14 overnight again with the fix.
+     - Seen, not changed: a session every room left plays on unheard to its end;
+       gmrender re-sends its UPnP volume on every Play.
+
+     State at the end of 2026-11-27 (details: `docs/dlna.md` status and PoC steps,
+     `docs/dlna-tests.md` "Where we stand"):
      - **Steps 1–4 done, step 5 prepared.** The chain works on the host with
        BubbleUPnP (tests 10–12):
        1. BubbleUPnP sends the item's ordinary `/res` URL.
@@ -76,7 +88,7 @@ Last updated: 2026-11-27, end of session (DLNA PoC steps 1–4 done, step 5 prep
        transport, so that dms needs no `-snapcastStream`; an ffmpeg `SessionFeeder`
        (maybe); gapless `SetNextAVTransportURI` into a session.
      - **Not pushed:** everything since 2026-11-25. Forks first (dms `7c44a4b`,
-       gmrender `099f641`, both on `aanno/fixes`), then this repo.
+       gmrender, both on `aanno/fixes`), then this repo.
      - The user found long back-and-forth days confusing: start each session with a
        short, plain recap.
    - the snapsrc wander experiment (Open items), measured as usual;
@@ -241,6 +253,11 @@ Short form; dates and reasons in the archive. CLAUDE.md has the coding rules.
 - 2026-11-27 (user): **snapsrc applies the server volume with the C++ snapclient's
   curve** `(10^v − 1) / 9` (default software mixer), not linearly like snapclient-rs:
   even dB steps, and the same loudness as C++ rooms at the same percent (DLNA test 11d).
+- 2026-11-28 (user): **a released stream is removed after a linger time** (default
+  60 s, `ServerOptions::stream_linger`; the daemon decides with
+  `--stream-linger-secs`, `none` keeps the old behaviour). Before, it stayed until
+  the server stopped (L1), and dms's one stream per item piled up dead streams on
+  the long-lived daemon (DLNA test 12, third host run).
 - 2026-11-22 (user): **the audio between `snapsink` and the daemon stays on our socket
   protocol** with absolute `CLOCK_MONOTONIC` timestamps; GStreamer as the transport and
   timestamps made in the daemon were discussed and rejected (`docs/shared-server.md`,

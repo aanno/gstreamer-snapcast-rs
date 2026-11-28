@@ -88,7 +88,7 @@ sudo firewall-cmd --add-service=ssdp                 # add --permanent to keep i
 sudo firewall-cmd --add-port=49500/tcp --add-port=1338/tcp   # gmrender, dms (if not open)
 ```
 
-## Where we stand (2026-11-27, end of day)
+## Where we stand (2026-11-28)
 
 With BubbleUPnP as the control point, on the host:
 
@@ -108,8 +108,10 @@ With BubbleUPnP as the control point, on the host:
   (`snapcast:` protocol or an unknown MIME type). BubbleUPnP never passes it on
   (tests 1 to 9). That's why the session is negotiated on the ordinary URL
   (`docs/dlna-snapcast-protocol.md`).
-- **Still open:** test 12 c and d (several items at once, the idle close), and tests
-  13 and 14.
+- **2026-11-28:** test 12 c and d passed on the host (40 minutes of an album). That
+  run found dead streams piling up on the daemon, fixed the same day (stream linger).
+- **Still open:** test 13 on the host, which needs two control points: BubbleUPnP
+  follows only one renderer. Also test 14 overnight, with the fix.
 
 The numbered tests below keep their history. Their setup changed over time; the
 current setup is above, and in tests 11 to 14.
@@ -319,6 +321,22 @@ feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
       both to 0:26. A volume in room 1 changed only room 1. After a Stop in room 1,
       room 2 played on. The end of the track stopped both. dms started one helper.
       Seen in passing: a stopped room still reports its last position (harmless).
+    - **First host try, 2026-11-28: not possible with BubbleUPnP alone.**
+      - BubbleUPnP follows one renderer at a time. Switching to the other renderer
+        stops the first one, so two rooms can't be kept playing from it.
+      - A second controller (a Python/Tk UPnP control point, here "tutonaut",
+        kept outside git in `dlna/tutonaut-upnp-control`) controlled room 2.
+        Room 2 played from the NAS's media server (MiniDLNA), not from dms. That
+        doesn't test one session: it showed a session room next to a plain room,
+        both working (room 2 asked the NAS, got the media and played it).
+      - tutonaut showed only one dms item. dms's browsing is unchanged from
+        upstream, and dms served a folder with 16 items. The cause is open:
+        browse from the root while nothing plays, to check.
+      - The startup errors in room 2's log (`Playing failed (704)`,
+        `Transition to PAUSE not allowed`) were the controller's Play and Pause
+        before any URI was set. They're harmless.
+    - **Next try:** BubbleUPnP for room 1, tutonaut for room 2, **both from dms and
+      the same item**. dms must log one `snapcast session opening`.
     - Result on the host: (open)
 
 14. **The long run** (PoC step 5, since 2026-11-27): a night of playing, as for the
@@ -344,6 +362,10 @@ feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
         the last.
       - **Responsiveness:** pause, seek and volume still work at once in the
         morning.
+    - **First run, 2026-11-28 (40 min, one room from dms):** see test 12, third
+      host run. dms (about 22 MB, 18 threads), the helpers (about 17 MB each) and
+      gmrender stayed flat. The daemon's stream count and threads grew with every
+      track (fixed: stream linger). Repeat the night run with the fix.
     - Result on the host: (open)
 
 12. **dms feeds a session per item** (PoC step 4, since 2026-11-27).
@@ -391,6 +413,36 @@ feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
         the end of the track (gmrender STOPPED) all worked.
       - dms was stopped before the 120 s idle close.
       - Still open: c (several items) and d (the idle close).
+    - **Third host run, 2026-11-28 (with test 14's monitor): c and d passed.**
+      BubbleUPnP played the album `Il Sole Nella Pioggia` (dms `-path` its artist's
+      folder, 16 items) on room 1 for 40 minutes, with
+      `--mode shared --idle-exit 120`. Logs: `dms-test.log`, `gmr-room1.log`,
+      `gmr-room2.log`, CSV `target/dlna-soak-20261128-1011.csv`.
+      - c: every track got its own `dms-…` stream. Each session opened within the
+        second and was ready before gmrender's GET. A track played again later
+        (02, 03) opened a new helper on the same stream name.
+        A second Play on the same item (BubbleUPnP re-sends the URI after a
+        renderer switch) reused the running session.
+      - d: every session closed 120 s after its end (`idle: … closing it`, then
+        `closed … exit=<nil>`). Only 1 or 2 helpers ran at a time.
+      - Also passed: pause and resume, a seek to 2:42, and the next track
+        following each track's end within about 2 s.
+      - **Found: dead streams piled up on the daemon.** The CSV showed `dms_streams`
+        growing by one per track (5 → 9 in 15 minutes) while only 1–2 helpers ran,
+        with about one daemon thread more per stream. A released stream stayed on
+        the server until the server stopped, by design since L1. **Fixed
+        2026-11-28:** a released stream is removed after a linger time (default
+        60 s, daemon `--stream-linger-secs`; `docs/shared-server.md`).
+      - **Found: a stopped room's position counted on.** After Stop, gmrender
+        went on extrapolating the session position (0:00:29, 0:00:30, … while
+        STOPPED). **Fixed 2026-11-28:** Stop forgets the session's state.
+      - **Seen, not changed:**
+        - A session that every room left (Stop, or the control point switched to
+          another item) plays on unheard to its end, then idles. Here, track 09
+          played 40 s past the switch to track 02. It's harmless, but it uses the
+          idle time. A helper could pause when no client listens.
+        - gmrender sends its UPnP volume (100 %) on every Play. So a volume set
+          in a Snapcast controller is overwritten by the next track.
     - Found on the way:
       - `make dlna-build` on the host failed after a devcontainer build: the shared
         `target/dlna/gmrender-build` kept dependency files with `/workspaces/…`
