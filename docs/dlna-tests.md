@@ -287,6 +287,21 @@ details are in the tests named.
      Each `snapcast session opening` line in dms's log has its `Session ready` line;
      compare their times. If 5 s happens often, the file system is the suspect.
 
+10. **A build in the devcontainer broke the host's test. Fixed.** From track 09 on
+    (11:42), dms couldn't start any helper:
+    `fork/exec …/target/dlna/session-sender: no such file or directory`. So both
+    rooms got the plain file, out of sync, and replaying in tutonaut couldn't help.
+    - **The cause:** at 11:41, `make dlna-build` ran in the devcontainer (for the
+      finding 9 fix) while the test ran on the host. `target/` is shared. The
+      target made `target/dlna/session-sender` an absolute link to
+      `/workspaces/…`, a path that only exists in the container. It also rebuilt
+      gmrender's tree and install for the container's paths.
+    - **The fix:** the link is relative now
+      (`../release/examples/session-sender`), so it works on both sides. The
+      gmrender install still records the checkout's path. So before a host test,
+      run `make dlna-build` on the host, and don't build into `target/dlna` from
+      the other side while a test runs (`docs/testing-host.md`, gotchas).
+
 The numbered tests below keep their history. Their setup changed over time; the
 current setup is above, and in tests 11 to 14.
 
@@ -608,6 +623,28 @@ feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
       - The startup errors in room 2's log (`Playing failed (704)`,
         `Transition to PAUSE not allowed`) were tutonaut's Play and Pause before any
         URI was set. They're harmless.
+    - **Second host run, 2026-11-28 (BubbleUPnP on room 1, tutonaut on room 2, the
+      same album queued in both):**
+      - **Tracks 01–07: passed.** Each track had one session, with a GET from each
+        room, and the rooms played in sync. Pause, play and seek in one room acted on
+        both, and the rooms moved on together at each track end. tutonaut glitched
+        once, at the first change (finding 4).
+      - **Track 08:** room 2 fell out of the session (finding 9, fixed). After that,
+        the seek on room 1 didn't reach room 2.
+      - **From track 09:** no session at all, because a build in the devcontainer
+        broke the helper's link (finding 10, fixed). The test was stopped at
+        11:47.
+      - **Stream linger, verified:**
+        - The soak CSV (`target/dlna-soak-20261128-1115.csv`) shows `dms_streams`
+          following `session-sender_count` (1–4), and 0 at the end.
+        - The daemon logged `Removed the released stream` about 60 s after each
+          release.
+        - Its threads went back to 14 and its fds to 13 with no streams. Its RSS
+          went from 7.2 to 8.2 MB, flat over the last 10 minutes.
+        - gmrender's RSS (both rooms) went from 61 to 80 MB, mostly in the last
+          minutes while playing plain files; to watch in test 14.
+      - **Repeat** after `make dlna-build` on the host, with both gmrenders
+        restarted (the 15 s timeout).
     - Result on the host: (open)
 
 14. **The long run** (PoC step 5, since 2026-11-27; instructions rewritten

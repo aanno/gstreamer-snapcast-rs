@@ -169,7 +169,9 @@ dlna-build:
 	ln -sf gmrender/bin/gmediarender $(DLNA_DIR)/gmediarender
 	# dms's session feeder (-snapcastFeeder): plays an item into a Snapcast stream.
 	cargo build --release -p gst-plugin-snapsink --features control --example session-sender
-	ln -sf $(RELEASE_DIR)/examples/session-sender $(DLNA_DIR)/session-sender
+	# A relative link: target/ is shared by the devcontainer and the host, and an
+	# absolute one breaks on the other side (2026-11-28, DLNA test 13).
+	ln -sfn ../release/examples/session-sender $(DLNA_DIR)/session-sender
 	@echo "Built $(DLNA_DIR)/dms, $(DLNA_DIR)/gmediarender and $(DLNA_DIR)/session-sender"
 
 ## DLNA PoC: a file as a Snapcast session that obeys play/pause/seek (stands in for dms
