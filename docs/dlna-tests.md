@@ -168,9 +168,9 @@ details are in the tests named.
    - **Empty `CurrentURIMetaData`.** `SetAVTransportURI` sends no DIDL, so
      renderers know the title only from the stream's tags. For a session, the
      renderer reports the session's track anyway.
-   - **Queueing the same album as BubbleUPnP didn't work** (2026-11-28, test 13):
-     room 2 didn't move on with room 1 at the end of a track. Maybe a bug in its
-     queue; to check in its repo. Finding 8 needs it.
+   - **Its queue had glitches on the first change** (2026-11-28, test 13, the same
+     album queued as in BubbleUPnP). After that it worked: room 2 moved on with
+     room 1. The glitch is to look at in its repo; details still to note.
    - Its README says playback with this release wasn't tested.
 5. **A session that every room left plays on, unheard.** Stop leaves the session;
    the others play on (by design). But when the last room leaves (Stop, or its
@@ -236,8 +236,9 @@ details are in the tests named.
      first request opens its session, and the second joins it, as when joining by
      hand.
      - The catch: a skip or reorder on one control point splits the rooms.
-     - It didn't work with tutonaut (finding 4). Two BubbleUPnP instances with the
-       same queue should work; not tried yet.
+     - **It works with BubbleUPnP and tutonaut** (2026-11-28, test 13), after a
+       glitch in tutonaut's queue at the first change (finding 4). Two BubbleUPnP
+       instances should work the same way; not tried yet.
    - **Solution, later: room 2 follows room 1.** It needs changes in dms and in
      gmrender:
      1. **dms:** when a renderer asks for the next item right after its session
@@ -515,8 +516,14 @@ feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
          ```
 
       gmrender logs `Setting audio sink-pipeline to …` at startup. Use
-      `pulsesink`, not `pipewiresink`: the latter hangs on stop
-      (`docs/testing-host.md`, gotchas). With two outputs, the rooms can't be
+      `pulsesink`, not `pipewiresink`, for two reasons:
+      - `pipewiresink` hung on stop in the devcontainer (PipeWire 1.4.2, also with
+        `audiotestsrc`; `docs/testing-devcontainer.md`, and a gotcha row in
+        `docs/testing-host.md`). It's not verified with the host's PipeWire. gmrender
+        stops its pipeline at every track, so a hang would stop the room.
+      - `snapsrc` tunes the sink's sync properties (`adjust-sink`). `pulsesink` has
+        the ones `alsasink` has, and `pipewiresink` hasn't
+        (`docs/testing-host.md`). With two outputs, the rooms can't be
       compared by ear as one sound. Listen to each output, or put them side by
       side.
     - **Terminal 4 (optional), tutonaut** as the second control point:
