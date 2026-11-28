@@ -170,7 +170,13 @@ details are in the tests named.
      renderer reports the session's track anyway.
    - **Its queue had glitches on the first change** (2026-11-28, test 13, the same
      album queued as in BubbleUPnP). After that it worked: room 2 moved on with
-     room 1. The glitch is to look at in its repo; details still to note.
+     room 1. The glitch, from room 2's log:
+     1. Track 04 ended at 11:28:38.
+     2. 12 s later, tutonaut sent track 04 **again**. That restarted 04's session
+        from the start.
+     3. 8 s later it sent track 05, the right one.
+
+     The restarted session 04 then played on unheard to its end (finding 5).
    - Its README says playback with this release wasn't tested.
 5. **A session that every room left plays on, unheard.** Stop leaves the session;
    the others play on (by design). But when the last room leaves (Stop, or its
@@ -254,6 +260,32 @@ details are in the tests named.
        the group. And what Stop on the leader does to the followers.
      - It fits the protocol: the session URI stays the same idea, and dms only
        uses the Snapcast server's own grouping.
+
+9. **A room fell out of the session and silently played the file. Fixed.** In test
+   13, room 1 was seeked, and room 2 didn't move: the rooms were out of sync.
+   - **What happened** (track 08, 11:38):
+     1. Room 2 asked first. dms started the helper, but the helper took **5 s** to
+        be ready. Normally it takes well under a second. The file is on
+        `~/mnt/musik`, perhaps a network mount that was slow to answer; not
+        checked.
+     2. gmrender gave up after 3 s (`GET request: … timeout`, then
+        `offered a session, but answered ''`).
+     3. gmrender then played the plain file, outside any session. dms logged
+        `snapcast session not opened; serving the media` (`context canceled`).
+     4. Room 1 asked 5 s later and got the session. From then on, the rooms played
+        two different copies.
+   - **The cause:** gmrender's 3 s timeout was shorter than dms's 10 s wait for
+     its helper. The fallback to the media is right when there's no session at all.
+     But here a session existed, and the room ended up outside it without a
+     visible sign.
+   - **The fix (gmrender fork, 2026-11-28):**
+     - gmrender waits up to 15 s, longer than dms's 10 s.
+     - The fallback now logs `playing the media itself, outside any session`.
+     - The protocol doc now asks servers to answer within 10 s, and renderers to
+       wait at least 15 s.
+   - **To check after the next run:** how long the helpers take to be ready.
+     Each `snapcast session opening` line in dms's log has its `Session ready` line;
+     compare their times. If 5 s happens often, the file system is the suspect.
 
 The numbered tests below keep their history. Their setup changed over time; the
 current setup is above, and in tests 11 to 14.

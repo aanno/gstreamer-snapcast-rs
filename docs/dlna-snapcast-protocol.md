@@ -114,8 +114,13 @@ Before playing an `http://` URI it got from `SetAVTransportURI` or
 Notes:
 
 - Only `http://` URLs are asked. `https://` can be added the same way.
-- **Timeouts:** a few seconds at most (gmrender: 3 s for connecting and for each
-  read). The negotiation runs before playback starts.
+- **Timeouts:** the server answers the `GET` once the session is open. That can
+  take a few seconds: dms starts a feeder that opens the file, maybe on a network
+  share. A server should answer within **10 s** (dms waits that long for its
+  feeder, then serves the media). A renderer should wait at least **15 s** for the
+  answer (gmrender: 15 s for connecting and for each read). A renderer that gives up
+  earlier plays the media outside the session, out of sync with the rooms in it
+  (DLNA tests, finding 9). The negotiation runs before playback starts.
 - A server that doesn't know the feature answers the `HEAD` with the media's type. That
   costs one small extra request per track.
 - A renderer **may** skip the `HEAD` and send only the `GET`. If the response isn't a
