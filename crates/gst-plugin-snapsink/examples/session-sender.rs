@@ -39,7 +39,12 @@ fn uri_of(arg: &str) -> String {
     if arg.contains("://") {
         return arg.to_owned();
     }
-    let path = std::fs::canonicalize(arg).unwrap_or_else(|e| panic!("{arg}: {e}"));
+    // A missing file is the caller's mistake (e.g. dms's -path), not a bug: say so
+    // in one line and exit 1, without a panic's backtrace note.
+    let path = std::fs::canonicalize(arg).unwrap_or_else(|e| {
+        eprintln!("error: cannot open {arg}: {e}");
+        std::process::exit(1);
+    });
     gst::glib::filename_to_uri(&path, None)
         .expect("a file URI")
         .to_string()
