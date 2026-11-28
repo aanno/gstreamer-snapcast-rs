@@ -284,6 +284,7 @@ element message `snapcast-stream-control`. Plan:
 | `GST_DEBUG` | (GStreamer) | Thresholds per category, e.g. `snapsrc:5,snapcast*:4` |
 | `GST_SNAPCAST_DAEMON` | `gst-snapcast-daemon` from `PATH` | The daemon binary a `snapsink` starts when none runs (modes `auto`, `shared`) |
 | `GST_SNAPCAST_DAEMON_GRACE_SECS` | `5` | The daemon exits after this long without senders (`--grace-secs` overrides it) |
+| `GST_SNAPCAST_DAEMON_STREAM_LINGER_SECS` | `60` | The daemon removes a released stream after this long, unless a sender takes it again; `none`: never (`--stream-linger-secs` overrides it) |
 | `GST_SNAPCAST_DAEMON_LOG` | `info` | Log level of `gst-snapcast-daemon` (`error` … `trace`); when autospawned it logs into `$XDG_RUNTIME_DIR/gst-snapcast/daemon.log`, started by hand to stderr |
 | `GST_SNAPCAST_TRACING` | on | `0`, `false`, `no` or `off`: don't install the logging bridge (snapcast-rs and engine logs then go to the application's own `tracing` subscriber, or nowhere) |
 | `XDG_RUNTIME_DIR` | temp dir | Where snapsrc keeps its instance lock files (`gst-snapcast-engine/instance-<n>.lock`; until 2026-11-21 `snapcast-engine/`) |

@@ -37,6 +37,28 @@ use gst_snapcast_engine::server;
 /// The daemon's package version, sent in [`Welcome`].
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// How the daemon serves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Options {
+    /// Return once no sender has been connected for that long (`None`: serve
+    /// until accepting fails).
+    pub grace: Option<Duration>,
+    /// How long a released stream stays on its server
+    /// ([`server::ServerOptions::stream_linger`]). The daemon's setting, not the
+    /// senders': it outlives them, and one sender restarting shouldn't decide
+    /// for the others.
+    pub stream_linger: Option<Duration>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            grace: None,
+            stream_linger: Some(server::DEFAULT_STREAM_LINGER),
+        }
+    }
+}
+
 /// How many senders are connected, and whether the daemon is shutting down.
 #[derive(Debug)]
 struct Lifetime {
@@ -64,12 +86,13 @@ impl Drop for Connection {
 
 /// Serve connections on `listener`, each on its own thread.
 ///
-/// With `grace`, return once no sender has been connected for that long (also
+/// With [`Options::grace`], return once no sender has been connected for that long (also
 /// right after the start, when the sender that spawned the daemon never
 /// connects). Connections that arrive while returning are closed at once, so
-/// that their sender retries (and spawns a new daemon). Without `grace`, serve
-/// until accepting fails.
-pub fn serve(listener: &UnixListener, grace: Option<Duration>) -> std::io::Result<()> {
+/// that their sender retries (and spawns a new daemon). Without it, serve until
+/// accepting fails.
+pub fn serve(listener: &UnixListener, options: &Options) -> std::io::Result<()> {
+    let linger = options.stream_linger;
     let shared: Shared = Arc::new((
         Mutex::new(Lifetime {
             connections: 0,
@@ -78,15 +101,15 @@ pub fn serve(listener: &UnixListener, grace: Option<Duration>) -> std::io::Resul
         }),
         Condvar::new(),
     ));
-    let Some(grace) = grace else {
-        return accept_loop(listener, &shared);
+    let Some(grace) = options.grace else {
+        return accept_loop(listener, &shared, linger);
     };
     let accepting = listener.try_clone()?;
     let for_accept = Arc::clone(&shared);
     std::thread::Builder::new()
         .name("gst-snapcast-daemon-accept".into())
         .spawn(move || {
-            if let Err(e) = accept_loop(&accepting, &for_accept) {
+            if let Err(e) = accept_loop(&accepting, &for_accept, linger) {
                 tracing::error!(error = %e, "Accepting connections failed");
             }
         })?;
@@ -109,7 +132,11 @@ pub fn serve(listener: &UnixListener, grace: Option<Duration>) -> std::io::Resul
     }
 }
 
-fn accept_loop(listener: &UnixListener, shared: &Shared) -> std::io::Result<()> {
+fn accept_loop(
+    listener: &UnixListener,
+    shared: &Shared,
+    linger: Option<Duration>,
+) -> std::io::Result<()> {
     loop {
         let (stream, _) = listener.accept()?;
         {
@@ -128,7 +155,7 @@ fn accept_loop(listener: &UnixListener, shared: &Shared) -> std::io::Result<()> 
             .name("gst-snapcast-daemon-conn".into())
             .spawn(move || {
                 let _connection = connection;
-                if let Err(e) = handle_connection(stream) {
+                if let Err(e) = handle_connection(stream, linger) {
                     tracing::warn!(error = %e, "Connection failed");
                 }
             })?;
@@ -151,7 +178,7 @@ fn reject(
 
 /// One sender: `Hello`, `Acquire`, then PCM and properties until the connection
 /// closes; commands for the stream go back to it.
-fn handle_connection(stream: UnixStream) -> std::io::Result<()> {
+fn handle_connection(stream: UnixStream, linger: Option<Duration>) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = BufWriter::new(stream);
 
@@ -193,7 +220,10 @@ fn handle_connection(stream: UnixStream) -> std::io::Result<()> {
         None => return Ok(()),
     };
     // Mode::Embedded: the server runs here, in the daemon.
-    let server_options = server_settings.to_options();
+    let server_options = server::ServerOptions {
+        stream_linger: linger,
+        ..server_settings.to_options()
+    };
     let handle = match server::acquire_stream(&server_options, &stream_settings.to_options()) {
         Ok(handle) => handle,
         Err(e) => {

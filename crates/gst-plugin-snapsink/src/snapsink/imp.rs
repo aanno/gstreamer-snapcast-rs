@@ -688,6 +688,7 @@ impl BaseSinkImpl for SnapSink {
             mdns_name: Some(settings.mdns_name.clone()).filter(|n| !n.is_empty()),
             control: settings.control_options(),
             mode: settings.mode.to_engine(),
+            ..ServerOptions::default()
         };
         let stream_opts = StreamOptions {
             name: settings.stream.clone(),

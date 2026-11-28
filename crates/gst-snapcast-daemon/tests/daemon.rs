@@ -13,6 +13,11 @@ use gst_snapcast_engine::{client, now_usec, runtime};
 
 /// Start a daemon on a fresh socket in a temp dir; returns the socket path.
 fn start_daemon() -> PathBuf {
+    start_daemon_with(gst_snapcast_daemon::Options::default())
+}
+
+/// [`start_daemon`] with `options`.
+fn start_daemon_with(options: gst_snapcast_daemon::Options) -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let dir = std::env::temp_dir().join(format!(
         "gst-snapcast-daemon-test-{}-{}",
@@ -23,7 +28,7 @@ fn start_daemon() -> PathBuf {
     let socket = ipc::socket_path(&dir);
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket).unwrap();
-    std::thread::spawn(move || gst_snapcast_daemon::serve(&listener, None));
+    std::thread::spawn(move || gst_snapcast_daemon::serve(&listener, &options));
     socket
 }
 
@@ -185,6 +190,41 @@ fn closing_the_connection_releases_the_stream() {
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+}
+
+/// The daemon removes a released stream after its own linger time (the senders
+/// don't send one), so a long-lived daemon doesn't collect dead streams.
+#[test]
+fn released_stream_is_removed_after_the_daemons_linger_time() {
+    let socket = start_daemon_with(gst_snapcast_daemon::Options {
+        stream_linger: Some(Duration::from_millis(200)),
+        ..Default::default()
+    });
+    let port = free_port();
+    let control = free_port();
+    let (_keeps_the_server, answer) =
+        Sender::acquire_with_control(&socket, port, "keep", Some(control));
+    acquired(answer);
+    let (a, answer) = Sender::acquire(&socket, port, "a");
+    acquired(answer);
+    let streams = || -> Vec<String> {
+        rpc(
+            control,
+            r#"{"jsonrpc":"2.0","id":1,"method":"Server.GetStatus"}"#,
+        )["result"]["server"]["streams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(streams(), ["keep", "a"]);
+    drop(a);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while streams() != ["keep"] {
+        assert!(Instant::now() < deadline, "still listed: {:?}", streams());
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 

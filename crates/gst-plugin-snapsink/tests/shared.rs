@@ -86,7 +86,7 @@ fn modes_choose_between_the_shared_server_and_an_embedded_one() {
     let dir = runtime_dir.join(ipc::DIR_NAME);
     std::fs::create_dir_all(&dir).unwrap();
     let listener = UnixListener::bind(ipc::socket_path(&dir)).unwrap();
-    std::thread::spawn(move || gst_snapcast_daemon::serve(&listener, None));
+    std::thread::spawn(move || gst_snapcast_daemon::serve(&listener, &Default::default()));
 
     // Now both modes go to the daemon, and the streams share its port.
     let port = free_port();

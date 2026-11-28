@@ -194,10 +194,15 @@ in the Android build.
   element error. Snapcast clients reconnect by themselves (snapsrc and the C++ client
   both do), but their group assignments are lost with the daemon's state (no
   persistence, as today).
-- **Released streams** stay on the server, unclaimed, until the server stops (the L1
-  behaviour), so a restarting sender keeps its clients. With a long-lived daemon this
-  means idle streams can linger in Snapweb while other sinks keep the daemon alive.
-  Acceptable for now; a later option could remove a stream some time after release.
+- **Released streams** stay on the server, unclaimed, for a linger time (default
+  60 s), so a restarting sender keeps its clients. Then the server removes them,
+  unless a sender acquired them again (groups playing a removed stream are left
+  without one). The daemon decides the linger time, not the senders:
+  `--stream-linger-secs` / `GST_SNAPCAST_DAEMON_STREAM_LINGER_SECS` (`none`: until
+  the server stops, the behaviour before 2026-11-28). In process, it is
+  `ServerOptions::stream_linger`. Found in the DLNA PoC's long run: dms gives every
+  item a stream of its own, and the daemon collected one dead stream (and a thread)
+  per track played.
 
 ## IPC protocol
 

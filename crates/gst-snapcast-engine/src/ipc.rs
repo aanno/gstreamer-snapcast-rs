@@ -384,6 +384,8 @@ mod convert {
                     snapweb_dir: self.snapweb_dir.clone(),
                 },
                 mode: Mode::Embedded,
+                // The daemon's own setting applies (it overrides this).
+                stream_linger: Some(crate::server::DEFAULT_STREAM_LINGER),
             }
         }
     }

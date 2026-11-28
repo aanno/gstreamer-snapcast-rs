@@ -9,10 +9,14 @@
 //! The first acquisition creates the server with its stream; acquiring another
 //! stream name on the same port adds that stream to the running server
 //! (`ServerCommand::AddAudioStream`). Each stream has its own codec and format.
-//! A released stream stays on the server, unclaimed, until the server stops, so
-//! clients keep their stream assignment when a sender restarts. Re-acquiring it
-//! with another codec or format replaces it: the old one is removed (groups
-//! playing it are left without a stream) and a new one is added.
+//! A released stream stays on the server, unclaimed, for
+//! [`ServerOptions::stream_linger`] (default [`DEFAULT_STREAM_LINGER`]), so
+//! clients keep their stream assignment when a sender restarts. If nobody
+//! re-acquires it meanwhile, it is removed: a server that lives long and gets a
+//! new stream name per item (the DLNA PoC's sessions) doesn't collect dead
+//! streams. Re-acquiring it with another codec or format replaces it: the old one
+//! is removed (groups playing it are left without a stream) and a new one is
+//! added.
 //!
 //! # Control API (feature `control`)
 //!
@@ -40,6 +44,16 @@ const ADD_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5
 /// understood by every Snapcast client.
 pub const DEFAULT_CODEC: &str = "pcm";
 
+/// How long a released stream stays on its server by default
+/// ([`ServerOptions::stream_linger`]): long enough for a sender that restarts
+/// (a pipeline going through READY, an application restarting) to keep its
+/// clients.
+pub const DEFAULT_STREAM_LINGER: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Distinguishes releases of a stream, so that a removal scheduled for an old
+/// release doesn't remove a stream that was re-acquired and released again.
+static RELEASES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Server-wide options. Only the first acquirer of a port decides them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerOptions {
@@ -57,6 +71,11 @@ pub struct ServerOptions {
     pub control: ControlOptions,
     /// Where the server runs (default: [`Mode::Embedded`]).
     pub mode: Mode,
+    /// How long a released stream stays on the server before it is removed,
+    /// unless it is acquired again meanwhile (default [`DEFAULT_STREAM_LINGER`];
+    /// `None`: until the server stops). The shared server daemon uses its own
+    /// setting (`--stream-linger-secs`), not the sender's.
+    pub stream_linger: Option<std::time::Duration>,
 }
 
 /// Where the server of an acquisition runs.
@@ -81,6 +100,7 @@ impl Default for ServerOptions {
             mdns_name: None,
             control: ControlOptions::default(),
             mode: Mode::default(),
+            stream_linger: Some(DEFAULT_STREAM_LINGER),
         }
     }
 }
@@ -267,6 +287,8 @@ struct StreamSlot {
     codec: String,
     format: PcmFormat,
     claimed: bool,
+    /// The release this slot waits in (see [`RELEASES`]), `None` while claimed.
+    released: Option<u64>,
 }
 
 /// A running server. Dropped (and thereby stopped) with its last [`StreamHandle`].
@@ -285,6 +307,31 @@ struct ServerEntry {
     tasks: Vec<tokio::task::AbortHandle>,
     /// Where `Stream.Control` commands go.
     handlers: CommandHandlers,
+}
+
+impl ServerEntry {
+    /// Remove stream `name` if it is still in the release `token` (unclaimed
+    /// since then).
+    fn remove_released(&self, name: &str, token: u64) {
+        let mut streams = self.streams.lock().unwrap();
+        if !streams
+            .get(name)
+            .is_some_and(|slot| !slot.claimed && slot.released == Some(token))
+        {
+            return;
+        }
+        let command = ServerCommand::RemoveStream {
+            stream_id: name.to_owned(),
+        };
+        match send_command(&self.cmd_tx, command) {
+            Ok(()) => {
+                streams.remove(name);
+                tracing::info!(stream = name, "Removed the released stream");
+            }
+            // It stays until the server stops, as without a linger time.
+            Err(e) => tracing::warn!(stream = name, error = %e, "Released stream not removed"),
+        }
+    }
 }
 
 impl Drop for ServerEntry {
@@ -333,9 +380,34 @@ struct EmbeddedStream {
 impl Drop for EmbeddedStream {
     fn drop(&mut self) {
         self.server.handlers.lock().unwrap().remove(&self.name);
-        if let Some(slot) = self.server.streams.lock().unwrap().get_mut(&self.name) {
-            slot.claimed = false;
+        let token = RELEASES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        match self.server.streams.lock().unwrap().get_mut(&self.name) {
+            Some(slot) => {
+                slot.claimed = false;
+                slot.released = Some(token);
+            }
+            None => return,
         }
+        let Some(linger) = self.server.options.stream_linger else {
+            return;
+        };
+        // Doesn't keep the server alive: it stops with its last handle anyway.
+        let server = Arc::downgrade(&self.server);
+        let name = self.name.clone();
+        let span = tracing::info_span!(
+            parent: None,
+            "snapcast_server",
+            log_id = %format!("snapserver:{}", self.server.local_port)
+        );
+        runtime().spawn(
+            async move {
+                tokio::time::sleep(linger).await;
+                if let Some(server) = server.upgrade() {
+                    server.remove_released(&name, token);
+                }
+            }
+            .instrument(span),
+        );
     }
 }
 
@@ -574,6 +646,7 @@ fn claim_existing(
             }
             Some(slot) if slot.format == stream.format && slot.codec == stream.codec => {
                 slot.claimed = true;
+                slot.released = None;
                 slot.tx.clone()
             }
             existing => {
@@ -599,6 +672,7 @@ fn claim_existing(
                         codec: stream.codec.clone(),
                         format: stream.format,
                         claimed: true,
+                        released: None,
                     },
                 );
                 tx
@@ -742,6 +816,7 @@ fn start_server(
             codec: stream.codec.clone(),
             format: stream.format,
             claimed: false,
+            released: None,
         },
     );
     let announcement = match &server.mdns_name {
@@ -1137,6 +1212,101 @@ mod tests {
             .map(|s| s["id"].as_str().unwrap())
             .collect();
         assert_eq!(ids, ["x", "y"]);
+    }
+
+    fn has_stream(entry: &ServerEntry, name: &str) -> bool {
+        entry.streams.lock().unwrap().contains_key(name)
+    }
+
+    #[test]
+    fn released_stream_is_removed_after_the_linger_time() {
+        use std::time::Duration;
+        let opts = ServerOptions {
+            port: free_port(),
+            buffer_ms: 500,
+            stream_linger: Some(Duration::from_millis(300)),
+            ..ServerOptions::default()
+        };
+        // "keep" keeps the server running.
+        let _keep = acquire_stream(&opts, &stream("keep")).unwrap();
+        let a = acquire_stream(&opts, &stream("a")).unwrap();
+        let server = Arc::clone(a.entry());
+        drop(a);
+        // Taken again within the linger time: the first release's removal
+        // must not remove it, even after the linger time.
+        let a = acquire_stream(&opts, &stream("a")).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(has_stream(&server, "a"));
+        drop(a);
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(has_stream(&server, "a"), "removed before the linger time");
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(
+            !has_stream(&server, "a"),
+            "not removed after the linger time"
+        );
+        assert!(has_stream(&server, "keep"));
+        // A removed stream can be acquired again (it is added anew).
+        let _a = acquire_stream(&opts, &stream("a")).unwrap();
+        assert!(has_stream(&server, "a"));
+    }
+
+    #[test]
+    fn released_stream_stays_without_a_linger_time() {
+        let opts = ServerOptions {
+            port: free_port(),
+            buffer_ms: 500,
+            stream_linger: None,
+            ..ServerOptions::default()
+        };
+        let _keep = acquire_stream(&opts, &stream("keep")).unwrap();
+        let a = acquire_stream(&opts, &stream("a")).unwrap();
+        let server = Arc::clone(a.entry());
+        drop(a);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(has_stream(&server, "a"));
+    }
+
+    /// The removal reaches the server itself: controllers don't list the stream.
+    #[cfg(feature = "control")]
+    #[test]
+    fn removed_stream_disappears_from_the_control_api() {
+        use std::time::{Duration, Instant};
+        let opts = ServerOptions {
+            port: 0,
+            buffer_ms: 500,
+            control: ControlOptions {
+                tcp_port: Some(0),
+                ..ControlOptions::default()
+            },
+            stream_linger: Some(Duration::from_millis(100)),
+            ..ServerOptions::default()
+        };
+        let keep = acquire_stream(&opts, &stream("keep")).unwrap();
+        let tcp = keep.control_tcp_port().expect("TCP control port");
+        let server = Arc::clone(keep.entry());
+        // Port 0 is never shared, so add the second stream on this entry.
+        let gone = claim_existing(Arc::clone(&server), &stream("gone")).unwrap();
+        let ids = || -> Vec<String> {
+            let reply = rpc_over_tcp(
+                tcp,
+                r#"{"jsonrpc":"2.0","id":1,"method":"Server.GetStatus"}"#,
+            );
+            let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+            reply["result"]["server"]["streams"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["id"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(ids(), ["keep", "gone"]);
+        drop(gone);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while ids() != ["keep"] {
+            assert!(Instant::now() < deadline, "still listed: {:?}", ids());
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     #[test]

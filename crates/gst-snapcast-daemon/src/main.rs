@@ -1,13 +1,18 @@
 //! `gst-snapcast-daemon`: the shared Snapcast server of one user. See the library
 //! docs and `docs/shared-server.md`.
 //!
-//! Usage: `gst-snapcast-daemon [--socket PATH] [--grace-secs S] [--log FILE]`.
+//! Usage: `gst-snapcast-daemon [--socket PATH] [--grace-secs S]
+//! [--stream-linger-secs S] [--log FILE]`.
 //!
 //! - `--socket`: default `$XDG_RUNTIME_DIR/gst-snapcast/daemon.sock`. The lock file
 //!   is next to it, with the extension `.lock`; whoever holds it is the one daemon.
 //!   A second daemon waits up to 2 s for the lock, then exits quietly.
 //! - `--grace-secs`: exit after this long without senders (default 5, or
 //!   `GST_SNAPCAST_DAEMON_GRACE_SECS`).
+//! - `--stream-linger-secs`: remove a released stream after this long, unless a
+//!   sender acquires it again (default 60, or
+//!   `GST_SNAPCAST_DAEMON_STREAM_LINGER_SECS`; `none`: keep it until the server
+//!   stops).
 //! - `--log`: log into this file (truncated) instead of stderr; senders that
 //!   autospawn the daemon pass `daemon.log` next to the socket.
 //!
@@ -31,6 +36,7 @@ const LOCK_WAIT: Duration = Duration::from_secs(2);
 struct Args {
     socket: Option<PathBuf>,
     grace: Duration,
+    stream_linger: Option<Duration>,
     log: Option<PathBuf>,
 }
 
@@ -42,11 +48,25 @@ fn parse_args() -> Result<Option<Args>, String> {
             .map(Duration::from_secs_f64)
             .ok_or_else(|| format!("invalid grace period '{v}'"))
     };
+    let linger_secs = |v: &str| -> Result<Option<Duration>, String> {
+        if v == "none" {
+            return Ok(None);
+        }
+        v.parse::<f64>()
+            .ok()
+            .filter(|s| s.is_finite() && *s >= 0.0)
+            .map(|s| Some(Duration::from_secs_f64(s)))
+            .ok_or_else(|| format!("invalid stream linger time '{v}' (seconds, or none)"))
+    };
     let mut args = Args {
         socket: None,
         grace: match std::env::var("GST_SNAPCAST_DAEMON_GRACE_SECS") {
             Ok(v) => grace_secs(&v)?,
             Err(_) => Duration::from_secs_f64(DEFAULT_GRACE_SECS),
+        },
+        stream_linger: match std::env::var("GST_SNAPCAST_DAEMON_STREAM_LINGER_SECS") {
+            Ok(v) => linger_secs(&v)?,
+            Err(_) => Some(gst_snapcast_engine::server::DEFAULT_STREAM_LINGER),
         },
         log: None,
     };
@@ -56,6 +76,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         match arg.as_str() {
             "--socket" => args.socket = Some(value()?.into()),
             "--grace-secs" => args.grace = grace_secs(&value()?)?,
+            "--stream-linger-secs" => args.stream_linger = linger_secs(&value()?)?,
             "--log" => args.log = Some(value()?.into()),
             "--version" => {
                 println!("gst-snapcast-daemon {}", gst_snapcast_daemon::VERSION);
@@ -147,11 +168,16 @@ fn run() -> Result<(), String> {
     tracing::info!(
         socket = %socket.display(),
         grace = ?args.grace,
+        stream_linger = ?args.stream_linger,
         version = gst_snapcast_daemon::VERSION,
         pid = std::process::id(),
         "Daemon listening"
     );
-    let result = gst_snapcast_daemon::serve(&listener, Some(args.grace));
+    let options = gst_snapcast_daemon::Options {
+        grace: Some(args.grace),
+        stream_linger: args.stream_linger,
+    };
+    let result = gst_snapcast_daemon::serve(&listener, &options);
     // Remove the socket before the lock is released, so that senders find no
     // daemon (and spawn a new one) rather than a dead socket.
     let _ = std::fs::remove_file(&socket);
