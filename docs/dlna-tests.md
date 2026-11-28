@@ -187,12 +187,14 @@ details are in the tests named.
      - All of this is in `session-sender`; dms, gmrender and the protocol stay as
        they are. Another feeder needs the same logic, so `snapsink` could do it
        instead: it could report "no listeners" to its application (a bus message).
-6. **gmrender sends its UPnP volume on every Play.** On each new session (every
+6. **gmrender sends its UPnP volume on every Play. Solution agreed, to be
+   implemented later** (the user, 2026-11-28). On each new session (every
    track), gmrender sends its RenderingControl volume to the room's Snapcast client
    (`Session volume 100 %: sent`). A volume set in a Snapcast controller (Snapweb,
    Snapdroid) is lost at the next track. The two sides disagree, and UPnP always
    wins.
-   - **A solution:** one volume per room, with the Snapcast server as the source.
+   - **The solution (later):** one volume per room, with the Snapcast server as
+     the source.
      1. `snapsrc` reports the client's server volume and mute in its
         `snapcast-session` message. It knows them already, because it applies them.
      2. When joining a session, and whenever that volume changes, gmrender takes
@@ -205,8 +207,14 @@ details are in the tests named.
      room's volume. The Snapcast server keeps a client's volume while it runs
      (also across reconnects), so a room keeps its volume from one session to the
      next.
-   - **A simpler stopgap:** don't send on Play, only on `SetVolume`/`SetMute`. The
-     controller's volume then survives, but BubbleUPnP's slider may show
+   - **Where:**
+     - `snapsrc`: `volume` and `mute` fields in the `snapcast-session` message.
+     - The gmrender fork: adopt them (`handle_session_message`), and stop sending in
+       `output_gstreamer_play` and `set_player_uri`.
+     - The protocol doc: a renderer takes the room's volume from the session.
+   - **Until then:** each new track sets the room to the control point's volume. A
+     simpler stopgap would be to send only on `SetVolume`/`SetMute`. The
+     controller's volume would then survive, but BubbleUPnP's slider could show
      something else.
 7. **A stopped room's position counted on. Fixed.** After Stop, gmrender went on
    extrapolating the session position (0:00:29, 0:00:30, … while STOPPED). Since
@@ -417,10 +425,15 @@ feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
 
       Check its first log line: `Daemon listening … stream_linger=Some(60s)`. If
       there's no `stream_linger`, it's an old daemon (run `make install` again).
-    - **Terminal 1, dms.** Put your music folder in `-path`:
+    - **Terminal 1, dms.** `MUSIC` must be the folder that holds your music. After
+      changing it, browse dms again **from its root** in each control point: they
+      may still show items of an earlier run, whose files dms doesn't have now.
+      Playing such an item gives a 404 (`docs/testing-host.md`, gotchas):
 
       ```sh
-      target/dlna/dms -path ~/Music -friendlyName "dms snapcast PoC" \
+      MUSIC=~/mnt/musik/Alice          # the folder with your music: check it!
+      ls "$MUSIC" | head -3
+      target/dlna/dms -path "$MUSIC" -friendlyName "dms snapcast PoC" \
           -snapcastStream 'snapcast-tcp://{host}:1704/{stream}?control=1705' \
           -snapcastFeeder "$PWD/target/dlna/session-sender --mode shared --idle-exit 120" \
           2>&1 | tee target/dlna-logs/dms.log

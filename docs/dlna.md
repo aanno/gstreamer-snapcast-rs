@@ -486,7 +486,8 @@ move into a repo of its own.
    clients over JSON-RPC and pauses after a few seconds without listeners. Or
    `snapsink` reports "no listeners" for every feeder. (`dlna-tests.md`,
    "Findings" 5.)
-3. **One volume per room.** gmrender sends its UPnP volume on every Play, so a
+3. **One volume per room** (solution agreed 2026-11-28, to be implemented later).
+   gmrender sends its UPnP volume on every Play, so a
    volume set in Snapweb is lost at the next track. Proposed: the Snapcast server is
    the source. `snapsrc` reports the client's volume, gmrender takes it as its UPnP
    volume, and it sends only on `SetVolume`/`SetMute`. (`dlna-tests.md`,
