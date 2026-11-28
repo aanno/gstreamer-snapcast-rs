@@ -496,6 +496,10 @@ move into a repo of its own.
    time. Today rooms join by playing the same item, each from its own control
    point, or are moved with a Snapcast controller. (`dlna-tests.md`, "Findings"
    3.)
+5. **A joined room follows to the next track?** Today a room joined by a second
+   control point stops at the end of the track. Proposed: dms moves a session's
+   other listeners to the next session of its leading room, and gmrender follows
+   when its own control point has nothing next. (`dlna-tests.md`, "Findings" 8.)
 
 Answered:
 

@@ -168,6 +168,9 @@ details are in the tests named.
    - **Empty `CurrentURIMetaData`.** `SetAVTransportURI` sends no DIDL, so
      renderers know the title only from the stream's tags. For a session, the
      renderer reports the session's track anyway.
+   - **Queueing the same album as BubbleUPnP didn't work** (2026-11-28, test 13):
+     room 2 didn't move on with room 1 at the end of a track. Maybe a bug in its
+     queue; to check in its repo. Finding 8 needs it.
    - Its README says playback with this release wasn't tested.
 5. **A session that every room left plays on, unheard.** Stop leaves the session;
    the others play on (by design). But when the last room leaves (Stop, or its
@@ -219,6 +222,37 @@ details are in the tests named.
 7. **A stopped room's position counted on. Fixed.** After Stop, gmrender went on
    extrapolating the session position (0:00:29, 0:00:30, … while STOPPED). Since
    2026-11-28 (gmrender fork), Stop forgets the session's state.
+
+8. **A joined room doesn't follow to the next track.** BubbleUPnP played an album
+   on room 1, and tutonaut joined room 2 into the same track: that worked well
+   (2026-11-28, test 13). At the end of the track both rooms stopped, and only room
+   1 went on.
+   - **Why:** a session is one track. At its end, each renderer asks *its own*
+     control point for the next one. BubbleUPnP has the album queued, so room 1
+     goes on into the next track's session. tutonaut had nothing queued, so room 2
+     stops. Plain DLNA control points don't know about other rooms.
+   - **Workaround, no code: the same queue on both control points.** At the end of
+     each track, both rooms ask for the same next item within a second or two. The
+     first request opens its session, and the second joins it, as when joining by
+     hand.
+     - The catch: a skip or reorder on one control point splits the rooms.
+     - It didn't work with tutonaut (finding 4). Two BubbleUPnP instances with the
+       same queue should work; not tried yet.
+   - **Solution, later: room 2 follows room 1.** It needs changes in dms and in
+     gmrender:
+     1. **dms:** when a renderer asks for the next item right after its session
+        ended, dms moves that session's other listeners to the new session. It
+        does that through the Snapcast server (`Group.SetStream`), the way
+        Snapcast groups rooms anyway.
+     2. **gmrender:** when its own control point has no next track, it doesn't
+        leave at the end of a session. It waits a few seconds. If the server moves
+        it to another stream, it plays along and reports the new track (metadata,
+        duration, `PLAYING`) to its control point. Otherwise it stops, as now.
+     - **Open rules:** who leads (the room whose control point picked the
+       track). A room whose own control point then plays something else leaves
+       the group. And what Stop on the leader does to the followers.
+     - It fits the protocol: the session URI stays the same idea, and dms only
+       uses the Snapcast server's own grouping.
 
 The numbered tests below keep their history. Their setup changed over time; the
 current setup is above, and in tests 11 to 14.
@@ -453,6 +487,38 @@ feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
       Both log `Asking servers for Snapcast sessions: Accept: audio/x-snapcast-tcp`
       at startup. Their `snapsrc` clients get instance numbers 1 and 2 by
       themselves.
+    - **A sound output per room (optional).** By default, gmrender plays to
+      GStreamer's default output. Each track opens a new audio stream, so an
+      output picked in pwvucontrol (or pavucontrol) doesn't stick: the new stream
+      goes to the default again. Instead, name the output on gmrender's command
+      line:
+      1. List the outputs (PipeWire, through its PulseAudio server):
+
+         ```sh
+         pactl list short sinks     # 2nd column: the name, e.g. alsa_output.usb-…analog-stereo
+         ```
+
+      2. Give each room its output with `--gstout-audiosink pulsesink
+         --gstout-audiodevice <name>`. Or use `--gstout-audiopipe`, which takes
+         a gst-launch description, to also name the room in pwvucontrol
+         (`client-name`):
+
+         ```sh
+         target/dlna/gmediarender -f "room 1" -u 6a1c4e2f-5b3d-4c7a-9e10-2f8b6d4a1c01 -p 49500 \
+             --snapcast-sessions --logfile stdout \
+             --gstout-audiopipe 'pulsesink device=<name 1> client-name="room 1"' \
+             2>&1 | tee target/dlna-logs/room1.log
+         target/dlna/gmediarender -f "room 2" -u 6a1c4e2f-5b3d-4c7a-9e10-2f8b6d4a1c02 -p 49501 \
+             --snapcast-sessions --logfile stdout \
+             --gstout-audiopipe 'pulsesink device=<name 2> client-name="room 2"' \
+             2>&1 | tee target/dlna-logs/room2.log
+         ```
+
+      gmrender logs `Setting audio sink-pipeline to …` at startup. Use
+      `pulsesink`, not `pipewiresink`: the latter hangs on stop
+      (`docs/testing-host.md`, gotchas). With two outputs, the rooms can't be
+      compared by ear as one sound. Listen to each output, or put them side by
+      side.
     - **Terminal 4 (optional), tutonaut** as the second control point:
 
       ```sh
@@ -478,7 +544,8 @@ feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
          any more.
       f. **The end of the track:** both rooms log `Session playing -> stopped`.
          Each control point moves on in its own queue, so the rooms get their next
-         sessions separately. Play the same next item on both to stay together.
+         sessions separately ("Findings" 8). With the same queue on both control
+         points, they meet again in the next track's session.
       g. **Two sessions at once:** another track on room 1 while room 2 still plays
          the first. dms opens a second session, and you hear two different sounds.
       h. **Linger:** when the first session's helper has closed (dms logs
