@@ -3,7 +3,7 @@
 Status: **agreed** (2026-11-24); the way the session is offered changed twice after
 tests with BubbleUPnP. Since **2026-11-27** it is **HTTP content negotiation on the
 item's ordinary resource**, with `snapcast-tcp` as the name of the transport.
-**PoC steps 1 to 4 are done, and step 5 is prepared** (2026-11-27):
+**PoC steps 1 to 4 are done, and step 5 is under way** (2026-11-28):
 
 - `snapsrc` plays `snapcast-tcp://` URIs and joins the session's stream.
 - dms answers the negotiation, and feeds a session per item.
@@ -11,9 +11,13 @@ item's ordinary resource**, with `snapcast-tcp` as the name of the transport.
 - Pause, Seek, position, volume and the end of a track go through the session.
 
 - Two renderers in one session work (devcontainer, SOAP).
+- On the host, 40 minutes of an album with a session per track passed (2026-11-28,
+  test 12). The run found dead streams piling up on the daemon, fixed the same day:
+  a released stream is removed after a linger time (60 s).
 
-Next: tests 13 (two renderers with BubbleUPnP) and 14 (a night of playing) on the
-host.
+Next: tests 13 (two renderers, one control point each: BubbleUPnP follows only one
+renderer) and 14 (a night of playing) on the host. The findings so far and their
+proposed solutions are in [dlna-tests.md](dlna-tests.md), "Findings".
 
 The wire protocol, for anyone implementing it in another server or renderer, is in
 [dlna-snapcast-protocol.md](dlna-snapcast-protocol.md). Tests are in
@@ -205,12 +209,12 @@ would be a Snapcast protocol extension (later, if at all).
 | `Play` | starts or resumes the session; playbin plays | `Stream.Control play` (no-op when playing) |
 | `Pause` | playbin keeps playing (silence) | `Stream.Control pause` |
 | `Seek(REL_TIME)` | nothing locally | `Stream.Control setPosition` |
-| `Stop` | leaves the session (playbin to READY) | none (closed when idle) |
+| `Stop` | leaves the session (playbin to READY), forgets its state | none (closed when idle; plays on to its end if every room left, see "Open questions") |
 | `GetPositionInfo` | the session's position (extrapolated between updates) and duration | from the stream's properties |
 | `GetTransportInfo` | follows the session: paused or resumed elsewhere moves the state | from the stream's properties |
 | end of the track | `stopped` after `playing` counts as EOS: the next URI, or STOPPED | the sender reports `stopped` |
 | `Next`/`Previous` | as today (the control point's playlist) | none |
-| RenderingControl `SetVolume`/`SetMute` | this room only; playbin stays at full volume | `Client.SetVolume` of this renderer's client, with the control point's 0..100 level as percent |
+| RenderingControl `SetVolume`/`SetMute` | this room only; playbin stays at full volume | `Client.SetVolume` of this renderer's client, with the control point's 0..100 level as percent. Also sent on every Play for now, which overwrites a volume set in a Snapcast controller (see "Open questions") |
 
 All of this is built (steps 2 and 3, `docs/dlna-tests.md` test 11).
 
@@ -444,14 +448,20 @@ Worth designing for now; not part of the PoC.
 4. ~~**dms** feeds a session per item~~ done 2026-11-27: `SessionFeeder` with a
    helper process per session (`session-sender`), opened on the renderer's `GET`,
    with an idle close. Tested by hand in the devcontainer; test 12 is for the host.
-5. **Two renderers, one control point**, then the overnight test as for the daemon.
-   Prepared 2026-11-27:
+5. **Two renderers in one session**, then the overnight test as for the daemon.
+   Under way since 2026-11-27:
    - in the devcontainer (two gmrenders, SOAP), one session for both rooms passed:
      a pause in one room showed as paused in the other, a seek from either moved
      both, the volume stayed per room, Stop left one room playing, and the end of
      the track stopped both;
-   - on the host: DLNA test 13 (two renderers with BubbleUPnP) and test 14 (a night
-     of playing, monitored by `scripts/dlna-soak.sh`).
+   - on the host, 2026-11-28: a session per track over 40 minutes passed (test 12 c
+     and d). The monitor (`scripts/dlna-soak.sh`) showed the daemon collecting one
+     dead stream per track. Fixed: a released stream is removed after
+     `--stream-linger-secs` (default 60 s).
+   - on the host, 2026-11-28: two rooms from **one** BubbleUPnP don't work, because
+     it follows one renderer and stops the other. Test 13 now uses one control point
+     per room (a second BubbleUPnP, or tutonaut).
+   - still open on the host: test 13, and test 14 overnight with the fix.
 
 ### Running the PoC
 
@@ -471,6 +481,20 @@ move into a repo of its own.
 1. How does `snapsink` (or the daemon) publish the session URIs per transport, so
    that dms needs no `-snapcastStream`? A read-only property, a line from the helper,
    or the daemon's status?
+2. **Pause a session nobody listens to?** When the last room leaves, the helper
+   plays on to the end of the track. Proposed: the helper watches its stream's
+   clients over JSON-RPC and pauses after a few seconds without listeners. Or
+   `snapsink` reports "no listeners" for every feeder. (`dlna-tests.md`,
+   "Findings" 5.)
+3. **One volume per room.** gmrender sends its UPnP volume on every Play, so a
+   volume set in Snapweb is lost at the next track. Proposed: the Snapcast server is
+   the source. `snapsrc` reports the client's volume, gmrender takes it as its UPnP
+   volume, and it sends only on `SetVolume`/`SetMute`. (`dlna-tests.md`,
+   "Findings" 6.)
+4. **Grouping rooms from one control point.** BubbleUPnP drives one renderer at a
+   time. Today rooms join by playing the same item, each from its own control
+   point, or are moved with a Snapcast controller. (`dlna-tests.md`, "Findings"
+   3.)
 
 Answered:
 

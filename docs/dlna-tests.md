@@ -111,7 +111,106 @@ With BubbleUPnP as the control point, on the host:
 - **2026-11-28:** test 12 c and d passed on the host (40 minutes of an album). That
   run found dead streams piling up on the daemon, fixed the same day (stream linger).
 - **Still open:** test 13 on the host, which needs two control points: BubbleUPnP
-  follows only one renderer. Also test 14 overnight, with the fix.
+  follows only one renderer. Also test 14 overnight, with the fix. Both have their
+  full command lines below.
+- **Findings** so far, with the proposed solutions, are in the next section.
+
+## Findings (2026-11-28)
+
+What the host runs found besides pass or fail, and what's done about it. The
+details are in the tests named.
+
+1. **Dead streams piled up on the daemon. Fixed.**
+   - **Seen:** in the CSV of the first long run (test 14), `dms_streams` grew by
+     one per track played (5 → 9 in 15 minutes), while only 1–2 `session-sender`
+     helpers ran. The daemon gained about one thread and 50 kB per stream.
+   - **Not in dms:** dms's own numbers stayed flat (about 22 MB, 18 threads,
+     20–23 files), and every helper exited on time. `dms_streams` counts the
+     streams *on the Snapcast server* whose names start with `dms-`.
+   - **The cause** was in the engine, by design since L1. A released stream stayed
+     on its server until the server stopped, so that a restarting sender keeps
+     its clients. dms gives every item a stream of its own, so the long-lived
+     daemon collected one dead stream per track.
+   - **The fix (engine, 2026-11-28):** a released stream is removed after a linger
+     time, unless a sender takes it again meanwhile.
+     - The default is 60 s.
+     - The daemon decides, not the senders: `--stream-linger-secs` or
+       `GST_SNAPCAST_DAEMON_STREAM_LINGER_SECS`. `none` keeps the old
+       behaviour.
+     - The daemon logs `Removed the released stream stream=…`.
+     - Tested in the engine and the daemon, including that controllers no longer
+       list the stream.
+2. **The daemon: no verdict yet.** The leak hid any other growth in the daemon:
+   its threads and memory rose with the stream count. The next night run (test 14)
+   shows whether it stays flat once streams are removed.
+3. **One BubbleUPnP can't keep several rooms playing.** It follows one renderer
+   at a time, and switching to another renderer stops the one before (test 13,
+   first host try). That's BubbleUPnP's design, not a fault of the PoC.
+   - **For tests:** one control point per room, e.g. two BubbleUPnP instances on two
+     devices, or BubbleUPnP and tutonaut. Each plays the same item from dms.
+   - **For real use:** rooms join a session by playing the same item. Grouping
+     rooms from one control point would need a control point that drives
+     several renderers, or a Snapcast controller (Snapweb, Snapdroid) to move rooms
+     between streams.
+4. **tutonaut, a second control point, has known problems.** tutonaut is a Python/Tk
+   UPnP control point (`dlna/tutonaut-upnp-control`, not under git yet). It is one
+   of the few DLNA control points for the desktop. The user will set up a GitHub
+   repository for it, so that its problems can be fixed there:
+   - **It showed only one dms item** (the one playing on room 1), so room 2 couldn't
+     play the same item. dms's browsing is unchanged from upstream, and dms served
+     16 items. tutonaut browses with a plain `Browse(BrowseDirectChildren)` from
+     object `0`, and nothing in it filters by what's playing. Its views are
+     tailored to MiniDLNA (e.g. the "Albums" container). Next: browse dms from
+     the root while nothing plays; compare with BubbleUPnP's view of dms.
+   - **Play and Pause before any URI.** They produce errors on the renderer
+     (`Playing failed (704)`, `Transition to PAUSE not allowed (701)`). These are
+     harmless, but the buttons should be disabled until a track is set.
+   - **Empty `CurrentURIMetaData`.** `SetAVTransportURI` sends no DIDL, so
+     renderers know the title only from the stream's tags. For a session, the
+     renderer reports the session's track anyway.
+   - Its README says playback with this release wasn't tested.
+5. **A session that every room left plays on, unheard.** Stop leaves the session;
+   the others play on (by design). But when the last room leaves (Stop, or its
+   control point switches to another item), the helper plays on to the end of the
+   track, and only then starts its idle time. In the first run, track 09 played
+   40 s past the switch to track 02.
+   - **Harmless, but wasteful:** decoding and sending for nobody. The session also
+     closes later: its idle time starts only at the end of the track.
+   - **A solution:** the helper pauses when nobody listens.
+     - It watches its stream on the Snapcast server through the JSON-RPC control
+       port: `Server.GetStatus`, then the notifications (`Server.OnUpdate`,
+       `Group.OnStreamChanged`, `Client.OnConnect`/`OnDisconnect`), or polling
+       if snapcast-rs doesn't send all of them.
+     - If no connected client is in a group playing its stream for a few seconds,
+       it pauses. Then the idle time starts.
+     - A room that plays the item again sends `play`, as now.
+     - All of this is in `session-sender`; dms, gmrender and the protocol stay as
+       they are. Another feeder needs the same logic, so `snapsink` could do it
+       instead: it could report "no listeners" to its application (a bus message).
+6. **gmrender sends its UPnP volume on every Play.** On each new session (every
+   track), gmrender sends its RenderingControl volume to the room's Snapcast client
+   (`Session volume 100 %: sent`). A volume set in a Snapcast controller (Snapweb,
+   Snapdroid) is lost at the next track. The two sides disagree, and UPnP always
+   wins.
+   - **A solution:** one volume per room, with the Snapcast server as the source.
+     1. `snapsrc` reports the client's server volume and mute in its
+        `snapcast-session` message. It knows them already, because it applies them.
+     2. When joining a session, and whenever that volume changes, gmrender takes
+        it as its UPnP volume. It updates `Volume`/`Mute` and sends `LastChange`,
+        so control points show it.
+     3. gmrender sends a volume to the server only when a control point calls
+        `SetVolume` or `SetMute`, never on Play.
+
+     Then a change from either side shows on both, and a new track keeps the
+     room's volume. The Snapcast server keeps a client's volume while it runs
+     (also across reconnects), so a room keeps its volume from one session to the
+     next.
+   - **A simpler stopgap:** don't send on Play, only on `SetVolume`/`SetMute`. The
+     controller's volume then survives, but BubbleUPnP's slider may show
+     something else.
+7. **A stopped room's position counted on. Fixed.** After Stop, gmrender went on
+   extrapolating the session position (0:00:29, 0:00:30, … while STOPPED). Since
+   2026-11-28 (gmrender fork), Stop forgets the session's state.
 
 The numbered tests below keep their history. Their setup changed over time; the
 current setup is above, and in tests 11 to 14.
@@ -286,86 +385,161 @@ Later steps get their tests here when they are built: `playbin uri=snapcast://�
 (PoC step 2), gmrender playing it with Pause/Seek going to the session (step 3), dms
 feeding a session with `go-gst` (step 4), two renderers in sync (step 5).
 
-13. **Two renderers, one session** (PoC step 5, since 2026-11-27).
-    - **Setup:** dms as in test 12 (`--mode shared`), plus two gmrenders, each with
-      its own name, UUID and port:
+13. **Two renderers, one session** (PoC step 5, since 2026-11-27; instructions
+    rewritten 2026-11-28).
+    - **Why two control points:** BubbleUPnP follows one renderer at a time.
+      Switching it to the other renderer stops the first one (first host try,
+      below). So each room gets its own control point:
+      - **room 1:** BubbleUPnP;
+      - **room 2:** a second BubbleUPnP instance (another phone or tablet), or
+        tutonaut on the PC.
+
+      Both must play **the same item from dms**. An item from another media
+      server (the NAS) gives a plain room, not a second room in the session.
+    - **Before you start** (repo root, host):
+
+      ```sh
+      make install                     # plugins and gst-snapcast-daemon into ~/.local
+      make dlna-build                  # dms, gmrender, target/dlna/session-sender
+      pgrep -a gst-snapcast-da         # an old daemon? Stop its senders, or:
+      pkill -x gst-snapcast-da         # (only if nothing else uses it)
+      mkdir -p target/dlna-logs
+      ```
+
+    - **Terminal 0, the daemon**, started by hand so that its log is at hand. It
+      waits a day for senders instead of 5 s, and removes a released stream after
+      60 s:
+
+      ```sh
+      gst-snapcast-daemon --grace-secs 86400 --stream-linger-secs 60 \
+          --log target/dlna-logs/daemon.log
+      ```
+
+      Check its first log line: `Daemon listening … stream_linger=Some(60s)`. If
+      there's no `stream_linger`, it's an old daemon (run `make install` again).
+    - **Terminal 1, dms.** Put your music folder in `-path`:
+
+      ```sh
+      target/dlna/dms -path ~/Music -friendlyName "dms snapcast PoC" \
+          -snapcastStream 'snapcast-tcp://{host}:1704/{stream}?control=1705' \
+          -snapcastFeeder "$PWD/target/dlna/session-sender --mode shared --idle-exit 120" \
+          2>&1 | tee target/dlna-logs/dms.log
+      ```
+
+    - **Terminals 2 and 3, the rooms.** Each has its own name, UUID and port. Add
+      `-I <interface>` if the wrong network is used (look for
+      `Registered IPv4 <your LAN address>`):
 
       ```sh
       target/dlna/gmediarender -f "room 1" -u 6a1c4e2f-5b3d-4c7a-9e10-2f8b6d4a1c01 -p 49500 \
-          --snapcast-sessions --logfile stdout 2>&1 | tee gmr-room1.log
+          --snapcast-sessions --logfile stdout 2>&1 | tee target/dlna-logs/room1.log
       target/dlna/gmediarender -f "room 2" -u 6a1c4e2f-5b3d-4c7a-9e10-2f8b6d4a1c02 -p 49501 \
-          --snapcast-sessions --logfile stdout 2>&1 | tee gmr-room2.log
+          --snapcast-sessions --logfile stdout 2>&1 | tee target/dlna-logs/room2.log
       ```
 
-      Both can run on the host. Their two `snapsrc` clients get instance numbers 1 and
-      2 by themselves. Both then play on the same sound device: **in sync you hear one
-      clean sound, out of sync an echo or a "phasing" sound.** A second machine
-      (another gmrender, with `snapsrc` installed) is the more realistic test, if
+      Both log `Asking servers for Snapcast sessions: Accept: audio/x-snapcast-tcp`
+      at startup. Their `snapsrc` clients get instance numbers 1 and 2 by
+      themselves.
+    - **Terminal 4 (optional), tutonaut** as the second control point:
+
+      ```sh
+      cd dlna/tutonaut-upnp-control && .venv/bin/python upnp_control.py
+      ```
+
+    - **Listening.** Both rooms play on the host's sound device. In sync you hear one
+      clean sound; out of sync you hear an echo or a "phasing" sound. A second
+      machine (gmrender with `snapsrc` installed) is the more realistic test, if
       there is one.
-    - **In BubbleUPnP** (it controls one renderer at a time; switch between them):
-      a. Play a track on room 1, then the same track on room 2: dms logs **one**
-         `snapcast session opening`, and room 2 joins in at the same position.
-      b. Pause on room 1: both rooms go quiet. In BubbleUPnP, room 2 shows "paused"
-         too.
-      c. Play and seek on room 2: both rooms resume and jump.
-      d. Volume on room 1: only room 1 changes.
-      e. Stop on room 1: room 2 plays on.
-      f. The end of the track: both rooms stop. BubbleUPnP's queue moves on only on
-         the renderer it is controlling; the other room stays stopped (its control
-         point has no queue).
-      g. Another track on room 1 while room 2 still plays the first: two sessions,
-         two different sounds at once.
+    - **Steps and what to check:**
+      a. **Join.** Play a track on room 1 (control point 1). Then play the same
+         track on room 2 (control point 2). dms logs **one**
+         `snapcast session opening`, and two `snapcast session requested … GET`
+         from the two rooms. Room 2 comes in at room 1's position.
+      b. **Pause** on room 1: both rooms go quiet. Control point 2 shows "paused"
+         too. Both rooms log `Session playing -> paused`.
+      c. **Play and seek** on room 2: both rooms resume and jump. The helper logs
+         `command setPosition {"position":…}` and `seek to …` (in dms's log).
+      d. **Volume** on room 1: only room 1 changes (room 1 logs
+         `Session volume N %: sent`).
+      e. **Stop** on room 1: room 2 plays on. Room 1's position doesn't count on
+         any more.
+      f. **The end of the track:** both rooms log `Session playing -> stopped`.
+         Each control point moves on in its own queue, so the rooms get their next
+         sessions separately. Play the same next item on both to stay together.
+      g. **Two sessions at once:** another track on room 1 while room 2 still plays
+         the first. dms opens a second session, and you hear two different sounds.
+      h. **Linger:** when the first session's helper has closed (dms logs
+         `snapcast session closed`), the daemon logs
+         `Removed the released stream stream=dms-…` about 60 s later.
     - **Done in the devcontainer** by hand (two gmrenders, SOAP, 2026-11-27): a to f
       passed. Both rooms were in one session with the same position. A pause in
       room 1 showed `PAUSED_PLAYBACK` in room 2, and a play and seek from room 2 moved
       both to 0:26. A volume in room 1 changed only room 1. After a Stop in room 1,
       room 2 played on. The end of the track stopped both. dms started one helper.
-      Seen in passing: a stopped room still reports its last position (harmless).
+      Seen in passing: a stopped room still reports its last position (fixed
+      2026-11-28).
     - **First host try, 2026-11-28: not possible with BubbleUPnP alone.**
       - BubbleUPnP follows one renderer at a time. Switching to the other renderer
         stops the first one, so two rooms can't be kept playing from it.
-      - A second controller (a Python/Tk UPnP control point, here "tutonaut",
-        kept outside git in `dlna/tutonaut-upnp-control`) controlled room 2.
-        Room 2 played from the NAS's media server (MiniDLNA), not from dms. That
-        doesn't test one session: it showed a session room next to a plain room,
-        both working (room 2 asked the NAS, got the media and played it).
-      - tutonaut showed only one dms item. dms's browsing is unchanged from
-        upstream, and dms served a folder with 16 items. The cause is open:
-        browse from the root while nothing plays, to check.
+      - tutonaut controlled room 2, but played from the NAS's media server
+        (MiniDLNA), not from dms: tutonaut showed only one dms item (see
+        "Findings"). That doesn't test one session. It showed a session room next to
+        a plain room, both working (room 2 asked the NAS, got the media and played
+        it).
       - The startup errors in room 2's log (`Playing failed (704)`,
-        `Transition to PAUSE not allowed`) were the controller's Play and Pause
-        before any URI was set. They're harmless.
-    - **Next try:** BubbleUPnP for room 1, tutonaut for room 2, **both from dms and
-      the same item**. dms must log one `snapcast session opening`.
+        `Transition to PAUSE not allowed`) were tutonaut's Play and Pause before any
+        URI was set. They're harmless.
     - Result on the host: (open)
 
-14. **The long run** (PoC step 5, since 2026-11-27): a night of playing, as for the
-    daemon (`docs/testing-host.md`).
-    - **Setup:** as test 13 (or only room 1), dms with `--idle-exit 120`. Start the
-      monitor in another terminal:
+14. **The long run** (PoC step 5, since 2026-11-27; instructions rewritten
+    2026-11-28): a night of playing, as for the daemon (`docs/testing-host.md`).
+    - **Setup:** terminals 0 to 2 (and 3, if both rooms) as in test 13: the daemon
+      by hand with `--stream-linger-secs 60`, dms with `--idle-exit 120`, and the
+      logs in `target/dlna-logs/`.
+    - **Terminal 5, the monitor** (a CSV row a minute; Ctrl-C stops it, and every
+      row is complete):
 
       ```sh
-      scripts/dlna-soak.sh          # target/dlna-soak-<date>.csv, a row a minute
+      scripts/dlna-soak.sh target/dlna-logs/soak.csv
       ```
 
-    - **In BubbleUPnP:** play a long queue (an album folder, "repeat all") on room 1.
-      Now and then join room 2 into the current track, pause, seek and stop.
-    - **In the morning, check:**
-      - **Sessions:** `dms_streams` and `session-sender_count` stay small: one per
-        track played in the last 2 minutes, plus the current one. Not growing with
-        every track.
-      - **Memory:** `*_rss_kb` stay flat for dms, the daemon and gmrender, and per
-        helper (`session-sender_rss_kb / session-sender_count`).
-      - **Threads and files:** `*_threads` and `*_fds` stay flat.
-      - **Logs:** no errors in dms's log (`grep -iE 'error|warning' dms-test.log`)
-        or gmrender's. Every `snapcast session opening` has its `closed`, except
-        the last.
-      - **Responsiveness:** pause, seek and volume still work at once in the
-        morning.
+      Columns: the time, then `streams` and `dms_streams` (the daemon's streams,
+      all and `dms-…`). Then, for each of dms, the daemon (`gst-snapcast-da`), the
+      helpers (`session-sender`) and gmrender (`gmediarender`), the summed RSS (kB),
+      threads, open files and the process count.
+    - **In BubbleUPnP:** play a long queue on room 1, e.g. a few albums with
+      "repeat all". Now and then join room 2 into the current track (second
+      control point), pause, seek and stop.
+    - **In the morning:**
+      - **Sessions:** `dms_streams` stays at 1 to 3, close to `session-sender_count`.
+        It may run up to one minute behind (the linger time), but it must not grow
+        with every track. Each helper's `closed` in dms's log is followed by the
+        daemon's `Removed the released stream` about 60 s later:
+
+        ```sh
+        grep -c 'snapcast session opening' target/dlna-logs/dms.log
+        grep -c 'snapcast session closed' target/dlna-logs/dms.log
+        grep -c 'Removed the released stream' target/dlna-logs/daemon.log
+        ```
+
+        The three counts match, up to the sessions still open.
+      - **Memory, threads, files:** `*_rss_kb`, `*_threads` and `*_fds` stay flat for
+        dms, the daemon and gmrender, and per helper (`session-sender_rss_kb /
+        session-sender_count` stays about 17 MB).
+      - **Logs:** no errors:
+
+        ```sh
+        grep -iE 'error|warn' target/dlna-logs/dms.log target/dlna-logs/daemon.log
+        grep -E '^(ERROR|WARN)' target/dlna-logs/room1.log target/dlna-logs/room2.log
+        ```
+
+      - **Responsiveness:** pause, seek and volume still work at once.
+      - Send the CSV and the logs (`target/dlna-logs/`).
     - **First run, 2026-11-28 (40 min, one room from dms):** see test 12, third
       host run. dms (about 22 MB, 18 threads), the helpers (about 17 MB each) and
       gmrender stayed flat. The daemon's stream count and threads grew with every
-      track (fixed: stream linger). Repeat the night run with the fix.
+      track. That's fixed now (stream linger, see "Findings"). Repeat the night run
+      with the fix.
     - Result on the host: (open)
 
 12. **dms feeds a session per item** (PoC step 4, since 2026-11-27).
